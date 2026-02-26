@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rl-toybox"
+version = "0.1.0"
+description = "Minimal monorepo for toy RL arcade games"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "arcade>=3.3.3",
+  "torch>=2.2",
+  "numpy>=1.24",
+]
+
+[project.scripts]
+rl-toybox-train = "scripts.train:main"
+rl-toybox-play-ai = "scripts.play_ai:main"
+rl-toybox-play-user = "scripts.play_user:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "games*", "scripts*"]
+
+[tool.setuptools.package-data]
+"games.bang" = ["assets/fonts/*.ttf"]
+"games.snake" = ["assets/fonts/*.ttf"]

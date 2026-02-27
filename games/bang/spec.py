@@ -18,8 +18,8 @@ SPEC = GameSpec(
     game_id="bang",
     default_algo="dqn",
     make_env=make_env,
-    obs_dim=config.NUM_INPUT_FEATURES,
-    action_space=Discrete(config.NUM_ACTIONS),
+    obs_dim=config.OBS_DIM,
+    action_space=Discrete(config.ACT_DIM),
     run_name=RUN_NAME,
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),

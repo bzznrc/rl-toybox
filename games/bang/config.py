@@ -68,47 +68,53 @@ NN_CONTROL_MARKER_SIZE_PX = max(4, BOARD_CELL_SIZE_PX // 3)
 
 # Input/output spaces
 INPUT_FEATURE_NAMES = [
-    "enemy_distance",
-    "enemy_in_los",
-    "enemy_relative_angle_sin",
-    "enemy_relative_angle_cos",
-    "delta_enemy_distance",
-    "delta_enemy_relative_angle",
-    "nearest_projectile_distance",
-    "nearest_projectile_relative_angle_sin",
-    "nearest_projectile_relative_angle_cos",
-    "delta_projectile_distance",
-    "in_projectile_trajectory",
-    "time_since_last_shot",
-    "time_since_last_seen_enemy",
-    "time_since_last_projectile_seen",
-    "up_blocked",
-    "down_blocked",
-    "left_blocked",
-    "right_blocked",
-    "player_angle_sin",
-    "player_angle_cos",
-    "move_intent_x",
-    "move_intent_y",
-    "aim_intent",
-    "last_action_index",
+    # SELF (8)
+    "self_angle_sin",
+    "self_angle_cos",
+    "self_move_intent_x",
+    "self_move_intent_y",
+    "self_aim_intent",
+    "self_last_action",
+    "self_time_since_shot",
+    "self_time_since_tgt_seen",
+    # RAYS (4)
+    "ray_fwd",
+    "ray_left",
+    "ray_right",
+    "ray_back",
+    # TGT (6)
+    "tgt_dx",
+    "tgt_dy",
+    "tgt_dvx",
+    "tgt_dvy",
+    "tgt_dist",
+    "tgt_in_los",
+    # HAZ (6)
+    "haz_dx",
+    "haz_dy",
+    "haz_dvx",
+    "haz_dvy",
+    "haz_dist",
+    "haz_in_trajectory",
 ]
 ACTION_NAMES = [
     "move_up",
     "move_down",
     "move_left",
     "move_right",
-    "stop_move",
+    "move_stop",
     "aim_left",
     "aim_right",
     "shoot",
 ]
-NUM_INPUT_FEATURES = len(INPUT_FEATURE_NAMES)
-NUM_ACTIONS = len(ACTION_NAMES)
-STATE_SIZE = NUM_INPUT_FEATURES
-ACTION_SIZE = NUM_ACTIONS
-MODEL_INPUT_SIZE = NUM_INPUT_FEATURES
-MODEL_OUTPUT_SIZE = NUM_ACTIONS
+OBS_DIM = len(INPUT_FEATURE_NAMES)
+ACT_DIM = len(ACTION_NAMES)
+NUM_INPUT_FEATURES = OBS_DIM
+NUM_ACTIONS = ACT_DIM
+STATE_SIZE = OBS_DIM
+ACTION_SIZE = ACT_DIM
+MODEL_INPUT_SIZE = OBS_DIM
+MODEL_OUTPUT_SIZE = ACT_DIM
 
 ACTION_MOVE_UP = 0
 ACTION_MOVE_DOWN = 1
@@ -188,7 +194,6 @@ PROJECTILE_TRAJECTORY_DOT_THRESHOLD = 0.98
 OBSTACLE_START_ATTEMPTS = 100
 PROJECTILE_HITBOX_SIZE = 10
 PROJECTILE_HITBOX_HALF = PROJECTILE_HITBOX_SIZE // 2
-PROJECTILE_DISTANCE_MISSING = -1.0
 
 # Model and training
 HIDDEN_DIMENSIONS = [64, 64]

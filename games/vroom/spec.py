@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.envs.spaces import Discrete
+from games.vroom import config
 from games.spec_types import GameSpec
 from games.vroom.env import VroomEnv
 
@@ -19,8 +20,8 @@ SPEC = GameSpec(
     game_id="vroom",
     default_algo="dqn",
     make_env=make_env,
-    obs_dim=6,
-    action_space=Discrete(5),
+    obs_dim=config.OBS_DIM,
+    action_space=Discrete(config.ACT_DIM),
     run_name=RUN_NAME,
     algo_config={
         "hidden_sizes": list(HIDDEN_DIMENSIONS),
@@ -36,7 +37,7 @@ SPEC = GameSpec(
         "epsilon_min": 0.05,
         "epsilon_decay_steps": 100_000,
         "dueling": False,
-        "double_dqn": True,
+        "double_dqn": False,
         "prioritized_replay": False,
     },
     train_config={

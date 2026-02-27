@@ -32,6 +32,7 @@ from core.arcade_style import (
     screen_width,
 )
 from core.envs.base import Env
+from core.io_schema import clip_signed, clip_unit, normalize_last_action, normalized_ray_first_hit, ordered_feature_vector
 from core.primitives import (
     draw_facing_indicator,
     draw_status_square_icon,
@@ -40,6 +41,12 @@ from core.primitives import (
     status_icon_size,
 )
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
+from games.vroom.config import (
+    ACTION_NAMES as VROOM_ACTION_NAMES,
+    ACT_DIM as VROOM_ACT_DIM,
+    INPUT_FEATURE_NAMES as VROOM_INPUT_FEATURE_NAMES,
+    OBS_DIM as VROOM_OBS_DIM,
+)
 from games.vroom.trackgen import TrackGenConfig, generate_track
 
 
@@ -72,11 +79,17 @@ class RaceCar:
 
 
 class VroomEnv(Env):
-    ACTION_NOOP = 0
-    ACTION_LEFT = 1
-    ACTION_RIGHT = 2
-    ACTION_ACCEL = 3
-    ACTION_BRAKE = 4
+    INPUT_FEATURE_NAMES = tuple(VROOM_INPUT_FEATURE_NAMES)
+    ACTION_NAMES = tuple(VROOM_ACTION_NAMES)
+    OBS_DIM = int(VROOM_OBS_DIM)
+    ACT_DIM = int(VROOM_ACT_DIM)
+
+    ACTION_COAST = 0
+    ACTION_THROTTLE = 1
+    ACTION_LEFT_COAST = 2
+    ACTION_RIGHT_COAST = 3
+    ACTION_LEFT_THROTTLE = 4
+    ACTION_RIGHT_THROTTLE = 5
 
     NUM_CARS = 4
     TOTAL_RACES = 10
@@ -100,13 +113,14 @@ class VroomEnv(Env):
         self.car_size = float(TILE_SIZE * 0.86)
         self.car_half = self.car_size * 0.5
         self.car_radius = self.car_half * 0.95
+        # Heavier handling: full-throttle cornering should understeer unless the car coasts.
         self.max_speed = 7.0
         self.max_reverse_speed = 2.4
-        self.accel_force = 0.33
+        self.accel_force = 0.36
         self.brake_force = 0.23
-        self.turn_rate = 4.4
+        self.turn_rate = 4.1
         self.drag = 0.985
-        self.lateral_grip = 0.82
+        self.lateral_grip = 0.76
         self.max_steps = 2_000
 
         self.car_contact_radius = self.car_radius
@@ -193,6 +207,14 @@ class VroomEnv(Env):
 
         self.steps = 0
         self.done = False
+        self.last_action_index = self.ACTION_COAST
+        self._prev_self_lat_offset = 0.0
+        self._prev_self_fwd_speed = 0.0
+        self._ray_near_range = max(1.0, self.obstacle_size * 3.2)
+        self._ray_far_range = max(self._ray_near_range + 1.0, self.obstacle_size * 6.0)
+        self._ray_step_size = max(0.75, self.obstacle_size * 0.2)
+        self._last_obs = np.zeros((self.OBS_DIM,), dtype=np.float32)
+        self._force_zero_deltas = False
         self.reset()
 
     @staticmethod
@@ -459,7 +481,14 @@ class VroomEnv(Env):
     def _apply_car_controls(self, car: RaceCar, steer: float, throttle: float) -> None:
         _, _, forward_speed, lateral_speed = self._project_to_car_frame(car)
         speed_ratio = min(1.0, abs(forward_speed) / max(1e-6, self.max_speed))
-        car.heading_degrees += float(steer) * self.turn_rate * (0.5 + 0.5 * speed_ratio)
+        throttle_load = max(0.0, float(throttle))
+        # Steering authority drops as speed/load rise, making coasting important in bends.
+        steer_authority = self._clamp(
+            1.0 - 0.45 * speed_ratio - 0.20 * speed_ratio * throttle_load,
+            0.35,
+            1.0,
+        )
+        car.heading_degrees += float(steer) * self.turn_rate * steer_authority
 
         heading_rad = math.radians(car.heading_degrees)
         forward_x = math.cos(heading_rad)
@@ -692,6 +721,7 @@ class VroomEnv(Env):
         self.cars = self._create_car_grid()
         self.winner_index = None
         self.steps = 0
+        self._force_zero_deltas = True
 
     def _finalize_race(self, winner_idx: int | None) -> None:
         self.last_race_winner = None if winner_idx is None else int(winner_idx)
@@ -704,15 +734,16 @@ class VroomEnv(Env):
         self._setup_race()
 
     def _resolve_human_action(self) -> int:
-        if self.window_controller.is_key_down(arcade.key.LEFT) or self.window_controller.is_key_down(arcade.key.A):
-            return self.ACTION_LEFT
-        if self.window_controller.is_key_down(arcade.key.RIGHT) or self.window_controller.is_key_down(arcade.key.D):
-            return self.ACTION_RIGHT
-        if self.window_controller.is_key_down(arcade.key.UP) or self.window_controller.is_key_down(arcade.key.W):
-            return self.ACTION_ACCEL
-        if self.window_controller.is_key_down(arcade.key.DOWN) or self.window_controller.is_key_down(arcade.key.S):
-            return self.ACTION_BRAKE
-        return self.ACTION_NOOP
+        left = self.window_controller.is_key_down(arcade.key.LEFT) or self.window_controller.is_key_down(arcade.key.A)
+        right = self.window_controller.is_key_down(arcade.key.RIGHT) or self.window_controller.is_key_down(arcade.key.D)
+        throttle = self.window_controller.is_key_down(arcade.key.UP) or self.window_controller.is_key_down(arcade.key.W)
+        if left and (not right):
+            return self.ACTION_LEFT_THROTTLE if throttle else self.ACTION_LEFT_COAST
+        if right and (not left):
+            return self.ACTION_RIGHT_THROTTLE if throttle else self.ACTION_RIGHT_COAST
+        if throttle:
+            return self.ACTION_THROTTLE
+        return self.ACTION_COAST
 
     def _reset_ai_obstacle_rolls(self) -> None:
         self.ai_obstacle_rolls = {}
@@ -792,17 +823,17 @@ class VroomEnv(Env):
         return steer, throttle
 
     def _player_controls_from_action(self, action_idx: int) -> tuple[float, float]:
-        steer = 0.0
-        throttle = 0.0
-        if action_idx == self.ACTION_LEFT:
-            steer = -1.0
-        elif action_idx == self.ACTION_RIGHT:
-            steer = 1.0
-        elif action_idx == self.ACTION_ACCEL:
-            throttle = 1.0
-        elif action_idx == self.ACTION_BRAKE:
-            throttle = -1.0
-        return steer, throttle
+        if action_idx == self.ACTION_THROTTLE:
+            return 0.0, 1.0
+        if action_idx == self.ACTION_LEFT_COAST:
+            return -1.0, 0.0
+        if action_idx == self.ACTION_RIGHT_COAST:
+            return 1.0, 0.0
+        if action_idx == self.ACTION_LEFT_THROTTLE:
+            return -1.0, 1.0
+        if action_idx == self.ACTION_RIGHT_THROTTLE:
+            return 1.0, 1.0
+        return 0.0, 0.0
 
     def _step_simulation(self, action_idx: int) -> None:
         previous_positions = [(car.x, car.y) for car in self.cars]
@@ -826,38 +857,99 @@ class VroomEnv(Env):
             self._enforce_track_containment(car)
         self._update_lap_progress_and_finish()
 
-    def _get_obs(self) -> np.ndarray:
+    def _ray_distance(self, car: RaceCar, relative_angle_degrees: float, max_distance: float) -> float:
+        heading = math.radians(float(car.heading_degrees) + float(relative_angle_degrees))
+        return normalized_ray_first_hit(
+            origin_x=float(car.x),
+            origin_y=float(car.y),
+            dir_x=math.cos(heading),
+            dir_y=math.sin(heading),
+            max_distance=float(max_distance),
+            is_blocked=self._is_wall,
+            step_size=self._ray_step_size,
+            start_offset=self.car_radius * 0.35,
+        )
+
+    def _nearest_opponent(self, player: RaceCar) -> RaceCar:
+        opponents = [car for idx, car in enumerate(self.cars) if idx != self.player_index]
+        return min(opponents, key=lambda other: self._distance(player.x, player.y, other.x, other.y))
+
+    def _compute_obs(self, *, zero_deltas: bool = False) -> np.ndarray:
+        if self._force_zero_deltas:
+            zero_deltas = True
         player = self.cars[self.player_index]
         nearest_idx, _, dx, dy = self._nearest_track_sample(player.x, player.y)
         tangent_x, tangent_y = self.track_tangents[nearest_idx]
         normal_x, normal_y = -tangent_y, tangent_x
-        signed_lateral = (dx * normal_x + dy * normal_y) / max(1e-6, self.track_half_width)
+        self_lat_offset = clip_signed((dx * normal_x + dy * normal_y) / max(1e-6, self.track_half_width))
 
         heading_rad = math.radians(player.heading_degrees)
         heading_x = math.cos(heading_rad)
         heading_y = math.sin(heading_rad)
-        heading_alignment_sin = heading_x * tangent_y - heading_y * tangent_x
-        heading_alignment_cos = heading_x * tangent_x + heading_y * tangent_y
-        forward_speed = player.vx * tangent_x + player.vy * tangent_y
+        _, _, fwd_speed_raw, _ = self._project_to_car_frame(player)
+        self_fwd_speed = clip_signed(fwd_speed_raw / max(1.0, self.max_speed))
+        if zero_deltas:
+            self_lat_offset_delta = 0.0
+            self_fwd_speed_delta = 0.0
+        else:
+            self_lat_offset_delta = clip_signed(self_lat_offset - self._prev_self_lat_offset)
+            self_fwd_speed_delta = clip_signed(self_fwd_speed - self._prev_self_fwd_speed)
+        self._prev_self_lat_offset = float(self_lat_offset)
+        self._prev_self_fwd_speed = float(self_fwd_speed)
 
-        nearest_opponent_dist = min(
-            self._distance(player.x, player.y, car.x, car.y)
-            for idx, car in enumerate(self.cars)
-            if idx != self.player_index
-        )
-        nearest_opponent_dist = nearest_opponent_dist / max(1.0, SCREEN_WIDTH * 0.6)
+        ray_fwd_near = self._ray_distance(player, 0.0, self._ray_near_range)
+        ray_fwd_far = self._ray_distance(player, 0.0, self._ray_far_range)
+        ray_fwd_left = self._ray_distance(player, -15.0, self._ray_far_range)
+        ray_fwd_right = self._ray_distance(player, 15.0, self._ray_far_range)
 
-        return np.asarray(
-            [
-                float(self._clamp(signed_lateral, -1.0, 1.0)),
-                float(self._clamp(forward_speed / max(1.0, self.max_speed), -1.0, 1.0)),
-                float(self._clamp(heading_alignment_sin, -1.0, 1.0)),
-                float(self._clamp(heading_alignment_cos, -1.0, 1.0)),
-                float(self._clamp(nearest_opponent_dist, 0.0, 1.0)),
-                1.0 if player.in_contact else 0.0,
-            ],
-            dtype=np.float32,
-        )
+        target = self._nearest_opponent(player)
+        rel_scale_x = max(1.0, float(SCREEN_WIDTH))
+        rel_scale_y = max(1.0, float(self.track_bottom))
+        vel_scale = max(1.0, self.max_speed + self.max_reverse_speed)
+        tgt_dx = clip_signed((target.x - player.x) / rel_scale_x)
+        tgt_dy = clip_signed((target.y - player.y) / rel_scale_y)
+        tgt_dvx = clip_signed((target.vx - player.vx) / vel_scale)
+        tgt_dvy = clip_signed((target.vy - player.vy) / vel_scale)
+
+        lookahead_samples = max(4, min(20, self.track_count // 10 if self.track_count > 0 else 4))
+        lookahead_idx = (nearest_idx + lookahead_samples) % max(1, self.track_count)
+        lookahead_x, lookahead_y = self.track_centerline[lookahead_idx]
+        to_look_x, to_look_y = self._normalize(lookahead_x - player.x, lookahead_y - player.y)
+        lookahead_dist = self._distance(player.x, player.y, lookahead_x, lookahead_y)
+        lookahead_tangent_x, lookahead_tangent_y = self.track_tangents[lookahead_idx]
+
+        feature_values = {
+            "self_lat_offset": float(self_lat_offset),
+            "self_lat_offset_delta": float(self_lat_offset_delta),
+            "self_fwd_speed": float(self_fwd_speed),
+            "self_fwd_speed_delta": float(self_fwd_speed_delta),
+            "self_heading_sin": float(math.sin(heading_rad)),
+            "self_heading_cos": float(math.cos(heading_rad)),
+            "self_in_contact": 1.0 if player.in_contact else 0.0,
+            "self_last_action": float(normalize_last_action(self.last_action_index, self.ACT_DIM)),
+            "ray_fwd_near": float(ray_fwd_near),
+            "ray_fwd_far": float(ray_fwd_far),
+            "ray_fwd_left": float(ray_fwd_left),
+            "ray_fwd_right": float(ray_fwd_right),
+            "tgt_dx": float(tgt_dx),
+            "tgt_dy": float(tgt_dy),
+            "tgt_dvx": float(tgt_dvx),
+            "tgt_dvy": float(tgt_dvy),
+            "trk_lookahead_sin": float(clip_signed(heading_x * to_look_y - heading_y * to_look_x)),
+            "trk_lookahead_cos": float(clip_signed(heading_x * to_look_x + heading_y * to_look_y)),
+            "trk_lookahead_dist": float(
+                clip_unit(lookahead_dist / max(1.0, self._ray_far_range * 2.5))
+            ),
+            "trk_curvature_ahead": float(
+                clip_signed(tangent_x * lookahead_tangent_y - tangent_y * lookahead_tangent_x)
+            ),
+        }
+        obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
+        if obs.shape != (self.OBS_DIM,):
+            raise RuntimeError(f"Vroom observation expected {self.OBS_DIM} features, got {obs.shape[0]}")
+        self._last_obs = obs
+        self._force_zero_deltas = False
+        return obs
 
     def reset(self) -> np.ndarray:
         self.current_race = 1
@@ -865,19 +957,23 @@ class VroomEnv(Env):
         self.last_race_winner = None
         self.player_index = 0
         self.done = False
+        self.last_action_index = self.ACTION_COAST
+        self._prev_self_lat_offset = 0.0
+        self._prev_self_fwd_speed = 0.0
         self._setup_race()
-        return self._get_obs()
+        return self._compute_obs(zero_deltas=True)
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         if self.done:
-            return self._get_obs(), 0.0, True, {"win": self.last_race_winner == self.player_index}
+            return self._last_obs, 0.0, True, {"win": self.last_race_winner == self.player_index}
 
         self.window_controller.poll_events_or_raise()
         if self.mode == "human":
             action_idx = self._resolve_human_action()
         else:
             action_idx = int(action)
-        action_idx = int(np.clip(action_idx, 0, 4))
+        action_idx = int(np.clip(action_idx, 0, self.ACT_DIM - 1))
+        self.last_action_index = int(action_idx)
 
         self._step_simulation(action_idx)
         self.steps += 1
@@ -910,7 +1006,7 @@ class VroomEnv(Env):
             "races_finished": int(len(self.win_history)),
             "races_total": int(self.total_races),
         }
-        return self._get_obs(), float(reward), bool(self.done), info
+        return self._compute_obs(), float(reward), bool(self.done), info
 
     def _draw_track(self) -> None:
         if self.wall_texture is not None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.envs.spaces import Discrete
+from games.kick import config
 from games.kick.env import KickEnv
 from games.spec_types import GameSpec
 
@@ -19,8 +20,8 @@ SPEC = GameSpec(
     game_id="kick",
     default_algo="ppo",
     make_env=make_env,
-    obs_dim=44,
-    action_space=Discrete(KickEnv.NUM_ACTIONS),
+    obs_dim=config.OBS_DIM,
+    action_space=Discrete(config.ACT_DIM),
     run_name=RUN_NAME,
     algo_config={
         "hidden_sizes": list(HIDDEN_DIMENSIONS),

@@ -47,9 +47,9 @@ python -m scripts.play_user --game bang
 | Game ID | Default Algo | Obs / Action | Notes | Docs |
 | --- | --- | --- | --- | --- |
 | `snake` | `qlearn` | 12-dim / Discrete(3) | Classic snake baseline | [games/snake/README.md](games/snake/README.md) |
-| `bang` | `dqn` | 24-dim / Discrete(8) | Shooter with enhanced DQN defaults | [games/bang/README.md](games/bang/README.md) |
-| `vroom` | `dqn` | 6-dim / Discrete(5) | Procedural one-lap loop racer | [games/vroom/README.md](games/vroom/README.md) |
-| `kick` | `ppo` | 44-dim / Discrete(12) | Football env, current discrete PPO setup | [games/kick/README.md](games/kick/README.md) |
+| `bang` | `dqn` | 24-dim / Discrete(8) | Shooter with aligned SELF/RAYS/TGT/HAZ taxonomy | [games/bang/README.md](games/bang/README.md) |
+| `vroom` | `dqn` | 20-dim / Discrete(6) | Procedural one-lap racer with ray-sensed obstacles | [games/vroom/README.md](games/vroom/README.md) |
+| `kick` | `ppo` | 36-dim / Discrete(12) | Football env with aligned SELF/TGT/GOALS/ALLY/FOE encoding | [games/kick/README.md](games/kick/README.md) |
 | `stomp` | `sac` | 6-dim / Box(2) | Continuous-control placeholder | [games/stomp/README.md](games/stomp/README.md) |
 
 ## Plans: Games / Algos / IO / Nets
@@ -61,10 +61,10 @@ python -m scripts.play_user --game bang
   - IO: obs 24, actions 8 discrete
   - Net size: `[64, 64]`
 - `vroom` -> vanilla DQN
-  - IO: obs 6, actions 5 discrete
+  - IO: obs 20, actions 6 discrete
   - Net size: `[48, 48]`
 - `kick` -> PPO, parameter-shared across 11 players (start discrete)
-  - IO: obs 44, actions 12 discrete
+  - IO: obs 36, actions 12 discrete
   - Net size: `[96, 96]`
 - `walk` -> SAC (continuous), later
   - Current placeholder in repo: `stomp`

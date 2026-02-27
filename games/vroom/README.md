@@ -2,27 +2,53 @@
 
 Top-down one-lap racing environment with procedural closed-loop tracks.
 
+## Algorithm / Network
+
+- Algo: vanilla DQN
+- Hidden sizes: `[48, 48]`
+
 ## Controls (Human)
 
-- Steer left/right: `A/D` or left/right arrows
-- Accelerate: `W` or up arrow
-- Brake/reverse: `S` or down arrow
+- Steer: `A/D` or left/right arrows
+- Throttle: `W` or up arrow
+- Coast: no input
 
 ## Observation / Actions
 
-- Observation: `6` floats
-  - signed lateral offset from nearest track centerline
-  - forward speed along local track tangent
-  - heading alignment sine vs tangent
-  - heading alignment cosine vs tangent
-  - normalized nearest opponent distance
-  - `in_contact` (0/1)
-- Actions: `Discrete(5)`
-  - `0 NOOP`
-  - `1 LEFT`
-  - `2 RIGHT`
-  - `3 ACCEL`
-  - `4 BRAKE`
+- Observation: `20` floats (`INPUT_FEATURE_NAMES`, ordered)
+  - `self_lat_offset`
+  - `self_lat_offset_delta`
+  - `self_fwd_speed`
+  - `self_fwd_speed_delta`
+  - `self_heading_sin`
+  - `self_heading_cos`
+  - `self_in_contact`
+  - `self_last_action`
+  - `ray_fwd_near`
+  - `ray_fwd_far`
+  - `ray_fwd_left`
+  - `ray_fwd_right`
+  - `tgt_dx`
+  - `tgt_dy`
+  - `tgt_dvx`
+  - `tgt_dvy`
+  - `trk_lookahead_sin`
+  - `trk_lookahead_cos`
+  - `trk_lookahead_dist`
+  - `trk_curvature_ahead`
+- Actions: `Discrete(6)` (`ACTION_NAMES`, ordered)
+  - `0 coast`
+  - `1 throttle`
+  - `2 left_coast`
+  - `3 right_coast`
+  - `4 left_throttle`
+  - `5 right_throttle`
+
+Ray semantics:
+
+- `ray_*` are normalized distance-to-first-hit values in `[0,1]`
+- `1.0` means no hit within ray range
+- hits include walls and obstacles
 
 ## Race Rules
 

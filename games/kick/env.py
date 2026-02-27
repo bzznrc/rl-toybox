@@ -22,6 +22,7 @@ from core.arcade_style import (
     COLOR_SOFT_WHITE,
 )
 from core.envs.base import Env
+from core.io_schema import clip_signed, normalize_last_action, ordered_feature_vector
 from core.primitives import (
     draw_control_marker,
     draw_facing_indicator,
@@ -33,11 +34,15 @@ from core.primitives import (
 )
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
 from games.kick.config import (
+    ACTION_NAMES as KICK_ACTION_NAMES,
+    ACT_DIM as KICK_ACT_DIM,
     BALL_RADIUS_SCALE,
     BB_HEIGHT,
     CELL_INSET,
     FPS,
     GAME_SPEED_SCALE,
+    INPUT_FEATURE_NAMES as KICK_INPUT_FEATURE_NAMES,
+    OBS_DIM as KICK_OBS_DIM,
     PHYSICS_DT,
     PENALTY_AREA_DEPTH_RATIO,
     PENALTY_AREA_WIDTH_RATIO,
@@ -103,7 +108,11 @@ class KickEnv(Env):
     ACTION_KICK_LOW = 9
     ACTION_KICK_MID = 10
     ACTION_KICK_HIGH = 11
-    NUM_ACTIONS = 12
+    INPUT_FEATURE_NAMES = tuple(KICK_INPUT_FEATURE_NAMES)
+    ACTION_NAMES = tuple(KICK_ACTION_NAMES)
+    OBS_DIM = int(KICK_OBS_DIM)
+    ACT_DIM = int(KICK_ACT_DIM)
+    NUM_ACTIONS = ACT_DIM
 
     TEAM_LEFT = "left"
     TEAM_RIGHT = "right"
@@ -124,7 +133,7 @@ class KickEnv(Env):
         ACTION_KICK_MID: 2,
         ACTION_KICK_HIGH: 3,
     }
-    OBS_NEAREST_PLAYERS = 3
+    OBS_NEAREST_PLAYERS = 2
     MATCH_DURATION_SECONDS = 60.0
 
     def __init__(self, mode: str = "train", render: bool = False) -> None:
@@ -191,6 +200,7 @@ class KickEnv(Env):
         self.steps = 0
         self.done = False
         self.freeze_frames = 0
+        self.last_action_index = self.ACTION_STAY
 
         self._goal_scored_team: str | None = None
         self._kick_outcome_reward_event = 0.0
@@ -379,6 +389,33 @@ class KickEnv(Env):
         except (TypeError, ValueError):
             action_idx = self.ACTION_STAY
         return int(np.clip(action_idx, 0, self.NUM_ACTIONS - 1))
+
+    @staticmethod
+    def _move_action_from_vector(move_x: float, move_y: float) -> int:
+        sx = int(np.sign(float(move_x)))
+        sy = int(np.sign(float(move_y)))
+        direction_to_action = {
+            (0, 0): KickEnv.ACTION_STAY,
+            (0, -1): KickEnv.ACTION_MOVE_N,
+            (1, -1): KickEnv.ACTION_MOVE_NE,
+            (1, 0): KickEnv.ACTION_MOVE_E,
+            (1, 1): KickEnv.ACTION_MOVE_SE,
+            (0, 1): KickEnv.ACTION_MOVE_S,
+            (-1, 1): KickEnv.ACTION_MOVE_SW,
+            (-1, 0): KickEnv.ACTION_MOVE_W,
+            (-1, -1): KickEnv.ACTION_MOVE_NW,
+        }
+        return int(direction_to_action.get((sx, sy), KickEnv.ACTION_STAY))
+
+    @staticmethod
+    def _kick_action_from_kind(kick_type: int) -> int:
+        if int(kick_type) == 1:
+            return KickEnv.ACTION_KICK_LOW
+        if int(kick_type) == 2:
+            return KickEnv.ACTION_KICK_MID
+        if int(kick_type) == 3:
+            return KickEnv.ACTION_KICK_HIGH
+        return KickEnv.ACTION_STAY
 
     @staticmethod
     def _clamp_vector_magnitude(x: float, y: float, max_magnitude: float) -> tuple[float, float]:
@@ -636,6 +673,7 @@ class KickEnv(Env):
 
         move_x = float(right) - float(left)
         move_y = float(down) - float(up)
+        self.last_action_index = self._move_action_from_vector(move_x, move_y)
         self._move_player(controlled, move_x, move_y)
 
         mouse_pos = self.window_controller.mouse_position()
@@ -655,6 +693,7 @@ class KickEnv(Env):
                 hold = max(0.0, time.perf_counter() - self._human_shot_hold_start)
                 kick_type = self._kick_type_from_hold_seconds(hold)
                 self._apply_kick_or_contest(controlled, kick_type=kick_type)
+                self.last_action_index = self._kick_action_from_kind(kick_type)
             self._human_shot_hold_start = None
 
         self._prev_left_mouse_down = left_mouse_down
@@ -662,6 +701,7 @@ class KickEnv(Env):
     def _rl_controlled_step(self, action) -> None:
         controlled = self._controlled_player()
         action_idx = self._decode_action(action)
+        self.last_action_index = int(action_idx)
 
         if action_idx <= self.ACTION_MOVE_NW:
             move_x, move_y = self.ACTION_TO_DIRECTION.get(action_idx, (0.0, 0.0))
@@ -1067,7 +1107,7 @@ class KickEnv(Env):
         width = float(SCREEN_WIDTH)
         height = float(self.pitch_bottom)
         player_vel_norm = max(1.0, self.max_player_speed)
-        ball_vel_norm = self.ball_max_speed
+        ball_vel_norm = max(1.0, self.ball_max_speed)
         nearest_count = int(self.OBS_NEAREST_PLAYERS)
         teammates = self._nearest_players(
             self.TEAM_LEFT,
@@ -1087,75 +1127,50 @@ class KickEnv(Env):
         else:
             ball_owner_team = -1.0
 
-        features: list[float] = []
+        feature_values: dict[str, float] = {
+            "self_vx": float(clip_signed(controlled.vx / player_vel_norm)),
+            "self_vy": float(clip_signed(controlled.vy / player_vel_norm)),
+            "self_theta_cos": float(math.cos(angle_rad)),
+            "self_theta_sin": float(math.sin(angle_rad)),
+            "self_has_ball": 1.0 if controlled.has_ball else 0.0,
+            "self_role": float(self._role_scalar(controlled.role)),
+            "self_stamina": float(controlled.stamina),
+            "self_stamina_delta": float(clip_signed(controlled.stamina_delta)),
+            "self_in_contact": 1.0 if controlled.in_contact else 0.0,
+            "self_last_action": float(normalize_last_action(self.last_action_index, self.ACT_DIM)),
+            "tgt_dx": float(clip_signed((self.ball_x - controlled.x) / width)),
+            "tgt_dy": float(clip_signed((self.ball_y - controlled.y) / height)),
+            "tgt_dvx": float(clip_signed((self.ball_vx - controlled.vx) / ball_vel_norm)),
+            "tgt_dvy": float(clip_signed((self.ball_vy - controlled.vy) / ball_vel_norm)),
+            "tgt_is_free": float(ball_is_free),
+            "tgt_owner_team": float(ball_owner_team),
+            "goal_opp_dx": float(clip_signed((float(SCREEN_WIDTH) - controlled.x) / width)),
+            "goal_opp_dy": float(clip_signed((self.pitch_center_y - controlled.y) / height)),
+            "goal_own_dx": float(clip_signed((0.0 - controlled.x) / width)),
+            "goal_own_dy": float(clip_signed((self.pitch_center_y - controlled.y) / height)),
+        }
 
-        # A) Self (10)
-        features.extend(
-            [
-                controlled.vx / player_vel_norm,
-                controlled.vy / player_vel_norm,
-                math.cos(angle_rad),
-                math.sin(angle_rad),
-                1.0 if controlled.has_ball else 0.0,
-                self._role_scalar(controlled.role),
-                float(controlled.stamina),
-                float(controlled.stamina_delta),
-                1.0 if controlled.in_contact else 0.0,
-                0.0,  # Padding keeps the self group even-sized.
-            ]
-        )
-
-        # B) Ball (6)
-        features.extend(
-            [
-                (self.ball_x - controlled.x) / width,
-                (self.ball_y - controlled.y) / height,
-                self.ball_vx / ball_vel_norm,
-                self.ball_vy / ball_vel_norm,
-                ball_is_free,
-                ball_owner_team,
-            ]
-        )
-
-        # C) Goals (4)
-        features.extend(
-            [
-                (float(SCREEN_WIDTH) - controlled.x) / width,
-                (self.pitch_center_y - controlled.y) / height,
-                (0.0 - controlled.x) / width,
-                (self.pitch_center_y - controlled.y) / height,
-            ]
-        )
-
-        # D) Nearest teammates (K x 4)
         while len(teammates) < nearest_count:
             teammates.append(controlled)
-        for teammate in teammates[:nearest_count]:
-            features.extend(
-                [
-                    (teammate.x - controlled.x) / width,
-                    (teammate.y - controlled.y) / height,
-                    teammate.vx / player_vel_norm,
-                    teammate.vy / player_vel_norm,
-                ]
-            )
-
-        # E) Nearest opponents (K x 4)
         while len(opponents) < nearest_count:
             opponents.append(self.right_players[0])
-        for opponent in opponents[:nearest_count]:
-            features.extend(
-                [
-                    (opponent.x - controlled.x) / width,
-                    (opponent.y - controlled.y) / height,
-                    opponent.vx / player_vel_norm,
-                    opponent.vy / player_vel_norm,
-                ]
-            )
 
-        if len(features) != 44:
-            raise RuntimeError(f"Kick observation expected 44 features, got {len(features)}")
-        return np.asarray(features, dtype=np.float32)
+        for idx, teammate in enumerate(teammates[:nearest_count], start=1):
+            feature_values[f"ally{idx}_dx"] = float(clip_signed((teammate.x - controlled.x) / width))
+            feature_values[f"ally{idx}_dy"] = float(clip_signed((teammate.y - controlled.y) / height))
+            feature_values[f"ally{idx}_dvx"] = float(clip_signed((teammate.vx - controlled.vx) / player_vel_norm))
+            feature_values[f"ally{idx}_dvy"] = float(clip_signed((teammate.vy - controlled.vy) / player_vel_norm))
+
+        for idx, opponent in enumerate(opponents[:nearest_count], start=1):
+            feature_values[f"foe{idx}_dx"] = float(clip_signed((opponent.x - controlled.x) / width))
+            feature_values[f"foe{idx}_dy"] = float(clip_signed((opponent.y - controlled.y) / height))
+            feature_values[f"foe{idx}_dvx"] = float(clip_signed((opponent.vx - controlled.vx) / player_vel_norm))
+            feature_values[f"foe{idx}_dvy"] = float(clip_signed((opponent.vy - controlled.vy) / player_vel_norm))
+
+        obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
+        if obs.shape != (self.OBS_DIM,):
+            raise RuntimeError(f"Kick observation expected {self.OBS_DIM} features, got {obs.shape[0]}")
+        return obs
 
     def reset(self) -> np.ndarray:
         self.left_score = 0
@@ -1169,6 +1184,7 @@ class KickEnv(Env):
         self._prev_tab_down = False
         self._prev_left_mouse_down = False
         self._human_shot_hold_start = None
+        self.last_action_index = self.ACTION_STAY
         self._restart_kickoff(self.TEAM_LEFT)
         self._left_possession_before_step = self._left_has_possession()
         return self._obs()

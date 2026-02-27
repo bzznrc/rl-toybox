@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Vroom - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "vroom"
+      ]
+    },
+    {
+      "name": "Vroom - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "vroom",
+        "--model",
+        "best",
+        "--episodes",
+        "10",
+        "--render"
+      ]
+    }
+  ]
+}

@@ -5,11 +5,16 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from typing import Callable, TypeVar
 
 import arcade
 import numpy as np
 from core.envs.base import Env
+from core.primitives import (
+    draw_control_marker,
+    draw_facing_indicator,
+    draw_two_tone_tile,
+    spawn_connected_random_walk_shapes,
+)
 
 from games.bang.config import (
     ACTION_NAMES,
@@ -88,8 +93,6 @@ from core.runtime import (
     square_obstacle_between_points,
 )
 from core.utils import env_int, validate_level_settings
-
-T = TypeVar("T")
 
 
 ALL_PLAYER_ORDER = ("P1", "P2", "P3", "P4")
@@ -186,55 +189,6 @@ SCRIPTED_TARGET_POLICY = {
 CONTROL_MODE_HUMAN = "human"
 CONTROL_MODE_SCRIPTED = "scripted"
 CONTROL_MODE_NN = "nn"
-
-
-def _grow_connected_random_walk_shape(
-    start: T,
-    min_sections: int,
-    max_sections: int,
-    neighbor_candidates_fn: Callable[[T], list[T]],
-    is_candidate_valid_fn: Callable[[T, list[T]], bool],
-) -> list[T]:
-    target_sections = random.randint(int(min_sections), int(max_sections))
-    shape = [start]
-    current = start
-
-    for _ in range(target_sections - 1):
-        candidates = list(neighbor_candidates_fn(current))
-        random.shuffle(candidates)
-        for candidate in candidates:
-            if is_candidate_valid_fn(candidate, shape):
-                shape.append(candidate)
-                current = candidate
-                break
-        else:
-            break
-    return shape
-
-
-def spawn_connected_random_walk_shapes(
-    shape_count: int,
-    min_sections: int,
-    max_sections: int,
-    sample_start_fn: Callable[[], T | None],
-    neighbor_candidates_fn: Callable[[T], list[T]],
-    is_candidate_valid_fn: Callable[[T, list[T]], bool],
-) -> list[list[T]]:
-    shapes: list[list[T]] = []
-    for _ in range(int(shape_count)):
-        start = sample_start_fn()
-        if start is None:
-            continue
-        shape = _grow_connected_random_walk_shape(
-            start=start,
-            min_sections=min_sections,
-            max_sections=max_sections,
-            neighbor_candidates_fn=neighbor_candidates_fn,
-            is_candidate_valid_fn=is_candidate_valid_fn,
-        )
-        if shape:
-            shapes.append(shape)
-    return shapes
 
 
 @dataclass
@@ -504,17 +458,15 @@ class Renderer:
             )
 
     def _draw_two_tone_tile(self, top_left_x: float, top_left_y: float, outer_color, inner_color) -> None:
-        bottom = self.window_controller.top_left_to_bottom(top_left_y, TILE_SIZE)
-        arcade.draw_lbwh_rectangle_filled(top_left_x, bottom, TILE_SIZE, TILE_SIZE, outer_color)
-        inner_size = TILE_SIZE - 2 * CELL_INSET
-        if inner_size > 0:
-            arcade.draw_lbwh_rectangle_filled(
-                top_left_x + CELL_INSET,
-                bottom + CELL_INSET,
-                inner_size,
-                inner_size,
-                inner_color,
-            )
+        draw_two_tone_tile(
+            self.window_controller,
+            top_left_x=float(top_left_x),
+            top_left_y=float(top_left_y),
+            size=float(TILE_SIZE),
+            outer_color=outer_color,
+            inner_color=inner_color,
+            inset=float(CELL_INSET),
+        )
 
     def _draw_actor(self, actor: Actor, fill_color, outline_color, draw_nn_marker: bool = False) -> None:
         self._draw_two_tone_tile(
@@ -526,25 +478,23 @@ class Renderer:
         if draw_nn_marker:
             self._draw_nn_control_marker(actor, outline_color)
 
-        facing = heading_to_vector(actor.angle)
-        tick_end = actor.position + facing * (TILE_SIZE // 2)
-        arcade.draw_line(
-            actor.position.x,
-            self.window_controller.to_arcade_y(actor.position.y),
-            tick_end.x,
-            self.window_controller.to_arcade_y(tick_end.y),
-            COLOR_SOFT_WHITE,
-            2,
+        draw_facing_indicator(
+            self.window_controller,
+            center_x=float(actor.position.x),
+            center_y_top_left=float(actor.position.y),
+            angle_degrees=float(actor.angle),
+            length=float(TILE_SIZE // 2),
+            color=COLOR_SOFT_WHITE,
+            line_width=2.0,
         )
 
     def _draw_nn_control_marker(self, actor: Actor, color) -> None:
-        size = float(NN_CONTROL_MARKER_SIZE_PX)
-        arcade.draw_lbwh_rectangle_filled(
-            actor.position.x - size / 2.0,
-            self.window_controller.to_arcade_y(actor.position.y) - size / 2.0,
-            size,
-            size,
-            color,
+        draw_control_marker(
+            self.window_controller,
+            center_x=float(actor.position.x),
+            center_y_top_left=float(actor.position.y),
+            marker_size=float(NN_CONTROL_MARKER_SIZE_PX),
+            color=color,
         )
 
 

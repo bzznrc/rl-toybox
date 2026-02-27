@@ -27,6 +27,16 @@ def env_int(name: str, default: int) -> int:
         return int(default)
 
 
+def env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw.strip())
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def resolve_show_game(show_game_override: bool | None, default_value: bool) -> bool:
     if show_game_override is None:
         return bool(default_value)

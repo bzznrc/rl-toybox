@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import random
-from typing import Callable, TypeVar
 
 import arcade
 import numpy as np
 
 from core.envs.base import Env
+from core.primitives import draw_two_tone_tile, spawn_connected_random_walk_shapes
 from games.snake.config import (
     BB_HEIGHT,
     CELL_INSET,
@@ -37,57 +37,6 @@ from games.snake.config import (
     WRAP_AROUND,
 )
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
-
-T = TypeVar("T")
-
-
-def _grow_connected_random_walk_shape(
-    start: T,
-    min_sections: int,
-    max_sections: int,
-    neighbor_candidates_fn: Callable[[T], list[T]],
-    is_candidate_valid_fn: Callable[[T, list[T]], bool],
-) -> list[T]:
-    target_sections = random.randint(int(min_sections), int(max_sections))
-    shape = [start]
-    current = start
-
-    for _ in range(target_sections - 1):
-        candidates = list(neighbor_candidates_fn(current))
-        random.shuffle(candidates)
-        for candidate in candidates:
-            if is_candidate_valid_fn(candidate, shape):
-                shape.append(candidate)
-                current = candidate
-                break
-        else:
-            break
-    return shape
-
-
-def spawn_connected_random_walk_shapes(
-    shape_count: int,
-    min_sections: int,
-    max_sections: int,
-    sample_start_fn: Callable[[], T | None],
-    neighbor_candidates_fn: Callable[[T], list[T]],
-    is_candidate_valid_fn: Callable[[T, list[T]], bool],
-) -> list[list[T]]:
-    shapes: list[list[T]] = []
-    for _ in range(int(shape_count)):
-        start = sample_start_fn()
-        if start is None:
-            continue
-        shape = _grow_connected_random_walk_shape(
-            start=start,
-            min_sections=min_sections,
-            max_sections=max_sections,
-            neighbor_candidates_fn=neighbor_candidates_fn,
-            is_candidate_valid_fn=is_candidate_valid_fn,
-        )
-        if shape:
-            shapes.append(shape)
-    return shapes
 
 class Direction(Enum):
     RIGHT = 1
@@ -202,24 +151,16 @@ class BaseSnakeGame:
             return False
         return True
 
-    def _to_window_y(self, top_y: float, height: float = 0) -> float:
-        return self.window_controller.to_arcade_y(float(top_y) + float(height))
-
     def _draw_tile(self, top_left: Point, outer_color, inner_color) -> None:
-        x = float(top_left.x)
-        y = float(top_left.y)
-        bottom = self._to_window_y(y, TILE_SIZE)
-
-        arcade.draw_lbwh_rectangle_filled(x, bottom, TILE_SIZE, TILE_SIZE, outer_color)
-        inner_size = TILE_SIZE - 2 * CELL_INSET
-        if inner_size > 0:
-            arcade.draw_lbwh_rectangle_filled(
-                x + CELL_INSET,
-                bottom + CELL_INSET,
-                inner_size,
-                inner_size,
-                inner_color,
-            )
+        draw_two_tone_tile(
+            self.window_controller,
+            top_left_x=float(top_left.x),
+            top_left_y=float(top_left.y),
+            size=float(TILE_SIZE),
+            outer_color=outer_color,
+            inner_color=inner_color,
+            inset=float(CELL_INSET),
+        )
 
     def _draw_tile_batch(self, tiles: list[Point], outer_color, inner_color) -> None:
         for tile in tiles:

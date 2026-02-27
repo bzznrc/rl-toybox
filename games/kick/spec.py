@@ -19,8 +19,8 @@ SPEC = GameSpec(
     game_id="kick",
     default_algo="ppo",
     make_env=make_env,
-    obs_dim=8,
-    action_space=Discrete(6),
+    obs_dim=44,
+    action_space=Discrete(KickEnv.NUM_ACTIONS),
     run_name=RUN_NAME,
     algo_config={
         "hidden_sizes": list(HIDDEN_DIMENSIONS),

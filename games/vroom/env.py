@@ -22,6 +22,7 @@ from core.arcade_style import (
     COLOR_P3_NAVY,
     COLOR_P4_DEEP_PURPLE,
     COLOR_P4_PURPLE,
+    COLOR_SLATE_GRAY,
     COLOR_SOFT_WHITE,
     DEFAULT_BOTTOM_BAR_HEIGHT,
     DEFAULT_GRID_COLUMNS,
@@ -63,6 +64,8 @@ class RaceCar:
     outer_color: tuple[int, int, int]
     inner_color: tuple[int, int, int]
     in_contact: bool = False
+    obstacle_avoid_frames: int = 0
+    obstacle_avoid_steer: float = 0.0
     track_index: int = 0
     lap_progress: float = 0.0
     finished: bool = False
@@ -127,13 +130,18 @@ class VroomEnv(Env):
         self.contact_overlap_cap = self.car_radius * 0.12
         self.contact_damp = 0.12
         self.contact_accel_scale = 0.85
+        self.obstacle_contact_radius = self.car_radius * 0.85
+        self.obstacle_bounce = 0.14
+        self.obstacle_tangent_keep = 0.86
+        self.obstacle_push_extra = 0.8
+        self.obstacle_resolve_iters = 2
 
         self.track_config = TrackGenConfig(
-            track_width_px=72.0,
+            track_width_px=88.0,
             wall_thickness_px=4.0,
             padding_px=40.0,
             corner_radius_px=130.0,
-            line_safe_margin_px=84.0,
+            line_safe_margin_px=96.0,
         )
         self.track_width_px = float(self.track_config.track_width_px)
         self.track_half_width = self.track_width_px * 0.5
@@ -149,6 +157,14 @@ class VroomEnv(Env):
         self.track_texture: arcade.Texture | None = None
         self.wall_texture: arcade.Texture | None = None
         self.track_rect = arcade.LRBT(0.0, float(SCREEN_WIDTH), float(BB_HEIGHT), float(SCREEN_HEIGHT))
+        self.obstacles: list[tuple[float, float]] = []
+        self.obstacle_size = float(TILE_SIZE)
+        self.obstacle_inset = 4.0
+        self.ai_obstacle_avoid_chance = 0.75
+        self.ai_avoid_lookahead = self.obstacle_size * 2.7
+        self.ai_avoid_lateral = self.obstacle_size * 1.15
+        self.ai_avoid_frames = 12
+        self.ai_obstacle_rolls: dict[tuple[int, int], bool] = {}
 
         self.track_seed = 0
         self.track_count = 0
@@ -210,6 +226,7 @@ class VroomEnv(Env):
         self.track_mask = np.asarray(track["road_mask"], dtype=np.uint8)  # type: ignore[arg-type]
         self.collision_mask = np.asarray(track.get("collision_mask", track["road_mask"]), dtype=np.uint8)  # type: ignore[arg-type]
         self.wall_mask = np.asarray(track["wall_mask"], dtype=np.uint8)  # type: ignore[arg-type]
+        self.obstacles = [(float(item[0]), float(item[1])) for item in track.get("obstacles", [])]  # type: ignore[arg-type]
         self.track_texture = track["road_texture"] if self.show_game else None  # type: ignore[assignment]
         self.wall_texture = track["wall_texture"] if self.show_game else None  # type: ignore[assignment]
 
@@ -273,10 +290,21 @@ class VroomEnv(Env):
         )
 
     def _is_driveable_footprint(self, x: float, y: float) -> bool:
+        return self._is_on_track_footprint(x, y) and (not self._hits_wall_footprint(x, y))
+
+    def _is_on_track_footprint(self, x: float, y: float) -> bool:
         for ox, oy in self.wall_probe_offsets:
-            if not self._is_on_track(float(x) + ox, float(y) + oy):
+            px = float(x) + ox
+            py = float(y) + oy
+            if not self._is_on_track(px, py):
                 return False
         return True
+
+    def _hits_wall_footprint(self, x: float, y: float) -> bool:
+        for ox, oy in self.wall_probe_offsets:
+            if self._is_wall(float(x) + ox, float(y) + oy):
+                return True
+        return False
 
     def _enforce_track_containment(self, car: RaceCar) -> None:
         if self._is_driveable_footprint(car.x, car.y):
@@ -451,17 +479,98 @@ class VroomEnv(Env):
         car.vx *= self.drag
         car.vy *= self.drag
 
+    def _resolve_obstacle_contacts(self, car: RaceCar, prev_x: float, prev_y: float, *, car_index: int) -> None:
+        if not self.obstacles:
+            return
+
+        radius = max(1.0, float(self.obstacle_contact_radius))
+        radius_sq = radius * radius
+        push_margin = max(0.4, float(self.obstacle_push_extra))
+        tile_size = float(self.obstacle_size)
+
+        for _ in range(max(1, int(self.obstacle_resolve_iters))):
+            hit_any = False
+            for ox, oy in self.obstacles:
+                left = float(ox)
+                top = float(oy)
+                right = left + tile_size
+                bottom = top + tile_size
+
+                nearest_x = self._clamp(car.x, left, right)
+                nearest_y = self._clamp(car.y, top, bottom)
+                dx = float(car.x) - nearest_x
+                dy = float(car.y) - nearest_y
+                dist_sq = dx * dx + dy * dy
+                if dist_sq >= radius_sq:
+                    continue
+
+                hit_any = True
+                if dist_sq > 1e-8:
+                    dist = math.sqrt(dist_sq)
+                    nx, ny = dx / dist, dy / dist
+                    penetration = radius - dist
+                else:
+                    move_x = float(car.x) - float(prev_x)
+                    move_y = float(car.y) - float(prev_y)
+                    if abs(move_x) + abs(move_y) > 1e-6:
+                        nx, ny = self._normalize(move_x, move_y)
+                        nearest_side = 0.0
+                    else:
+                        d_left = abs(float(car.x) - left)
+                        d_right = abs(right - float(car.x))
+                        d_top = abs(float(car.y) - top)
+                        d_bottom = abs(bottom - float(car.y))
+                        nearest_side = min(d_left, d_right, d_top, d_bottom)
+                        if nearest_side == d_left:
+                            nx, ny = -1.0, 0.0
+                        elif nearest_side == d_right:
+                            nx, ny = 1.0, 0.0
+                        elif nearest_side == d_top:
+                            nx, ny = 0.0, -1.0
+                        else:
+                            nx, ny = 0.0, 1.0
+                    penetration = radius + max(0.0, float(nearest_side))
+
+                car.x += nx * (penetration + push_margin)
+                car.y += ny * (penetration + push_margin)
+
+                tx, ty = -ny, nx
+                vn = car.vx * nx + car.vy * ny
+                vt = car.vx * tx + car.vy * ty
+                if vn < 0.0:
+                    vn = -vn * self.obstacle_bounce
+                else:
+                    vn *= 0.25
+                vt *= self.obstacle_tangent_keep
+                car.vx = tx * vt + nx * vn
+                car.vy = ty * vt + ny * vn
+                car.in_contact = True
+
+                if int(car_index) != self.player_index:
+                    heading_rad = math.radians(float(car.heading_degrees))
+                    left_x = -math.sin(heading_rad)
+                    left_y = math.cos(heading_rad)
+                    obstacle_center_x = left + tile_size * 0.5
+                    obstacle_center_y = top + tile_size * 0.5
+                    rel_x = obstacle_center_x - float(car.x)
+                    rel_y = obstacle_center_y - float(car.y)
+                    lateral = rel_x * left_x + rel_y * left_y
+                    car.obstacle_avoid_steer = -1.0 if lateral >= 0.0 else 1.0
+                    car.obstacle_avoid_frames = max(int(car.obstacle_avoid_frames), int(self.ai_avoid_frames))
+            if not hit_any:
+                break
+
     def _resolve_track_contacts(self, car: RaceCar, prev_x: float, prev_y: float) -> None:
         curr_x, curr_y = float(car.x), float(car.y)
-        prev_ok = self._is_driveable_footprint(prev_x, prev_y)
-        curr_ok = self._is_driveable_footprint(curr_x, curr_y)
+        prev_ok = self._is_on_track_footprint(prev_x, prev_y)
+        curr_ok = self._is_on_track_footprint(curr_x, curr_y)
         if prev_ok and curr_ok:
             return
 
         if not prev_ok:
             nearest_idx = self._nearest_track_sample(prev_x, prev_y)[0]
             prev_x, prev_y = self.track_centerline[nearest_idx]
-            prev_ok = self._is_driveable_footprint(prev_x, prev_y)
+            prev_ok = self._is_on_track_footprint(prev_x, prev_y)
             if not prev_ok:
                 prev_x, prev_y = self.track_centerline[self._nearest_track_sample(curr_x, curr_y)[0]]
 
@@ -475,7 +584,7 @@ class VroomEnv(Env):
                 t_mid = 0.5 * (t_good + t_bad)
                 sample_x = prev_x + (curr_x - prev_x) * t_mid
                 sample_y = prev_y + (curr_y - prev_y) * t_mid
-                if self._is_driveable_footprint(sample_x, sample_y):
+                if self._is_on_track_footprint(sample_x, sample_y):
                     t_good = t_mid
                 else:
                     t_bad = t_mid
@@ -579,6 +688,7 @@ class VroomEnv(Env):
     def _setup_race(self) -> None:
         self.track_seed = random.randint(0, 2_000_000_000)
         self._generate_track(self.track_seed)
+        self._reset_ai_obstacle_rolls()
         self.cars = self._create_car_grid()
         self.winner_index = None
         self.steps = 0
@@ -604,7 +714,44 @@ class VroomEnv(Env):
             return self.ACTION_BRAKE
         return self.ACTION_NOOP
 
-    def _ai_control_for_car(self, car: RaceCar) -> tuple[float, float]:
+    def _reset_ai_obstacle_rolls(self) -> None:
+        self.ai_obstacle_rolls = {}
+        obstacle_count = int(len(self.obstacles))
+        if obstacle_count <= 0:
+            return
+        for car_idx in range(self.NUM_CARS):
+            if car_idx == self.player_index:
+                continue
+            for obs_idx in range(obstacle_count):
+                self.ai_obstacle_rolls[(car_idx, obs_idx)] = bool(random.random() < self.ai_obstacle_avoid_chance)
+
+    def _closest_obstacle_ahead(self, car: RaceCar) -> tuple[int, float, float] | None:
+        if not self.obstacles:
+            return None
+
+        heading_rad = math.radians(float(car.heading_degrees))
+        forward_x = math.cos(heading_rad)
+        forward_y = math.sin(heading_rad)
+        left_x = -forward_y
+        left_y = forward_x
+
+        best: tuple[int, float, float] | None = None
+        for obs_idx, (ox, oy) in enumerate(self.obstacles):
+            cx = float(ox) + 0.5 * float(self.obstacle_size)
+            cy = float(oy) + 0.5 * float(self.obstacle_size)
+            rel_x = cx - float(car.x)
+            rel_y = cy - float(car.y)
+            forward = rel_x * forward_x + rel_y * forward_y
+            if forward <= 0.0 or forward > float(self.ai_avoid_lookahead):
+                continue
+            lateral = rel_x * left_x + rel_y * left_y
+            if abs(lateral) > float(self.ai_avoid_lateral):
+                continue
+            if best is None or forward < best[1]:
+                best = (int(obs_idx), float(forward), float(lateral))
+        return best
+
+    def _ai_control_for_car(self, car_index: int, car: RaceCar) -> tuple[float, float]:
         idx, distance, _, _ = self._nearest_track_sample(car.x, car.y)
         look_ahead = 10 + int(distance / max(1.0, self.track_half_width) * 8.0)
         target_idx = (idx + look_ahead) % self.track_count
@@ -625,6 +772,23 @@ class VroomEnv(Env):
             throttle = max(throttle, 0.55)
         if car.in_contact:
             throttle = max(throttle, 0.65)
+
+        if int(car.obstacle_avoid_frames) > 0:
+            car.obstacle_avoid_frames = int(car.obstacle_avoid_frames) - 1
+            steer = float(car.obstacle_avoid_steer)
+            throttle = max(throttle, 0.72)
+            return steer, throttle
+
+        ahead = self._closest_obstacle_ahead(car)
+        if ahead is not None:
+            obs_idx, _, lateral = ahead
+            should_avoid = bool(self.ai_obstacle_rolls.get((int(car_index), int(obs_idx)), True))
+            if should_avoid:
+                steer = -1.0 if lateral >= 0.0 else 1.0
+                car.obstacle_avoid_steer = float(steer)
+                car.obstacle_avoid_frames = int(self.ai_avoid_frames)
+                throttle = max(throttle, 0.68)
+                return steer, throttle
         return steer, throttle
 
     def _player_controls_from_action(self, action_idx: int) -> tuple[float, float]:
@@ -646,7 +810,7 @@ class VroomEnv(Env):
             if idx == self.player_index:
                 steer, throttle = self._player_controls_from_action(action_idx)
             else:
-                steer, throttle = self._ai_control_for_car(car)
+                steer, throttle = self._ai_control_for_car(idx, car)
             self._apply_car_controls(car, steer, throttle)
 
         for car in self.cars:
@@ -656,6 +820,7 @@ class VroomEnv(Env):
         self._resolve_car_contacts()
         for idx, car in enumerate(self.cars):
             prev_x, prev_y = previous_positions[idx]
+            self._resolve_obstacle_contacts(car, prev_x=float(prev_x), prev_y=float(prev_y), car_index=idx)
             self._resolve_track_contacts(car, prev_x=float(prev_x), prev_y=float(prev_y))
             self._resolve_screen_bounds(car)
             self._enforce_track_containment(car)
@@ -758,6 +923,20 @@ class VroomEnv(Env):
         arcade.draw_line(x1, ay1, x2, ay2, COLOR_CHARCOAL, 6.0)
         arcade.draw_line(x1, ay1, x2, ay2, COLOR_SOFT_WHITE, 3.0)
 
+    def _draw_obstacles(self) -> None:
+        if not self.obstacles:
+            return
+        for ox, oy in self.obstacles:
+            draw_two_tone_tile(
+                self.window_controller,
+                top_left_x=float(ox),
+                top_left_y=float(oy),
+                size=float(self.obstacle_size),
+                outer_color=COLOR_FOG_GRAY,
+                inner_color=COLOR_SLATE_GRAY,
+                inset=float(self.obstacle_inset),
+            )
+
     def _draw_cars(self) -> None:
         inset = max(2.0, self.car_size * 0.22)
         for idx, car in enumerate(self.cars):
@@ -829,6 +1008,7 @@ class VroomEnv(Env):
         draw_t0 = time.perf_counter()
         self.window_controller.clear(COLOR_CHARCOAL)
         self._draw_track()
+        self._draw_obstacles()
         self._draw_cars()
 
         arcade.draw_lbwh_rectangle_filled(0, 0, SCREEN_WIDTH, BB_HEIGHT, COLOR_NEAR_BLACK)

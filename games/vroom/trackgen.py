@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import random
 
 import arcade
 import numpy as np
@@ -12,13 +13,17 @@ from PIL import Image
 
 @dataclass(frozen=True)
 class TrackGenConfig:
-    track_width_px: float = 72.0
+    track_width_px: float = 88.0
     wall_thickness_px: float = 4.0
     padding_px: float = 40.0
     corner_radius_px: float = 130.0
-    line_safe_margin_px: float = 84.0
+    line_safe_margin_px: float = 96.0
     base_step_px: float = 6.0
     arc_points: int = 18
+    obstacle_tile_px: int = 20
+    obstacle_clusters: int = 4
+    obstacle_min_road_coverage: float = 1.0
+    obstacle_edge_margin_px: int = 2
 
 
 def _append_no_dup(target: list[tuple[float, float]], source: list[tuple[float, float]]) -> None:
@@ -198,6 +203,189 @@ def _pick_start_line(
     return int(start_idx), chosen_side, (p1, p2)
 
 
+def _generate_obstacle_tiles(
+    *,
+    seed: int,
+    width: int,
+    height: int,
+    cfg: TrackGenConfig,
+    road_mask: np.ndarray,
+    centerline: list[tuple[float, float]],
+    side_ranges: dict[str, tuple[int, int]],
+    start_index: int,
+    start_point: tuple[float, float],
+    start_clearance_px: float,
+) -> list[tuple[float, float]]:
+    tile_px = max(8, int(cfg.obstacle_tile_px))
+    grid_w = int(width) // tile_px
+    grid_h = int(height) // tile_px
+    point_count = int(len(centerline))
+    if grid_w <= 1 or grid_h <= 1 or point_count <= 8:
+        return []
+
+    rng = random.Random(int(seed) + 19117)
+    occupied: set[tuple[int, int]] = set()
+    used_indices: list[int] = []
+    tiles: list[tuple[float, float]] = []
+
+    index_spacing = max(5, int(float(cfg.track_width_px) / max(1.0, float(cfg.base_step_px))))
+    start_guard = max(8, int(float(cfg.line_safe_margin_px) / max(1.0, float(cfg.base_step_px))))
+    max_groups = max(0, int(cfg.obstacle_clusters))
+
+    def _index_delta(a: int, b: int) -> int:
+        diff = abs(int(a) - int(b))
+        return min(diff, point_count - diff)
+
+    def _dominant_grid_step(dx: float, dy: float) -> tuple[int, int]:
+        if abs(float(dx)) >= abs(float(dy)):
+            return (1 if float(dx) >= 0.0 else -1, 0)
+        return (0, 1 if float(dy) >= 0.0 else -1)
+
+    def _pixel_tile_valid(x0: int, y0: int) -> bool:
+        x1 = int(x0) + tile_px
+        y1 = int(y0) + tile_px
+        if int(x0) < 0 or int(y0) < 0 or x1 > int(width) or y1 > int(height):
+            return False
+        area = road_mask[int(y0):y1, int(x0):x1]
+        if area.shape[0] != tile_px or area.shape[1] != tile_px:
+            return False
+        coverage = float(np.count_nonzero(area)) / float(area.size)
+        if coverage < float(cfg.obstacle_min_road_coverage):
+            return False
+        margin = max(0, int(cfg.obstacle_edge_margin_px))
+        if margin <= 0:
+            return True
+        ex0 = int(x0) - margin
+        ey0 = int(y0) - margin
+        ex1 = x1 + margin
+        ey1 = y1 + margin
+        if ex0 < 0 or ey0 < 0 or ex1 > int(width) or ey1 > int(height):
+            return False
+        expanded = road_mask[ey0:ey1, ex0:ex1]
+        return bool(expanded.size > 0 and np.all(expanded > 0))
+
+    candidate_indices: list[int] = []
+    corner_guard = max(
+        4,
+        int(
+            (
+                0.5 * float(cfg.track_width_px)
+                + float(cfg.obstacle_tile_px)
+                + float(cfg.obstacle_edge_margin_px)
+            )
+            / max(1.0, float(cfg.base_step_px))
+        ),
+    )
+    for side_name in ("top", "right", "bottom", "left"):
+        start_end = side_ranges.get(side_name)
+        if not start_end:
+            continue
+        side_start, side_end = int(start_end[0]), int(start_end[1])
+        if side_end < side_start:
+            continue
+        low = side_start + corner_guard
+        high = side_end - corner_guard
+        if high < low:
+            continue
+        candidate_indices.extend(range(low, high + 1))
+    if not candidate_indices:
+        candidate_indices = list(range(point_count))
+    rng.shuffle(candidate_indices)
+
+    for center_idx in candidate_indices:
+        if len(used_indices) >= max_groups:
+            break
+        if _index_delta(int(center_idx), int(start_index)) < start_guard:
+            continue
+        if any(_index_delta(int(center_idx), int(existing)) < index_spacing for existing in used_indices):
+            continue
+
+        prev_idx = (int(center_idx) - 1) % point_count
+        next_idx = (int(center_idx) + 1) % point_count
+        tx = float(centerline[next_idx][0] - centerline[prev_idx][0])
+        ty = float(centerline[next_idx][1] - centerline[prev_idx][1])
+        nx, ny = -ty, tx
+
+        n_step_x, n_step_y = _dominant_grid_step(nx, ny)
+        t_step_x, t_step_y = _dominant_grid_step(tx, ty)
+        if t_step_x == n_step_x and t_step_y == n_step_y:
+            t_step_x, t_step_y = n_step_y, -n_step_x
+        if rng.random() < 0.5:
+            t_step_x, t_step_y = -t_step_x, -t_step_y
+
+        px, py = centerline[int(center_idx)]
+        base_gx = int(round(float(px) / float(tile_px)))
+        base_gy = int(round(float(py) / float(tile_px)))
+
+        # Keep obstacles as 1x2 only, oriented across the lane (perpendicular to tangent),
+        # and try extreme lateral offsets first so some obstacles force one-side routing.
+        offset_candidates = [-3, 2, -2, 1, -1, 0]
+        rng.shuffle(offset_candidates)
+
+        chosen_shape: list[tuple[int, int]] | None = None
+        chosen_offset = 0
+        for n_offset in offset_candidates:
+            local_offsets = [(int(n_offset), 0), (int(n_offset) + 1, 0)]
+            shape_tiles: list[tuple[int, int]] = []
+            valid_shape = True
+            for local_n, local_t in local_offsets:
+                gx = int(base_gx + local_n * n_step_x + local_t * t_step_x)
+                gy = int(base_gy + local_n * n_step_y + local_t * t_step_y)
+                if gx < 0 or gy < 0 or gx >= grid_w or gy >= grid_h:
+                    valid_shape = False
+                    break
+                if (gx, gy) in occupied or any((gx, gy) == existing for existing in shape_tiles):
+                    valid_shape = False
+                    break
+                if not _pixel_tile_valid(int(gx) * tile_px, int(gy) * tile_px):
+                    valid_shape = False
+                    break
+                tile_cx = float(gx * tile_px + tile_px * 0.5)
+                tile_cy = float(gy * tile_px + tile_px * 0.5)
+                if math.hypot(tile_cx - float(start_point[0]), tile_cy - float(start_point[1])) < float(start_clearance_px):
+                    valid_shape = False
+                    break
+                shape_tiles.append((gx, gy))
+            if valid_shape:
+                chosen_shape = shape_tiles
+                chosen_offset = int(n_offset)
+                break
+
+        if chosen_shape is None:
+            continue
+
+        side_sign = -1 if int(chosen_offset) < 0 else 1
+        max_shift_px = max(0, int(float(tile_px) * 0.45))
+        shift_x = 0
+        shift_y = 0
+        for shift_px in range(max_shift_px, -1, -1):
+            cand_x = int(n_step_x * side_sign * shift_px)
+            cand_y = int(n_step_y * side_sign * shift_px)
+            valid_shift = True
+            for gx, gy in chosen_shape:
+                px0 = int(gx) * tile_px + cand_x
+                py0 = int(gy) * tile_px + cand_y
+                if not _pixel_tile_valid(px0, py0):
+                    valid_shift = False
+                    break
+                tile_cx = float(px0 + tile_px * 0.5)
+                tile_cy = float(py0 + tile_px * 0.5)
+                if math.hypot(tile_cx - float(start_point[0]), tile_cy - float(start_point[1])) < float(start_clearance_px):
+                    valid_shift = False
+                    break
+            if valid_shift:
+                shift_x = cand_x
+                shift_y = cand_y
+                break
+
+        for gx, gy in chosen_shape:
+            occupied.add((gx, gy))
+            tiles.append((float(int(gx) * tile_px + shift_x), float(int(gy) * tile_px + shift_y)))
+        used_indices.append(int(center_idx))
+
+    return tiles
+
+
 def generate_track(
     seed: int,
     width: int,
@@ -228,7 +416,6 @@ def generate_track(
         height=int(height),
         track_width_px=float(cfg.track_width_px),
     )
-    collision_mask = np.array(road_mask, copy=True)
     wall_outer_mask = build_track_mask(
         centerline,
         width=int(width),
@@ -236,6 +423,33 @@ def generate_track(
         track_width_px=float(cfg.track_width_px) + 2.0 * float(cfg.wall_thickness_px),
     )
     wall_mask = np.where((wall_outer_mask > 0) & (road_mask == 0), 255, 0).astype(np.uint8)
+
+    obstacles = _generate_obstacle_tiles(
+        seed=int(seed),
+        width=int(width),
+        height=int(height),
+        cfg=cfg,
+        road_mask=road_mask,
+        centerline=centerline,
+        side_ranges=side_ranges,
+        start_index=int(start_index),
+        start_point=tuple(centerline[int(start_index)]),
+        start_clearance_px=max(48.0, float(cfg.track_width_px) * 1.6),
+    )
+    obstacle_mask = np.zeros_like(road_mask)
+    tile_px = max(8, int(cfg.obstacle_tile_px))
+    max_w = int(width)
+    max_h = int(height)
+    for ox, oy in obstacles:
+        x0 = int(round(float(ox)))
+        y0 = int(round(float(oy)))
+        x1 = min(max_w, x0 + tile_px)
+        y1 = min(max_h, y0 + tile_px)
+        if x0 < 0 or y0 < 0 or x0 >= x1 or y0 >= y1:
+            continue
+        obstacle_mask[y0:y1, x0:x1] = 255
+    wall_mask = np.maximum(wall_mask, obstacle_mask).astype(np.uint8)
+    collision_mask = np.where((road_mask > 0) & (obstacle_mask == 0), 255, 0).astype(np.uint8)
 
     if bool(build_texture):
         wall_texture = mask_to_texture(
@@ -262,4 +476,6 @@ def generate_track(
         "start_index": int(start_index),
         "start_side": str(start_side),
         "start_line": start_line,
+        "obstacles": obstacles,
+        "obstacle_mask": obstacle_mask,
     }

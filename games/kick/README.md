@@ -74,16 +74,14 @@ Notes:
 
 ## Rewards (Training)
 
-- Goal scored (left team): `+20.0`
-- Goal conceded (left team): `-10.0`
-- Step cost: `-0.005`
-- Possession shaping:
-  - while left has possession: `+0.01` per step
-  - left loses possession: `-0.2`
-  - left gains possession: `+0.1`
-- Controlled kick outcome:
-  - success (goal or teammate receives pass): `+0.2`
-  - fail (opponent next touch or out of bounds): `-0.2`
+- Outcome `REWARD_SCORE`: `+10` when left team scores.
+- Outcome `PENALTY_CONCEDE`: `-5` when left team concedes.
+- Ball-progress shaping: `r_prog = clip(1.0 * (Phi' - Phi), -0.2, +0.2)` with `Phi = -dist(ball, opp_goal)_norm`.
+- Event possession change: `+0.5` on gain, `-0.5` on loss (team-shared).
+- Event `PENALTY_KICK_COST`: `-0.01` when the chosen action is `kick_low`, `kick_mid`, or `kick_high`.
+- Step `PENALTY_STEP`: `-0.001` every training step.
+
+The progress potential is based on normalized ball distance to the opponent goal center; moving the ball toward goal increases `Phi` and yields positive signed-ΔPhi shaping.
 
 ## Training
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.envs.spaces import Discrete
+from games.off_policy_defaults import OFF_POLICY_TRAIN_DEFAULTS, make_exploration_config
 from games.vroom import config
 from games.spec_types import GameSpec
 from games.vroom.env import VroomEnv
@@ -11,9 +12,7 @@ from games.vroom.env import VroomEnv
 def make_env(mode: str, render: bool):
     return VroomEnv(mode=mode, render=render)
 
-
-HIDDEN_DIMENSIONS = [48, 48]
-RUN_NAME = "_".join(str(size) for size in HIDDEN_DIMENSIONS)
+RUN_NAME = "_".join(str(size) for size in config.HIDDEN_DIMENSIONS)
 
 
 SPEC = GameSpec(
@@ -24,28 +23,27 @@ SPEC = GameSpec(
     action_space=Discrete(config.ACT_DIM),
     run_name=RUN_NAME,
     algo_config={
-        "hidden_sizes": list(HIDDEN_DIMENSIONS),
-        "learning_rate": 3e-4,
-        "weight_decay": 0.0,
-        "gamma": 0.99,
-        "batch_size": 128,
-        "replay_size": 100_000,
-        "target_sync_every": 500,
-        "learn_start_steps": 1_000,
-        "train_every_steps": 1,
-        "epsilon_start": 1.0,
-        "epsilon_min": 0.05,
-        "epsilon_decay_steps": 100_000,
+        "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
+        "learning_rate": config.LEARNING_RATE,
+        "weight_decay": config.WEIGHT_DECAY,
+        "gamma": config.GAMMA,
+        "batch_size": config.BATCH_SIZE,
+        "replay_size": config.REPLAY_BUFFER_SIZE,
+        "target_sync_every": config.TARGET_SYNC_EVERY,
+        "grad_clip_norm": config.GRAD_CLIP_NORM,
+        "learn_start_steps": config.LEARN_START_STEPS,
+        "train_every_steps": config.TRAIN_EVERY_STEPS,
+        "exploration": make_exploration_config(config.EPSILON_DECAY),
         "dueling": False,
         "double_dqn": False,
         "prioritized_replay": False,
     },
     train_config={
-        "max_steps": 300_000,
-        "train_after_steps": 1_000,
-        "update_every_steps": 1,
-        "updates_per_step": 1,
-        "checkpoint_every_steps": 25_000,
-        "reward_window": 100,
+        **OFF_POLICY_TRAIN_DEFAULTS,
+        "max_steps": config.MAX_TRAINING_STEPS,
+        "train_after_steps": config.LEARN_START_STEPS,
+        "update_every_steps": config.TRAIN_EVERY_STEPS,
+        "updates_per_step": config.UPDATES_PER_TRAIN,
+        "checkpoint_every_steps": config.CHECKPOINT_EVERY_STEPS,
     },
 )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import random
 from typing import Any
 
@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from core.algorithms.base import Algorithm
+from core.algorithms.exploration import EpsilonController, ExplorationConfig, resolve_exploration_config
 from core.algorithms.dqn.networks import build_q_network
 from core.algorithms.dqn.replay import (
     PrioritizedReplayBuffer,
@@ -35,9 +36,7 @@ class DQNConfig:
     grad_clip_norm: float = 10.0
     learn_start_steps: int = 5_000
     train_every_steps: int = 4
-    epsilon_start: float = 1.0
-    epsilon_min: float = 0.05
-    epsilon_decay_steps: int = 40_000
+    exploration: ExplorationConfig | dict[str, object] = field(default_factory=ExplorationConfig)
     use_gpu: bool = False
     dueling: bool = True
     double_dqn: bool = True
@@ -92,10 +91,8 @@ class DQNAlgorithm(Algorithm):
 
         self.total_env_steps = 0
         self.training_steps = 0
-        self.epsilon = float(config.epsilon_start)
-        self._epsilon_decay = (float(config.epsilon_start) - float(config.epsilon_min)) / max(
-            1, int(config.epsilon_decay_steps)
-        )
+        self._exploration = EpsilonController(resolve_exploration_config(config.exploration))
+        self.epsilon = float(self._exploration.epsilon)
 
     def act(self, obs: np.ndarray, explore: bool) -> int:
         if explore and random.random() < self.epsilon:
@@ -118,7 +115,22 @@ class DQNAlgorithm(Algorithm):
             )
         )
         self.total_env_steps += 1
-        self.epsilon = max(float(self.config.epsilon_min), self.epsilon - self._epsilon_decay)
+        self.epsilon = float(self._exploration.advance_step())
+
+    def on_episode_end(self, avg_reward: float) -> dict[str, float | int | str] | None:
+        bump = self._exploration.on_episode_end(avg_reward)
+        self.epsilon = float(self._exploration.epsilon)
+        if bump is None:
+            return None
+        return {
+            "bump": "on",
+            "epsilon": float(bump.epsilon),
+            "hold_steps": int(bump.hold_steps),
+            "reason": str(bump.reason),
+        }
+
+    def exploration_avg_window(self) -> int | None:
+        return int(self._exploration.config.avg_window_episodes)
 
     def update(self) -> dict[str, float]:
         if self.total_env_steps < int(self.config.learn_start_steps):
@@ -178,6 +190,7 @@ class DQNAlgorithm(Algorithm):
                 "target_model": self.target_model.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
                 "epsilon": self.epsilon,
+                "exploration_state": self._exploration.state_dict(),
                 "total_env_steps": self.total_env_steps,
                 "training_steps": self.training_steps,
             },
@@ -192,7 +205,12 @@ class DQNAlgorithm(Algorithm):
             optimizer_state = checkpoint.get("optimizer")
             if optimizer_state is not None:
                 self.optimizer.load_state_dict(optimizer_state)
-            self.epsilon = float(checkpoint.get("epsilon", self.epsilon))
+            exploration_state = checkpoint.get("exploration_state")
+            if isinstance(exploration_state, dict):
+                self._exploration.load_state_dict(exploration_state)
+            else:
+                self._exploration.set_epsilon(float(checkpoint.get("epsilon", self.epsilon)))
+            self.epsilon = float(self._exploration.epsilon)
             self.total_env_steps = int(checkpoint.get("total_env_steps", self.total_env_steps))
             self.training_steps = int(checkpoint.get("training_steps", self.training_steps))
             return

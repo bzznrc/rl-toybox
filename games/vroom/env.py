@@ -32,7 +32,14 @@ from core.arcade_style import (
     screen_width,
 )
 from core.envs.base import Env
-from core.io_schema import clip_signed, clip_unit, normalize_last_action, normalized_ray_first_hit, ordered_feature_vector
+from core.io_schema import (
+    clip_signed,
+    clip_unit,
+    normalize_last_action,
+    normalized_ray_first_hit,
+    ordered_feature_vector,
+    signed_potential_shaping,
+)
 from core.primitives import (
     draw_facing_indicator,
     draw_status_square_icon,
@@ -46,6 +53,12 @@ from games.vroom.config import (
     ACT_DIM as VROOM_ACT_DIM,
     INPUT_FEATURE_NAMES as VROOM_INPUT_FEATURE_NAMES,
     OBS_DIM as VROOM_OBS_DIM,
+    PENALTY_COLLISION,
+    PENALTY_LOSE,
+    PENALTY_STEP,
+    PROGRESS_CLIP,
+    PROGRESS_SCALE,
+    REWARD_WIN,
 )
 from games.vroom.trackgen import TrackGenConfig, generate_track
 
@@ -215,6 +228,8 @@ class VroomEnv(Env):
         self._ray_step_size = max(0.75, self.obstacle_size * 0.2)
         self._last_obs = np.zeros((self.OBS_DIM,), dtype=np.float32)
         self._force_zero_deltas = False
+        self._prev_progress_potential = 0.0
+        self._prev_player_in_contact = False
         self.reset()
 
     @staticmethod
@@ -714,6 +729,12 @@ class VroomEnv(Env):
                 best_idx = idx
         return int(best_idx)
 
+    def _player_progress_potential(self) -> float:
+        if not self.cars or self.track_count <= 0:
+            return 0.0
+        player = self.cars[self.player_index]
+        return float(clip_unit(float(player.lap_progress) / float(max(1, self.track_count))))
+
     def _setup_race(self) -> None:
         self.track_seed = random.randint(0, 2_000_000_000)
         self._generate_track(self.track_seed)
@@ -722,6 +743,8 @@ class VroomEnv(Env):
         self.winner_index = None
         self.steps = 0
         self._force_zero_deltas = True
+        self._prev_progress_potential = float(self._player_progress_potential())
+        self._prev_player_in_contact = bool(self.cars[self.player_index].in_contact) if self.cars else False
 
     def _finalize_race(self, winner_idx: int | None) -> None:
         self.last_race_winner = None if winner_idx is None else int(winner_idx)
@@ -975,25 +998,53 @@ class VroomEnv(Env):
         action_idx = int(np.clip(action_idx, 0, self.ACT_DIM - 1))
         self.last_action_index = int(action_idx)
 
+        phi_prev = float(self._prev_progress_potential)
+        was_in_contact = bool(self._prev_player_in_contact)
         self._step_simulation(action_idx)
         self.steps += 1
 
         reward = 0.0
+        reward_breakdown = {
+            "step.penalty_step": 0.0,
+            "progress.shape": 0.0,
+            "event.penalty_collision": 0.0,
+            "outcome.reward_win": 0.0,
+            "outcome.penalty_lose": 0.0,
+        }
         if self.mode != "human":
-            reward -= 0.002
+            reward += float(PENALTY_STEP)
+            reward_breakdown["step.penalty_step"] = float(PENALTY_STEP)
+
             player = self.cars[self.player_index]
-            nearest_idx = self._nearest_track_sample(player.x, player.y)[0]
-            tangent_x, tangent_y = self.track_tangents[nearest_idx]
-            progress_speed = max(0.0, player.vx * tangent_x + player.vy * tangent_y)
-            reward += progress_speed * 0.01
-            if not self._is_on_track(player.x, player.y):
-                reward -= 0.01
+            phi_next = float(self._player_progress_potential())
+            progress_reward = float(
+                signed_potential_shaping(
+                    phi_prev=phi_prev,
+                    phi_next=phi_next,
+                    scale=float(PROGRESS_SCALE),
+                    clip_abs=float(PROGRESS_CLIP),
+                )
+            )
+            reward += progress_reward
+            reward_breakdown["progress.shape"] = progress_reward
+            self._prev_progress_potential = float(phi_next)
+
+            collision_started = (not was_in_contact) and bool(player.in_contact)
+            if collision_started:
+                reward += float(PENALTY_COLLISION)
+                reward_breakdown["event.penalty_collision"] = float(PENALTY_COLLISION)
+            self._prev_player_in_contact = bool(player.in_contact)
 
         race_finished = (self.winner_index is not None) or (self.steps >= self.max_steps)
         if race_finished:
             race_winner = self.winner_index if self.winner_index is not None else self._leader_index()
             if self.mode != "human":
-                reward += 10.0 if race_winner == self.player_index else -5.0
+                if race_winner == self.player_index:
+                    reward += float(REWARD_WIN)
+                    reward_breakdown["outcome.reward_win"] = float(REWARD_WIN)
+                else:
+                    reward += float(PENALTY_LOSE)
+                    reward_breakdown["outcome.penalty_lose"] = float(PENALTY_LOSE)
             self._finalize_race(race_winner)
 
         self.render()
@@ -1005,6 +1056,7 @@ class VroomEnv(Env):
             "race": int(min(self.current_race, self.total_races)),
             "races_finished": int(len(self.win_history)),
             "races_total": int(self.total_races),
+            "reward_breakdown": reward_breakdown if self.mode != "human" else {},
         }
         return self._compute_obs(), float(reward), bool(self.done), info
 
@@ -1102,7 +1154,7 @@ class VroomEnv(Env):
             return 0.0
 
         draw_t0 = time.perf_counter()
-        self.window_controller.clear(COLOR_CHARCOAL)
+        self.window_controller.clear(COLOR_SLATE_GRAY)
         self._draw_track()
         self._draw_obstacles()
         self._draw_cars()

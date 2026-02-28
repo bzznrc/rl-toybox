@@ -22,7 +22,7 @@ from core.arcade_style import (
     COLOR_SOFT_WHITE,
 )
 from core.envs.base import Env
-from core.io_schema import clip_signed, normalize_last_action, ordered_feature_vector
+from core.io_schema import clip_signed, clip_unit, normalize_last_action, ordered_feature_vector, signed_potential_shaping
 from core.primitives import (
     draw_control_marker,
     draw_facing_indicator,
@@ -46,11 +46,17 @@ from games.kick.config import (
     PHYSICS_DT,
     PENALTY_AREA_DEPTH_RATIO,
     PENALTY_AREA_WIDTH_RATIO,
+    PENALTY_CONCEDE,
+    PENALTY_KICK_COST,
+    PENALTY_POSSESSION_LOSS,
+    PENALTY_STEP,
     PLAYER_A_MAX_PX_PER_SEC2,
     PLAYER_V_MAX_PX_PER_SEC,
     PITCH_LINE_WIDTH,
-    PITCH_BACKGROUND_ACCENT_COLOR,
-    PITCH_BACKGROUND_COLOR,
+    PROGRESS_CLIP,
+    PROGRESS_SCALE,
+    REWARD_POSSESSION_GAIN,
+    REWARD_SCORE,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     STAMINA_DRAIN_SECONDS,
@@ -203,8 +209,6 @@ class KickEnv(Env):
         self.last_action_index = self.ACTION_STAY
 
         self._goal_scored_team: str | None = None
-        self._kick_outcome_reward_event = 0.0
-        self._pending_controlled_kick = False
         self._left_possession_before_step = False
 
         self._prev_tab_down = False
@@ -283,20 +287,7 @@ class KickEnv(Env):
     def _left_has_possession(self) -> bool:
         return self.ball_owner is not None and self.ball_owner.team == self.TEAM_LEFT
 
-    def _resolve_pending_kick_outcome(self, success: bool) -> None:
-        if not self._pending_controlled_kick:
-            return
-        self._pending_controlled_kick = False
-        self._kick_outcome_reward_event += 0.2 if bool(success) else -0.2
-
     def _set_ball_owner(self, owner: KickPlayer | None) -> None:
-        if owner is not None and self._pending_controlled_kick:
-            controlled = self._controlled_player()
-            if owner.team == self.TEAM_LEFT and owner is not controlled:
-                self._resolve_pending_kick_outcome(True)
-            else:
-                self._resolve_pending_kick_outcome(False)
-
         for player in self.all_players:
             player.has_ball = False
         self.ball_owner = owner
@@ -595,8 +586,6 @@ class KickEnv(Env):
     def _kick_ball(self, player: KickPlayer, speed: float, angle_degrees: float | None = None) -> None:
         if not player.has_ball or self.ball_owner is not player:
             return
-        if player.team == self.TEAM_LEFT and player is self._controlled_player():
-            self._pending_controlled_kick = True
         angle = float(player.angle if angle_degrees is None else angle_degrees) % 360.0
         radians = math.radians(angle)
         self._set_ball_owner(None)
@@ -960,7 +949,6 @@ class KickEnv(Env):
         starter.angle = 0.0 if kickoff_team == self.TEAM_LEFT else 180.0
         self._set_ball_owner(starter)
 
-        self._pending_controlled_kick = False
         self.freeze_frames = self.freeze_after_restart
         self._human_shot_hold_start = None
 
@@ -1013,20 +1001,17 @@ class KickEnv(Env):
         if self.ball_x <= 0.0 and self.goal_top <= self.ball_y <= self.goal_bottom:
             self.right_score += 1
             self._goal_scored_team = self.TEAM_RIGHT
-            self._resolve_pending_kick_outcome(False)
             self._restart_kickoff(self.TEAM_LEFT)
             return
         if self.ball_x >= SCREEN_WIDTH and self.goal_top <= self.ball_y <= self.goal_bottom:
             self.left_score += 1
             self._goal_scored_team = self.TEAM_LEFT
-            self._resolve_pending_kick_outcome(True)
             self._restart_kickoff(self.TEAM_RIGHT)
             return
 
         out_top = self.ball_y < 0.0
         out_bottom = self.ball_y > self.pitch_bottom
         if out_top or out_bottom:
-            self._resolve_pending_kick_outcome(False)
             receiving_team = self.TEAM_RIGHT if self.last_touch_team == self.TEAM_LEFT else self.TEAM_LEFT
             self._restart_throw_in(receiving_team, x=self.ball_x, y_top=out_top)
             return
@@ -1034,7 +1019,6 @@ class KickEnv(Env):
         out_left = self.ball_x < 0.0
         out_right = self.ball_x > SCREEN_WIDTH
         if out_left or out_right:
-            self._resolve_pending_kick_outcome(False)
             top_corner = self.ball_y < self.pitch_center_y
             if out_left:
                 if self.last_touch_team == self.TEAM_LEFT:
@@ -1058,7 +1042,6 @@ class KickEnv(Env):
 
     def _reset_step_events(self) -> None:
         self._goal_scored_team = None
-        self._kick_outcome_reward_event = 0.0
 
     def _tick(self, action) -> None:
         self.window_controller.poll_events_or_raise()
@@ -1081,26 +1064,56 @@ class KickEnv(Env):
 
         self.steps += 1
 
-    def _score_reward(self) -> float:
-        reward = -0.005
+    def _ball_progress_potential(self) -> float:
+        opp_goal_x = float(SCREEN_WIDTH)
+        opp_goal_y = float(self.pitch_center_y)
+        dist_to_goal = self._distance(self.ball_x, self.ball_y, opp_goal_x, opp_goal_y)
+        max_dist = max(1.0, math.hypot(float(SCREEN_WIDTH), float(self.pitch_height)))
+        return -float(clip_unit(dist_to_goal / max_dist))
+
+    def _score_reward(self, *, action_idx: int, phi_prev: float, phi_next: float) -> tuple[float, dict[str, float]]:
+        reward = float(PENALTY_STEP)
+        reward_breakdown = {
+            "step.penalty_step": float(PENALTY_STEP),
+            "progress.shape": 0.0,
+            "event.reward_possession_gain": 0.0,
+            "event.penalty_possession_loss": 0.0,
+            "event.penalty_kick_cost": 0.0,
+            "outcome.reward_score": 0.0,
+            "outcome.penalty_concede": 0.0,
+        }
+
+        progress_reward = float(
+            signed_potential_shaping(
+                phi_prev=float(phi_prev),
+                phi_next=float(phi_next),
+                scale=float(PROGRESS_SCALE),
+                clip_abs=float(PROGRESS_CLIP),
+            )
+        )
+        reward += progress_reward
+        reward_breakdown["progress.shape"] = progress_reward
+
         if self._goal_scored_team == self.TEAM_LEFT:
-            reward += 20.0
+            reward += float(REWARD_SCORE)
+            reward_breakdown["outcome.reward_score"] = float(REWARD_SCORE)
         elif self._goal_scored_team == self.TEAM_RIGHT:
-            reward -= 10.0
+            reward += float(PENALTY_CONCEDE)
+            reward_breakdown["outcome.penalty_concede"] = float(PENALTY_CONCEDE)
 
         left_has_possession = self._left_has_possession()
-        if left_has_possession:
-            reward += 0.01
+        if (not self._left_possession_before_step) and left_has_possession:
+            reward += float(REWARD_POSSESSION_GAIN)
+            reward_breakdown["event.reward_possession_gain"] = float(REWARD_POSSESSION_GAIN)
+        elif self._left_possession_before_step and (not left_has_possession):
+            reward += float(PENALTY_POSSESSION_LOSS)
+            reward_breakdown["event.penalty_possession_loss"] = float(PENALTY_POSSESSION_LOSS)
 
-        # Suppress possession transition penalties/rewards on goal steps to avoid kickoff artifacts.
-        if self._goal_scored_team is None:
-            if self._left_possession_before_step and not left_has_possession:
-                reward -= 0.2
-            elif (not self._left_possession_before_step) and left_has_possession:
-                reward += 0.1
+        if self.ACTION_KICK_LOW <= int(action_idx) <= self.ACTION_KICK_HIGH:
+            reward += float(PENALTY_KICK_COST)
+            reward_breakdown["event.penalty_kick_cost"] = float(PENALTY_KICK_COST)
 
-        reward += float(self._kick_outcome_reward_event)
-        return reward
+        return reward, reward_breakdown
 
     def _obs(self) -> np.ndarray:
         controlled = self._controlled_player()
@@ -1179,8 +1192,6 @@ class KickEnv(Env):
         self.done = False
         self.freeze_frames = 0
         self.controlled_index = 9
-        self._pending_controlled_kick = False
-        self._kick_outcome_reward_event = 0.0
         self._prev_tab_down = False
         self._prev_left_mouse_down = False
         self._human_shot_hold_start = None
@@ -1193,8 +1204,8 @@ class KickEnv(Env):
         pitch_h = self.pitch_height
         pitch_bottom = self.window_controller.top_left_to_bottom(self.pitch_top, pitch_h)
         line_width = float(PITCH_LINE_WIDTH)
-        arcade.draw_lbwh_rectangle_filled(0, pitch_bottom, SCREEN_WIDTH, pitch_h, PITCH_BACKGROUND_COLOR)
-        arcade.draw_lbwh_rectangle_filled(0, pitch_bottom, SCREEN_WIDTH, pitch_h, PITCH_BACKGROUND_ACCENT_COLOR + (24,))
+        arcade.draw_lbwh_rectangle_filled(0, pitch_bottom, SCREEN_WIDTH, pitch_h, COLOR_CHARCOAL)
+        arcade.draw_lbwh_rectangle_filled(0, pitch_bottom, SCREEN_WIDTH, pitch_h, COLOR_NEAR_BLACK + (24,))
 
         arcade.draw_lbwh_rectangle_outline(0, pitch_bottom, SCREEN_WIDTH, pitch_h, COLOR_FOG_GRAY, line_width)
         arcade.draw_line(
@@ -1400,17 +1411,25 @@ class KickEnv(Env):
                 "score_right": int(self.right_score),
                 "time_left_ratio": float(self._remaining_time_ratio()),
                 "controlled_role": self._controlled_player().role,
+                "reward_breakdown": {},
             }
 
+        action_idx = self.ACTION_STAY if self.mode == "human" else self._decode_action(action)
         parsed_action = action if self.mode != "human" else self.ACTION_STAY
+        phi_prev = float(self._ball_progress_potential()) if self.mode != "human" else 0.0
         self._tick(parsed_action)
+        phi_next = float(self._ball_progress_potential()) if self.mode != "human" else 0.0
         if self.steps >= self.max_steps:
             self.done = True
 
         self.render()
         self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
 
-        reward = self._score_reward() if self.mode != "human" else 0.0
+        if self.mode != "human":
+            reward, reward_breakdown = self._score_reward(action_idx=action_idx, phi_prev=phi_prev, phi_next=phi_next)
+        else:
+            reward = 0.0
+            reward_breakdown = {}
 
         done = bool(self.done)
         win = bool(done and self.left_score > self.right_score)
@@ -1420,6 +1439,7 @@ class KickEnv(Env):
             "score_right": int(self.right_score),
             "time_left_ratio": float(self._remaining_time_ratio()),
             "controlled_role": self._controlled_player().role,
+            "reward_breakdown": reward_breakdown,
         }
         return self._obs(), float(reward), bool(done), info
 

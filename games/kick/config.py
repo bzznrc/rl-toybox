@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from core.arcade_style import (
-    COLOR_CHARCOAL,
-    COLOR_NEAR_BLACK,
     DEFAULT_BOTTOM_BAR_HEIGHT,
     DEFAULT_CELL_INSET,
     DEFAULT_GRID_COLUMNS,
@@ -93,6 +91,26 @@ ACTION_NAMES = [
 OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
 
+# Reward shaping
+REWARD_SCORE = 10.0
+PENALTY_CONCEDE = -5.0
+PROGRESS_SCALE = 1.0
+PROGRESS_CLIP = 0.2
+REWARD_POSSESSION_GAIN = 0.5
+PENALTY_POSSESSION_LOSS = -0.5
+PENALTY_KICK_COST = -0.01
+PENALTY_STEP = -0.001
+REWARD_COMPONENTS = {
+    "outcome.reward_score": REWARD_SCORE,
+    "outcome.penalty_concede": PENALTY_CONCEDE,
+    "progress.scale": PROGRESS_SCALE,
+    "progress.clip": PROGRESS_CLIP,
+    "event.reward_possession_gain": REWARD_POSSESSION_GAIN,
+    "event.penalty_possession_loss": PENALTY_POSSESSION_LOSS,
+    "event.penalty_kick_cost": PENALTY_KICK_COST,
+    "step.penalty_step": PENALTY_STEP,
+}
+
 # Gameplay tuning
 # Global pace scaler (set env var KICK_SPEED_SCALE to override).
 GAME_SPEED_SCALE = max(0.2, env_float("KICK_SPEED_SCALE", 0.5))
@@ -114,7 +132,3 @@ STAMINA_MIN = 0.5
 STAMINA_MAX = 1.0
 STAMINA_DRAIN_SECONDS = 5.0
 STAMINA_RECOVER_SECONDS = 1.0
-
-# Background styling aligned with Bang palette.
-PITCH_BACKGROUND_COLOR = COLOR_CHARCOAL
-PITCH_BACKGROUND_ACCENT_COLOR = COLOR_NEAR_BLACK

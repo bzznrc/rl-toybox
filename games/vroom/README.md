@@ -66,10 +66,13 @@ Ray semantics:
 
 ## Rewards (Training)
 
-- Step cost: `-0.002`
-- Progress reward: `+0.01 * max(0, forward_speed_along_track)`
-- Win race: `+10.0`
-- Lose race: `-5.0`
+- Outcome `REWARD_WIN`: `+10` when the player wins the race.
+- Outcome `PENALTY_LOSE`: `-5` when another car wins or race timeout resolves against the player.
+- Progress shaping: `r_progress = clip(1.0 * (Phi' - Phi), -0.2, +0.2)` with `Phi = track_progress_norm`.
+- Event `PENALTY_COLLISION`: `-1.0` on collision-start events (transition from not-in-contact to in-contact).
+- Step `PENALTY_STEP`: `-0.01` every training step.
+
+`track_progress_norm` is normalized lap progress along the track/checkpoint ordering, so forward progress increases `Phi` and gives positive signed-ΔPhi shaping.
 
 ## Training
 
@@ -78,6 +81,18 @@ Default algo is vanilla DQN:
 ```bash
 rl-toybox-train --game vroom
 ```
+
+Key hyperparameters:
+
+- Train: `max_steps=2_000_000`, `learn_start_steps=20_000`, `train_every_steps=1`, `updates_per_train=1`, `checkpoint_every_steps=100_000`
+- Algo: `learning_rate=3e-4`, `gamma=0.99`, `batch_size=128`, `replay_size=200_000`, `target_sync_every_steps=2_000`, `grad_clip_norm=10.0`
+- DQN mode: `double_dqn=False`, `dueling=False`, `prioritized_replay=False`
+- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay=0.9999975036`
+- Plateau bump/hold: `avg_window=100`, `patience=30`, `min_improvement=0.20`, bump to `eps>=0.20`, `hold_steps=50_000`, `cooldown_episodes=30`
+
+Exploration uses multiplicative epsilon decay per env step: `eps = max(eps_min, eps * eps_decay)`.
+On reward plateaus, epsilon is bumped and held for a fixed step budget before decay restarts.
+This keeps exploration from snapping straight back to the minimum.
 
 Play AI:
 

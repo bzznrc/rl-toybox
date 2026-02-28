@@ -10,6 +10,8 @@ import arcade
 import numpy as np
 from PIL import Image
 
+from core.arcade_style import COLOR_CHARCOAL, COLOR_FOG_GRAY
+
 
 @dataclass(frozen=True)
 class TrackGenConfig:
@@ -455,12 +457,12 @@ def generate_track(
         wall_texture = mask_to_texture(
             wall_mask,
             texture_name=f"vroom_wall_{seed}",
-            track_color=(230, 231, 235),
+            track_color=COLOR_FOG_GRAY,
         )
         road_texture = mask_to_texture(
             road_mask,
             texture_name=f"vroom_track_{seed}",
-            track_color=(97, 101, 107),
+            track_color=COLOR_CHARCOAL,
         )
     else:
         wall_texture = None

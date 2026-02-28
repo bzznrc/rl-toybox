@@ -9,6 +9,7 @@ from statistics import mean
 from core.algorithms.base import Algorithm
 from core.envs.base import Env
 from core.io.runs import RunPaths, write_metrics
+from core.logging_utils import log_iteration_line, log_key_values, log_save_line
 
 
 @dataclass
@@ -17,6 +18,8 @@ class OnPolicyConfig:
     rollout_steps: int = 1024
     checkpoint_every_iterations: int = 10
     reward_window: int = 100
+    log_every_iterations: int = 1
+    log_heartbeat_steps: int = 0
 
 
 def run_on_policy_training(
@@ -32,6 +35,7 @@ def run_on_policy_training(
     total_steps = 0
     total_episodes = 0
     last_loss = 0.0
+    last_logged_step = 0
 
     for iteration in range(1, int(config.max_iterations) + 1):
         for _ in range(int(config.rollout_steps)):
@@ -61,15 +65,55 @@ def run_on_policy_training(
         if "loss" in metrics:
             last_loss = float(metrics["loss"])
 
-        avg_reward = mean(reward_window) if reward_window else 0.0
+        avg_reward = float(mean(reward_window)) if reward_window else 0.0
         if reward_window and avg_reward > best_avg_reward:
             best_avg_reward = avg_reward
             algorithm.save(str(run_paths.best_path))
+            log_save_line(
+                kind="best",
+                at=f"iter {int(iteration)}",
+                avg_reward=float(avg_reward),
+                path=run_paths.best_path,
+            )
+            last_logged_step = int(total_steps)
 
         if iteration % int(config.checkpoint_every_iterations) == 0:
             algorithm.save(str(run_paths.checkpoint_path))
+            log_save_line(
+                kind="checkpoint",
+                at=f"iter {int(iteration)}",
+                path=run_paths.checkpoint_path,
+            )
+            last_logged_step = int(total_steps)
+
+        if iteration % max(1, int(config.log_every_iterations)) == 0:
+            log_iteration_line(
+                iteration=int(iteration),
+                steps=int(total_steps),
+                episodes=int(total_episodes),
+                avg_reward=float(avg_reward),
+                best_avg=float(best_avg_reward if best_avg_reward > float("-inf") else avg_reward),
+            )
+            last_logged_step = int(total_steps)
+
+        if int(config.log_heartbeat_steps) > 0 and (int(total_steps) - int(last_logged_step)) >= int(config.log_heartbeat_steps):
+            log_key_values(
+                "rl_toybox.train",
+                {
+                    "Heartbeat": "on",
+                    "Steps": int(total_steps),
+                    "Episodes": int(total_episodes),
+                },
+                key_value_separator=":",
+            )
+            last_logged_step = int(total_steps)
 
     algorithm.save(str(run_paths.checkpoint_path))
+    log_save_line(
+        kind="checkpoint",
+        at=f"iter {int(config.max_iterations)}",
+        path=run_paths.checkpoint_path,
+    )
 
     final_metrics: dict[str, float | int] = {
         "iterations": int(config.max_iterations),

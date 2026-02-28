@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import asdict, dataclass
+import logging
 from statistics import mean
 
 from core.algorithms.base import Algorithm
 from core.envs.base import Env
 from core.io.runs import RunPaths, write_metrics
+from core.logging_utils import log_episode_line, log_key_values, log_save_line
 
 
 @dataclass
@@ -20,6 +22,8 @@ class OffPolicyConfig:
     updates_per_step: int = 1
     checkpoint_every_steps: int = 50_000
     reward_window: int = 100
+    log_every_episodes: int = 1
+    log_heartbeat_steps: int = 0
 
 
 def run_off_policy_training(
@@ -33,11 +37,20 @@ def run_off_policy_training(
     obs = env.reset()
 
     episode_reward = 0.0
-    reward_window: deque[float] = deque(maxlen=max(1, int(config.reward_window)))
+    episode_steps = 0
+    reward_window_size = max(1, int(config.reward_window))
+    exploration_window_size = reward_window_size
+    algorithm_window = algorithm.exploration_avg_window()
+    if algorithm_window is not None:
+        exploration_window_size = max(1, int(algorithm_window))
+
+    reward_window: deque[float] = deque(maxlen=reward_window_size)
+    exploration_window: deque[float] = deque(maxlen=exploration_window_size)
     best_avg_reward = float("-inf")
     update_attempts = 0
     updates = 0
     last_loss = 0.0
+    last_logged_step = 0
 
     while total_steps < int(config.max_steps):
         if config.max_episodes is not None and total_episodes >= int(config.max_episodes):
@@ -58,6 +71,7 @@ def run_off_policy_training(
 
         total_steps += 1
         episode_reward += float(reward)
+        episode_steps += 1
         obs = next_obs
 
         if total_steps >= int(config.train_after_steps) and total_steps % int(config.update_every_steps) == 0:
@@ -70,20 +84,74 @@ def run_off_policy_training(
 
         if total_steps % int(config.checkpoint_every_steps) == 0:
             algorithm.save(str(run_paths.checkpoint_path))
+            log_save_line(
+                kind="checkpoint",
+                at=f"step {int(total_steps)}",
+                path=run_paths.checkpoint_path,
+            )
+            last_logged_step = int(total_steps)
 
         if done:
             total_episodes += 1
             reward_window.append(episode_reward)
+            exploration_window.append(episode_reward)
 
-            avg_reward = mean(reward_window)
+            avg_reward = float(mean(reward_window))
+            exploration_avg_reward = float(mean(exploration_window))
             if avg_reward > best_avg_reward:
                 best_avg_reward = avg_reward
                 algorithm.save(str(run_paths.best_path))
+                log_save_line(
+                    kind="best",
+                    at=f"step {int(total_steps)}",
+                    avg_reward=float(avg_reward),
+                    path=run_paths.best_path,
+                )
+                last_logged_step = int(total_steps)
+
+            exploration_event = algorithm.on_episode_end(float(exploration_avg_reward))
+            if exploration_event is not None and str(exploration_event.get("bump", "off")).lower() == "on":
+                epsilon = float(exploration_event.get("epsilon", 0.0))
+                hold_steps = int(exploration_event.get("hold_steps", 0))
+                reason = str(exploration_event.get("reason", "plateau"))
+                logging.getLogger("rl_toybox.train").info(
+                    f"Explore\tBump: on\tEps: {epsilon:.2f}\tHoldSteps: {hold_steps}\tReason: {reason}"
+                )
+                last_logged_step = int(total_steps)
+
+            if total_episodes % max(1, int(config.log_every_episodes)) == 0:
+                log_episode_line(
+                    episode=int(total_episodes),
+                    ep_len=int(episode_steps),
+                    reward=float(episode_reward),
+                    avg_reward=float(avg_reward),
+                    best_avg=float(best_avg_reward if best_avg_reward > float("-inf") else avg_reward),
+                    steps=int(total_steps),
+                )
+                last_logged_step = int(total_steps)
 
             obs = env.reset()
             episode_reward = 0.0
+            episode_steps = 0
+
+        if int(config.log_heartbeat_steps) > 0 and (int(total_steps) - int(last_logged_step)) >= int(config.log_heartbeat_steps):
+            log_key_values(
+                "rl_toybox.train",
+                {
+                    "Heartbeat": "on",
+                    "Steps": int(total_steps),
+                    "Episodes": int(total_episodes),
+                },
+                key_value_separator=":",
+            )
+            last_logged_step = int(total_steps)
 
     algorithm.save(str(run_paths.checkpoint_path))
+    log_save_line(
+        kind="checkpoint",
+        at=f"step {int(total_steps)}",
+        path=run_paths.checkpoint_path,
+    )
 
     final_metrics: dict[str, float | int] = {
         "total_steps": total_steps,

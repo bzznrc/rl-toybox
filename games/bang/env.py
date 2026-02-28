@@ -8,8 +8,31 @@ from dataclasses import dataclass
 
 import arcade
 import numpy as np
+from core.arcade_style import (
+    COLOR_AMBER,
+    COLOR_AQUA,
+    COLOR_BRICK_RED,
+    COLOR_CHARCOAL,
+    COLOR_CORAL,
+    COLOR_DEEP_TEAL,
+    COLOR_FOG_GRAY,
+    COLOR_NEAR_BLACK,
+    COLOR_P3_BLUE,
+    COLOR_P3_NAVY,
+    COLOR_P4_DEEP_PURPLE,
+    COLOR_P4_PURPLE,
+    COLOR_SLATE_GRAY,
+    COLOR_SOFT_WHITE,
+)
 from core.envs.base import Env
-from core.io_schema import clip_signed, clip_unit, normalize_last_action, normalized_ray_first_hit, ordered_feature_vector
+from core.io_schema import (
+    clip_signed,
+    clip_unit,
+    normalize_last_action,
+    normalized_ray_first_hit,
+    ordered_feature_vector,
+    signed_potential_shaping,
+)
 from core.primitives import (
     draw_control_marker,
     draw_facing_indicator,
@@ -31,20 +54,6 @@ from games.bang.config import (
     AIM_TOLERANCE_DEGREES,
     BB_HEIGHT,
     CELL_INSET,
-    COLOR_AMBER,
-    COLOR_AQUA,
-    COLOR_BRICK_RED,
-    COLOR_CHARCOAL,
-    COLOR_CORAL,
-    COLOR_DEEP_TEAL,
-    COLOR_FOG_GRAY,
-    COLOR_NEAR_BLACK,
-    COLOR_P3_BLUE,
-    COLOR_P3_NAVY,
-    COLOR_P4_DEEP_PURPLE,
-    COLOR_P4_PURPLE,
-    COLOR_SLATE_GRAY,
-    COLOR_SOFT_WHITE,
     ENEMY_ESCAPE_ANGLE_OFFSETS_DEGREES,
     ENEMY_ESCAPE_FOLLOW_FRAMES,
     ENEMY_SPAWN_X_RATIO,
@@ -61,16 +70,18 @@ from games.bang.config import (
     MIN_OBSTACLE_SECTIONS,
     NN_CONTROL_MARKER_SIZE_PX,
     OBSTACLE_START_ATTEMPTS,
-    PENALTY_BAD_SHOT,
-    PENALTY_BLOCKED_MOVE,
+    ENGAGEMENT_CLIP,
+    ENGAGEMENT_SCALE,
+    HAZARD_CLIP,
+    HAZARD_SCALE,
+    PENALTY_STEP,
     PENALTY_LOSE,
-    PENALTY_TIME_STEP,
     PLAYER_MOVE_SPEED,
     PLAYER_SPAWN_X_RATIO,
     PROJECTILE_HITBOX_SIZE,
     PROJECTILE_SPEED,
     PROJECTILE_TRAJECTORY_DOT_THRESHOLD,
-    REWARD_HIT_ENEMY,
+    REWARD_KILL,
     REWARD_WIN,
     SAFE_RADIUS,
     SCREEN_HEIGHT,
@@ -1186,7 +1197,7 @@ class BaseGame:
             self._step_scripted_actor(actor)
 
     def _step_projectiles(self):
-        events = {"player_hits": 0, "player_killed_by": None}
+        events = {"player_kills": 0, "player_killed_by": None}
         next_projectiles = []
 
         for projectile in self.projectiles:
@@ -1213,9 +1224,9 @@ class BaseGame:
 
             if colliding_targets:
                 target = min(colliding_targets, key=lambda candidate: candidate.position.distance(projectile["pos"]))
-                target.take_hit(1)
-                if owner_id == self.player.team:
-                    events["player_hits"] += 1
+                eliminated = bool(target.take_hit(1))
+                if owner_id == self.player.team and eliminated:
+                    events["player_kills"] += 1
                 if target is self.player and not self.player.is_alive:
                     events["player_killed_by"] = owner_id
                 continue
@@ -1255,6 +1266,32 @@ class BaseGame:
         if target is None:
             return False
         return self._is_actor_aimed_at_target(self.player, target) and self._has_clear_path_between(self.player, target)
+
+    def _nearest_alive_opponent_to_player(self) -> Actor | None:
+        opponents = [actor for actor in self.players if actor is not self.player and actor.is_alive]
+        if not opponents:
+            return None
+        return min(opponents, key=lambda actor: self.player.position.distance(actor.position))
+
+    def _engagement_potential(self) -> float:
+        target = self._nearest_alive_opponent_to_player()
+        if target is None:
+            return 0.0
+        dist_scale = max(1.0, max(float(self.width), float(self.height - BB_HEIGHT)))
+        tgt_dist_norm = clip_unit(self.player.position.distance(target.position) / dist_scale)
+        tgt_in_los = 1.0 if self.has_line_of_sight(target) else 0.0
+        return float(tgt_in_los - tgt_dist_norm)
+
+    def _hazard_potential(self) -> float:
+        nearest_projectile = self._nearest_hostile_projectile()
+        if nearest_projectile is None:
+            haz_dist_norm = 1.0
+            haz_in_trajectory = 0.0
+        else:
+            dist_scale = max(1.0, max(float(self.width), float(self.height - BB_HEIGHT)))
+            haz_dist_norm = clip_unit(self.player.position.distance(nearest_projectile["pos"]) / dist_scale)
+            haz_in_trajectory = 1.0 if self._projectile_in_trajectory(nearest_projectile) else 0.0
+        return float(haz_dist_norm - 1.5 * haz_in_trajectory)
 
     def get_state_vector(self) -> list[float]:
         target = self._get_player_target()
@@ -1467,58 +1504,81 @@ class TrainingGame(BaseGame):
         action_index = action.index(1) if 1 in action else 0
         self.poll_events()
         self._reset_actor_velocities()
+        phi_eng_prev = float(self._engagement_potential())
+        phi_haz_prev = float(self._hazard_potential())
 
-        previous_position = self.player.position
         self.apply_player_action(action_index)
-        blocked_move = self._player_attempts_translation() and length_squared(self.player.position - previous_position) == 0
         self._step_scripted_players()
         projectile_events = self._step_projectiles()
 
         self._tick_players()
 
-        reward = PENALTY_TIME_STEP
+        phi_eng_next = float(self._engagement_potential())
+        phi_haz_next = float(self._hazard_potential())
+
+        reward = float(PENALTY_STEP)
         reward_breakdown = {
-            "time_step": PENALTY_TIME_STEP,
-            "bad_shot": 0.0,
-            "blocked_move": 0.0,
-            "hit_enemy": 0.0,
-            "win": 0.0,
-            "lose": 0.0,
+            "step.penalty_step": float(PENALTY_STEP),
+            "event.reward_kill": 0.0,
+            "progress.engagement_shape": 0.0,
+            "progress.hazard_shape": 0.0,
+            "outcome.reward_win": 0.0,
+            "outcome.penalty_lose": 0.0,
         }
 
-        if action_index == ACTION_SHOOT and not self.has_line_of_sight():
-            reward += PENALTY_BAD_SHOT
-            reward_breakdown["bad_shot"] = PENALTY_BAD_SHOT
+        engagement_shape = float(
+            signed_potential_shaping(
+                phi_prev=phi_eng_prev,
+                phi_next=phi_eng_next,
+                scale=float(ENGAGEMENT_SCALE),
+                clip_abs=float(ENGAGEMENT_CLIP),
+            )
+        )
+        hazard_shape = float(
+            signed_potential_shaping(
+                phi_prev=phi_haz_prev,
+                phi_next=phi_haz_next,
+                scale=float(HAZARD_SCALE),
+                clip_abs=float(HAZARD_CLIP),
+            )
+        )
+        reward += engagement_shape
+        reward += hazard_shape
+        reward_breakdown["progress.engagement_shape"] = engagement_shape
+        reward_breakdown["progress.hazard_shape"] = hazard_shape
 
-        if blocked_move:
-            reward += PENALTY_BLOCKED_MOVE
-            reward_breakdown["blocked_move"] = PENALTY_BLOCKED_MOVE
-
-        player_hits = int(projectile_events["player_hits"])
-        if player_hits > 0:
-            hit_reward = REWARD_HIT_ENEMY * player_hits
-            reward += hit_reward
-            reward_breakdown["hit_enemy"] = hit_reward
+        player_kills = int(projectile_events["player_kills"])
+        if player_kills > 0:
+            kill_reward = float(REWARD_KILL) * float(player_kills)
+            reward += kill_reward
+            reward_breakdown["event.reward_kill"] = kill_reward
 
         player_just_died = (not self.player.is_alive) and (not self.player_loss_recorded)
         if player_just_died:
-            reward += PENALTY_LOSE
-            reward_breakdown["lose"] = PENALTY_LOSE
             self.player_loss_recorded = True
 
         done = False
         timed_out = False
+        winner = self._last_alive_player()
+        player_won = self.player.is_alive and winner is self.player
+        player_lost_match = (not self.player.is_alive) or (winner is not None and winner is not self.player)
         if self.end_on_player_death and not self.player.is_alive:
             done = True
-        elif self.is_player_last_alive():
-            reward += REWARD_WIN
-            reward_breakdown["win"] = REWARD_WIN
+        elif player_won:
             done = True
-        elif (not self.end_on_player_death) and (self._last_alive_player() is not None):
+        elif (not self.end_on_player_death) and (winner is not None):
             done = True
         elif self.frame_count >= MAX_EPISODE_STEPS:
             done = True
             timed_out = True
+
+        if done:
+            if player_won:
+                reward += float(REWARD_WIN)
+                reward_breakdown["outcome.reward_win"] = float(REWARD_WIN)
+            elif player_lost_match:
+                reward += float(PENALTY_LOSE)
+                reward_breakdown["outcome.penalty_lose"] = float(PENALTY_LOSE)
 
         if done:
             if self.end_on_player_death and not self.player.is_alive:
@@ -1526,14 +1586,12 @@ class TrainingGame(BaseGame):
                 if isinstance(killer_id, str) and killer_id in self.scores:
                     self._increment_score(killer_id)
                 else:
-                    winner = self._last_alive_player()
                     if winner is not None:
                         self._increment_score(winner.team)
             else:
-                winner = self._last_alive_player()
                 if winner is not None:
                     self._increment_score(winner.team)
-            if timed_out and self._last_alive_player() is None:
+            if timed_out and winner is None:
                 self._record_round_draw()
 
         self.draw_frame()

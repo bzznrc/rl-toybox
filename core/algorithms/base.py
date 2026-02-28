@@ -30,3 +30,12 @@ class Algorithm(ABC):
     @abstractmethod
     def load(self, path: str) -> None:
         """Load state from checkpoint path."""
+
+    def on_episode_end(self, avg_reward: float) -> dict[str, float | int | str] | None:
+        """Optional hook for episode-level bookkeeping in runners."""
+        del avg_reward
+        return None
+
+    def exploration_avg_window(self) -> int | None:
+        """Optional rolling episode window request for exploration control."""
+        return None

@@ -2,6 +2,47 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Snake - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "snake"
+      ]
+    },
+    {
+      "name": "Snake - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "snake",
+        "--model",
+        "best",
+        "--episodes",
+        "10",
+        "--render"
+      ]
+    },
+    {
+      "name": "Snake - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "snake"
+      ]
+    },
+    {
       "name": "Vroom - Play User",
       "type": "debugpy",
       "request": "launch",
@@ -28,6 +69,140 @@
         "--episodes",
         "10",
         "--render"
+      ]
+    },
+    {
+      "name": "Vroom - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "vroom"
+      ]
+    },
+    {
+      "name": "Bang - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "bang"
+      ],
+      "env": {
+        "BANG_PLAYERS": "${input:bangPlayers}"
+      }
+    },
+    {
+      "name": "Bang - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "bang",
+        "--model",
+        "best",
+        "--episodes",
+        "10",
+        "--render"
+      ],
+      "env": {
+        "BANG_PLAYERS": "${input:bangPlayers}"
+      }
+    },
+    {
+      "name": "Bang - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "bang"
+      ]
+    },
+    {
+      "name": "Kick - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick"
+      ],
+      "env": {
+        "KICK_SPEED_SCALE": "${input:kickSpeedScale}"
+      }
+    },
+    {
+      "name": "Kick - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick",
+        "--model",
+        "best",
+        "--episodes",
+        "10",
+        "--render"
+      ],
+      "env": {
+        "KICK_SPEED_SCALE": "${input:kickSpeedScale}"
+      }
+    },
+    {
+      "name": "Kick - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick"
+      ],
+      "env": {
+        "KICK_SPEED_SCALE": "${input:kickSpeedScale}"
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "bangPlayers",
+      "type": "pickString",
+      "description": "Bang player count",
+      "default": "2",
+      "options": [
+        "2",
+        "3",
+        "4"
+      ]
+    },
+    {
+      "id": "kickSpeedScale",
+      "type": "pickString",
+      "description": "Kick speed scale",
+      "default": "0.5",
+      "options": [
+        "0.35",
+        "0.5",
+        "0.75",
+        "1.0"
       ]
     }
   ]

@@ -8,21 +8,37 @@ Grid Snake environment with obstacles.
 
 ## Observation / Actions
 
-- Observation: `12` values
-  - `danger_straight`, `danger_right`, `danger_left`
-  - direction one-hot-ish flags (`dir_left/right/up/down`)
-  - food direction flags (`food_left/right/up/down`)
-  - `snake_length`
+- Observation: `12` floats (`INPUT_FEATURE_NAMES`, ordered)
+  - `self_heading_sin`
+  - `self_heading_cos`
+  - `self_length`
+  - `self_last_action`
+  - `ray_fwd`
+  - `ray_left`
+  - `ray_right`
+  - `tgt_dx`
+  - `tgt_dy`
+  - `tgt_manhattan_dist`
+  - `tgt_dist_delta`
+  - `self_steps_since_food`
 - Actions: `Discrete(3)`
   - `0 straight`
   - `1 turn_right`
   - `2 turn_left`
 
+Ray semantics:
+
+- `ray_*` are normalized distance-to-first-collision in local snake directions.
+- Values are in `[0,1]`; `1.0` means no collision within ray range.
+
 ## Rewards (Training)
 
-- Eat food: `+10`
-- Death/timeout: `-5`
-- Otherwise: `0` (the configured `REWARD_STEP` is currently not applied in `TrainingSnakeGame.play_step`)
+- Event `REWARD_FOOD`: `+10` when food is eaten.
+- Outcome `PENALTY_LOSE`: `-5` on death or timeout.
+- Progress shaping: `r_progress = clip(1.0 * (Phi' - Phi), -0.2, +0.2)` with `Phi = -dist_food_norm`.
+- Step `PENALTY_STEP`: `-0.01` every training step.
+
+`dist_food_norm` is the normalized Manhattan head-to-food distance (shortest wrapped path when wrap-around is enabled), so moving toward food increases `Phi` and gives positive signed-ΔPhi shaping.
 
 ## Training
 
@@ -31,6 +47,17 @@ Default algo is Q-learning with `LinearQNet`:
 ```bash
 rl-toybox-train --game snake
 ```
+
+Key hyperparameters:
+
+- Train: `max_steps=1_500_000`, `checkpoint_every_steps=100_000`
+- Algo: `learning_rate=1e-3`, `gamma=0.95`, `max_memory=100_000`, `batch_size=512`
+- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay=0.9999966714`
+- Plateau bump/hold: `avg_window=100`, `patience=30`, `min_improvement=0.20`, bump to `eps>=0.20`, `hold_steps=50_000`, `cooldown_episodes=30`
+
+Exploration uses multiplicative epsilon decay per env step: `eps = max(eps_min, eps * eps_decay)`.
+When rolling avg reward plateaus, epsilon is bumped and then held for fixed steps before decay resumes.
+This avoids immediate collapse back to minimum exploration during overnight runs.
 
 Play AI:
 

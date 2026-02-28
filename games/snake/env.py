@@ -9,11 +9,7 @@ import random
 import arcade
 import numpy as np
 
-from core.envs.base import Env
-from core.primitives import draw_two_tone_tile, spawn_connected_random_walk_shapes
-from games.snake.config import (
-    BB_HEIGHT,
-    CELL_INSET,
+from core.arcade_style import (
     COLOR_AQUA,
     COLOR_BRICK_RED,
     COLOR_CHARCOAL,
@@ -22,13 +18,27 @@ from games.snake.config import (
     COLOR_FOG_GRAY,
     COLOR_NEAR_BLACK,
     COLOR_SLATE_GRAY,
+)
+from core.envs.base import Env
+from core.io_schema import clip_signed, clip_unit, normalize_last_action, ordered_feature_vector, signed_potential_shaping
+from core.primitives import draw_two_tone_tile, spawn_connected_random_walk_shapes
+from games.snake.config import (
+    ACTION_NAMES as SNAKE_ACTION_NAMES,
+    ACT_DIM as SNAKE_ACT_DIM,
+    BB_HEIGHT,
+    CELL_INSET,
     FPS,
     MAX_OBSTACLE_SECTIONS,
     MIN_OBSTACLE_SECTIONS,
     NN_CONTROL_MARKER_SIZE_PX,
     NUM_OBSTACLES,
-    REWARD_DEATH_OR_TIMEOUT,
+    OBS_DIM as SNAKE_OBS_DIM,
+    INPUT_FEATURE_NAMES as SNAKE_INPUT_FEATURE_NAMES,
+    PENALTY_LOSE,
+    PROGRESS_CLIP,
+    PROGRESS_SCALE,
     REWARD_FOOD,
+    PENALTY_STEP,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     TILE_SIZE,
@@ -37,6 +47,7 @@ from games.snake.config import (
     WRAP_AROUND,
 )
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
+
 
 class Direction(Enum):
     RIGHT = 1
@@ -76,6 +87,9 @@ class BaseSnakeGame:
         self.food = Point(0, 0)
         self.obstacles: list[Point] = []
         self.frame_iteration = 0
+        self.last_action_index = 0
+        self.steps_since_food = 0
+        self._prev_tgt_manhattan_norm: float | None = None
         self.reset()
 
     def close(self) -> None:
@@ -99,6 +113,23 @@ class BaseSnakeGame:
         self._place_food()
         self._place_obstacles()
         self.frame_iteration = 0
+        self.last_action_index = 0
+        self.steps_since_food = 0
+        self._prev_tgt_manhattan_norm = None
+
+    @staticmethod
+    def _clockwise_directions() -> list[Direction]:
+        return [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
+
+    def _action_index_for_direction_change(self, previous: Direction, current: Direction) -> int:
+        clockwise = self._clockwise_directions()
+        prev_idx = clockwise.index(previous)
+        curr_idx = clockwise.index(current)
+        if curr_idx == prev_idx:
+            return 0
+        if curr_idx == (prev_idx + 1) % len(clockwise):
+            return 1
+        return 2
 
     def _place_food(self) -> None:
         while True:
@@ -294,6 +325,7 @@ class HumanSnakeGame(BaseSnakeGame):
     def play_step(self) -> tuple[bool, int]:
         self.frame_iteration += 1
         self.poll_events()
+        previous_direction = self.direction
 
         if self.window_controller.is_key_down(arcade.key.A) and self.direction != Direction.RIGHT:
             self.direction = Direction.LEFT
@@ -303,6 +335,7 @@ class HumanSnakeGame(BaseSnakeGame):
             self.direction = Direction.UP
         elif self.window_controller.is_key_down(arcade.key.S) and self.direction != Direction.UP:
             self.direction = Direction.DOWN
+        self.last_action_index = self._action_index_for_direction_change(previous_direction, self.direction)
 
         self._move_one_tile(self.direction)
         self.snake.insert(0, self.head)
@@ -313,7 +346,10 @@ class HumanSnakeGame(BaseSnakeGame):
         if self.head == self.food:
             self.score += 1
             self._place_food()
+            self.steps_since_food = 0
+            self._prev_tgt_manhattan_norm = None
         else:
+            self.steps_since_food += 1
             self.snake.pop()
 
         self.draw_frame()
@@ -329,74 +365,207 @@ class HumanSnakeGame(BaseSnakeGame):
 class TrainingSnakeGame(BaseSnakeGame):
     """AI-controlled training environment."""
 
-    def play_step(self, action: list[int]) -> tuple[int, bool, int]:
+    def __init__(self, show_game: bool = True) -> None:
+        super().__init__(show_game=show_game)
+        self.last_reward_breakdown: dict[str, float] = {}
+
+    def reset(self) -> None:
+        super().reset()
+        self.last_reward_breakdown = {
+            "step.penalty_step": 0.0,
+            "progress.shape": 0.0,
+            "event.reward_food": 0.0,
+            "outcome.penalty_lose": 0.0,
+        }
+
+    @staticmethod
+    def _direction_vector(direction: Direction) -> tuple[int, int]:
+        if direction == Direction.RIGHT:
+            return 1, 0
+        if direction == Direction.LEFT:
+            return -1, 0
+        if direction == Direction.UP:
+            return 0, -1
+        return 0, 1
+
+    @staticmethod
+    def _left_vector(dx: int, dy: int) -> tuple[int, int]:
+        return dy, -dx
+
+    @staticmethod
+    def _right_vector(dx: int, dy: int) -> tuple[int, int]:
+        return -dy, dx
+
+    def _grid_dims(self) -> tuple[int, int]:
+        return int(self.width // TILE_SIZE), int((self.height - BB_HEIGHT) // TILE_SIZE)
+
+    def _cell_from_point(self, point: Point) -> tuple[int, int]:
+        return int(point.x // TILE_SIZE), int(point.y // TILE_SIZE)
+
+    def _point_from_cell(self, cell_x: int, cell_y: int) -> Point:
+        return Point(float(cell_x * TILE_SIZE), float(cell_y * TILE_SIZE))
+
+    @staticmethod
+    def _wrap_delta_cells(delta: int, size: int) -> int:
+        wrapped = int(delta)
+        half = int(size) / 2.0
+        if wrapped > half:
+            wrapped -= int(size)
+        elif wrapped < -half:
+            wrapped += int(size)
+        return wrapped
+
+    def _action_index(self, action: list[int]) -> int:
+        values = np.asarray(action, dtype=np.float32).reshape(-1)
+        if values.size <= 0:
+            return 0
+        if values.size != SNAKE_ACT_DIM:
+            return int(np.clip(int(values[0]), 0, SNAKE_ACT_DIM - 1))
+        return int(np.argmax(values))
+
+    def _is_collision_for_cell(self, cell_x: int, cell_y: int) -> bool:
+        grid_w, grid_h = self._grid_dims()
+        if WRAP_AROUND:
+            cell_x = int(cell_x % grid_w)
+            cell_y = int(cell_y % grid_h)
+        else:
+            if cell_x < 0 or cell_x >= grid_w or cell_y < 0 or cell_y >= grid_h:
+                return True
+        point = self._point_from_cell(cell_x, cell_y)
+        return bool(point in self.snake[1:] or point in self.obstacles)
+
+    def _ray_distance_to_collision(self, dir_x: int, dir_y: int) -> float:
+        head_cell_x, head_cell_y = self._cell_from_point(self.head)
+        grid_w, grid_h = self._grid_dims()
+        max_range = max(1, int(max(grid_w, grid_h)))
+        for step in range(1, max_range + 1):
+            cell_x = head_cell_x + int(dir_x) * step
+            cell_y = head_cell_y + int(dir_y) * step
+            if self._is_collision_for_cell(cell_x, cell_y):
+                return float(step) / float(max_range)
+        return 1.0
+
+    def _food_manhattan_norm(self) -> float:
+        grid_w, grid_h = self._grid_dims()
+        max_manhattan = max(1, (grid_w // 2 + grid_h // 2) if WRAP_AROUND else (grid_w - 1 + grid_h - 1))
+        head_cell_x, head_cell_y = self._cell_from_point(self.head)
+        food_cell_x, food_cell_y = self._cell_from_point(self.food)
+        raw_dx = int(food_cell_x - head_cell_x)
+        raw_dy = int(food_cell_y - head_cell_y)
+        dx_cells = self._wrap_delta_cells(raw_dx, grid_w) if WRAP_AROUND else raw_dx
+        dy_cells = self._wrap_delta_cells(raw_dy, grid_h) if WRAP_AROUND else raw_dy
+        manhattan_dist = abs(dx_cells) + abs(dy_cells)
+        return float(clip_unit(float(manhattan_dist) / float(max_manhattan)))
+
+    def _food_progress_potential(self) -> float:
+        return -float(self._food_manhattan_norm())
+
+    def play_step(self, action: list[int]) -> tuple[float, bool, int]:
         self.frame_iteration += 1
         self.poll_events()
 
-        self._move(action)
+        phi_prev = float(self._food_progress_potential())
+        action_idx = self._action_index(action)
+        self.last_action_index = int(action_idx)
+        self._move(action_idx)
         self.snake.insert(0, self.head)
 
-        reward = 0
+        reward = float(PENALTY_STEP)
+        reward_breakdown = {
+            "step.penalty_step": float(PENALTY_STEP),
+            "progress.shape": 0.0,
+            "event.reward_food": 0.0,
+            "outcome.penalty_lose": 0.0,
+        }
         if self._has_collision() or self.frame_iteration > 100 * len(self.snake):
-            return int(REWARD_DEATH_OR_TIMEOUT), True, self.score
+            reward += float(PENALTY_LOSE)
+            reward_breakdown["outcome.penalty_lose"] = float(PENALTY_LOSE)
+            self.last_reward_breakdown = reward_breakdown
+            return reward, True, self.score
+
+        phi_next = float(self._food_progress_potential())
+        progress_reward = float(
+            signed_potential_shaping(
+                phi_prev=phi_prev,
+                phi_next=phi_next,
+                scale=float(PROGRESS_SCALE),
+                clip_abs=float(PROGRESS_CLIP),
+            )
+        )
+        reward += progress_reward
+        reward_breakdown["progress.shape"] = progress_reward
 
         if self.head == self.food:
             self.score += 1
-            reward = int(REWARD_FOOD)
+            reward += float(REWARD_FOOD)
+            reward_breakdown["event.reward_food"] = float(REWARD_FOOD)
             self._place_food()
             self.frame_iteration = 0
+            self.steps_since_food = 0
+            self._prev_tgt_manhattan_norm = None
         else:
             self.snake.pop()
+            self.steps_since_food += 1
 
         self.draw_frame()
         self.frame_clock.tick(TRAINING_FPS)
+        self.last_reward_breakdown = reward_breakdown
 
         return reward, False, self.score
 
     def get_state_vector(self) -> np.ndarray:
-        head = self.snake[0]
-        point_l = Point(head.x - TILE_SIZE, head.y)
-        point_r = Point(head.x + TILE_SIZE, head.y)
-        point_u = Point(head.x, head.y - TILE_SIZE)
-        point_d = Point(head.x, head.y + TILE_SIZE)
+        grid_w, grid_h = self._grid_dims()
+        grid_cells = max(1, grid_w * grid_h)
+        max_manhattan = max(1, (grid_w // 2 + grid_h // 2) if WRAP_AROUND else (grid_w - 1 + grid_h - 1))
+        norm_dx_scale = max(1.0, (grid_w / 2.0) if WRAP_AROUND else float(grid_w - 1))
+        norm_dy_scale = max(1.0, (grid_h / 2.0) if WRAP_AROUND else float(grid_h - 1))
 
-        dir_l = self.direction == Direction.LEFT
-        dir_r = self.direction == Direction.RIGHT
-        dir_u = self.direction == Direction.UP
-        dir_d = self.direction == Direction.DOWN
+        dir_x, dir_y = self._direction_vector(self.direction)
+        left_x, left_y = self._left_vector(dir_x, dir_y)
+        right_x, right_y = self._right_vector(dir_x, dir_y)
+        heading_sin = float(np.sin(np.arctan2(float(dir_y), float(dir_x))))
+        heading_cos = float(np.cos(np.arctan2(float(dir_y), float(dir_x))))
 
-        state = [
-            (dir_r and self.is_collision(point_r))
-            or (dir_l and self.is_collision(point_l))
-            or (dir_u and self.is_collision(point_u))
-            or (dir_d and self.is_collision(point_d)),
-            (dir_u and self.is_collision(point_r))
-            or (dir_d and self.is_collision(point_l))
-            or (dir_l and self.is_collision(point_u))
-            or (dir_r and self.is_collision(point_d)),
-            (dir_d and self.is_collision(point_r))
-            or (dir_u and self.is_collision(point_l))
-            or (dir_r and self.is_collision(point_u))
-            or (dir_l and self.is_collision(point_d)),
-            dir_l,
-            dir_r,
-            dir_u,
-            dir_d,
-            self.food.x < self.head.x,
-            self.food.x > self.head.x,
-            self.food.y < self.head.y,
-            self.food.y > self.head.y,
-            len(self.snake),
-        ]
-        return np.array(state, dtype=int)
+        head_cell_x, head_cell_y = self._cell_from_point(self.head)
+        food_cell_x, food_cell_y = self._cell_from_point(self.food)
+        raw_dx = int(food_cell_x - head_cell_x)
+        raw_dy = int(food_cell_y - head_cell_y)
+        dx_cells = self._wrap_delta_cells(raw_dx, grid_w) if WRAP_AROUND else raw_dx
+        dy_cells = self._wrap_delta_cells(raw_dy, grid_h) if WRAP_AROUND else raw_dy
+        manhattan_dist = abs(dx_cells) + abs(dy_cells)
+        manhattan_norm = clip_unit(float(manhattan_dist) / float(max_manhattan))
+        if self._prev_tgt_manhattan_norm is None:
+            tgt_dist_delta = 0.0
+        else:
+            tgt_dist_delta = clip_signed(float(manhattan_norm) - float(self._prev_tgt_manhattan_norm))
+        self._prev_tgt_manhattan_norm = float(manhattan_norm)
 
-    def _move(self, action: list[int]) -> None:
-        clockwise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
+        feature_values = {
+            "self_heading_sin": float(heading_sin),
+            "self_heading_cos": float(heading_cos),
+            "self_length": float(clip_unit(float(len(self.snake)) / float(grid_cells))),
+            "self_last_action": float(normalize_last_action(self.last_action_index, SNAKE_ACT_DIM)),
+            "ray_fwd": float(self._ray_distance_to_collision(dir_x, dir_y)),
+            "ray_left": float(self._ray_distance_to_collision(left_x, left_y)),
+            "ray_right": float(self._ray_distance_to_collision(right_x, right_y)),
+            "tgt_dx": float(clip_signed(float(dx_cells) / norm_dx_scale)),
+            "tgt_dy": float(clip_signed(float(dy_cells) / norm_dy_scale)),
+            "tgt_manhattan_dist": float(manhattan_norm),
+            "tgt_dist_delta": float(tgt_dist_delta),
+            "self_steps_since_food": float(clip_unit(float(self.steps_since_food) / float(grid_cells))),
+        }
+        state = np.asarray(ordered_feature_vector(SNAKE_INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
+        if state.shape != (SNAKE_OBS_DIM,):
+            raise RuntimeError(f"Snake observation expected {SNAKE_OBS_DIM} features, got {state.shape[0]}")
+        return state
+
+    def _move(self, action_idx: int) -> None:
+        clockwise = self._clockwise_directions()
         idx = clockwise.index(self.direction)
 
-        if np.array_equal(action, [1, 0, 0]):
+        if int(action_idx) == 0:
             new_dir = clockwise[idx]
-        elif np.array_equal(action, [0, 1, 0]):
+        elif int(action_idx) == 1:
             new_dir = clockwise[(idx + 1) % 4]
         else:
             new_dir = clockwise[(idx - 1) % 4]
@@ -413,6 +582,11 @@ class TrainingSnakeGame(BaseSnakeGame):
 class SnakeEnv(Env):
     """Env adapter for Snake game modes."""
 
+    INPUT_FEATURE_NAMES = tuple(SNAKE_INPUT_FEATURE_NAMES)
+    ACTION_NAMES = tuple(SNAKE_ACTION_NAMES)
+    OBS_DIM = int(SNAKE_OBS_DIM)
+    ACT_DIM = int(SNAKE_ACT_DIM)
+
     def __init__(self, mode: str = "train", render: bool = False) -> None:
         self.mode = str(mode)
         if self.mode == "human":
@@ -422,8 +596,8 @@ class SnakeEnv(Env):
 
     @staticmethod
     def _action_to_one_hot(action_idx: int) -> list[int]:
-        one_hot = [0, 0, 0]
-        action = max(0, min(int(action_idx), 2))
+        one_hot = [0] * int(SnakeEnv.ACT_DIM)
+        action = max(0, min(int(action_idx), int(SnakeEnv.ACT_DIM) - 1))
         one_hot[action] = 1
         return one_hot
 
@@ -432,7 +606,12 @@ class SnakeEnv(Env):
             values = self.game.get_state_vector()
         else:
             values = TrainingSnakeGame.get_state_vector(self.game)  # type: ignore[misc]
-        return np.asarray(values, dtype=np.float32)
+        obs = np.asarray(values, dtype=np.float32)
+        if obs.shape != (self.OBS_DIM,):
+            raise RuntimeError(f"Snake observation expected {self.OBS_DIM} features, got {obs.shape[0]}")
+        if not np.isfinite(obs).all():
+            raise RuntimeError("Snake observation contains non-finite values")
+        return obs
 
     def reset(self) -> np.ndarray:
         self.game.reset()
@@ -446,7 +625,11 @@ class SnakeEnv(Env):
 
         reward, done, score = self.game.play_step(self._action_to_one_hot(int(action)))
         obs = self._state_vector()
-        return obs, float(reward), bool(done), {"score": int(score), "win": False}
+        return obs, float(reward), bool(done), {
+            "score": int(score),
+            "win": False,
+            "reward_breakdown": dict(getattr(self.game, "last_reward_breakdown", {})),
+        }
 
     def render(self) -> None:
         # Snake self-renders inside play_step when show_game is enabled.

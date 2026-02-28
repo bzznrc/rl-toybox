@@ -5,6 +5,7 @@ from __future__ import annotations
 from core.envs.spaces import Discrete
 from games.bang import config
 from games.bang.env import BangEnv
+from games.off_policy_defaults import OFF_POLICY_TRAIN_DEFAULTS, make_exploration_config
 from games.spec_types import GameSpec
 
 
@@ -32,9 +33,7 @@ SPEC = GameSpec(
         "grad_clip_norm": config.GRAD_CLIP_NORM,
         "learn_start_steps": config.LEARN_START_STEPS,
         "train_every_steps": config.TRAIN_EVERY_STEPS,
-        "epsilon_start": config.EPSILON_START_SCRATCH,
-        "epsilon_min": config.EPSILON_MIN,
-        "epsilon_decay_steps": config.EPSILON_DECAY_EPISODES * config.MAX_EPISODE_STEPS,
+        "exploration": make_exploration_config(config.EPSILON_DECAY),
         "use_gpu": config.USE_GPU,
         "dueling": True,
         "double_dqn": True,
@@ -45,11 +44,11 @@ SPEC = GameSpec(
         "per_epsilon": config.PER_EPSILON,
     },
     train_config={
+        **OFF_POLICY_TRAIN_DEFAULTS,
         "max_steps": config.TOTAL_TRAINING_STEPS,
         "train_after_steps": config.LEARN_START_STEPS,
         "update_every_steps": config.TRAIN_EVERY_STEPS,
         "updates_per_step": config.GRADIENT_STEPS_PER_UPDATE,
         "checkpoint_every_steps": config.CHECKPOINT_EVERY_STEPS,
-        "reward_window": config.REWARD_ROLLING_WINDOW,
     },
 )

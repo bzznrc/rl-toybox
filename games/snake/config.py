@@ -5,14 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from core.arcade_style import (
-    COLOR_AQUA,
-    COLOR_BRICK_RED,
-    COLOR_CHARCOAL,
-    COLOR_CORAL,
-    COLOR_DEEP_TEAL,
-    COLOR_FOG_GRAY,
-    COLOR_NEAR_BLACK,
-    COLOR_SLATE_GRAY,
     DEFAULT_BOTTOM_BAR_HEIGHT,
     DEFAULT_CELL_INSET,
     DEFAULT_GRID_COLUMNS,
@@ -81,33 +73,43 @@ WRAP_AROUND = True
 
 # Input/output spaces
 INPUT_FEATURE_NAMES = [
-    "danger_straight",
-    "danger_right",
-    "danger_left",
-    "dir_left",
-    "dir_right",
-    "dir_up",
-    "dir_down",
-    "food_left",
-    "food_right",
-    "food_up",
-    "food_down",
-    "snake_length",
+    # SELF (4)
+    "self_heading_sin",
+    "self_heading_cos",
+    "self_length",
+    "self_last_action",
+    # RAYS (3)
+    "ray_fwd",
+    "ray_left",
+    "ray_right",
+    # TGT (4)
+    "tgt_dx",
+    "tgt_dy",
+    "tgt_manhattan_dist",
+    "tgt_dist_delta",
+    # EXTRA (1)
+    "self_steps_since_food",
 ]
 ACTION_NAMES = [
     "straight",
     "turn_right",
     "turn_left",
 ]
-NUM_INPUT_FEATURES = len(INPUT_FEATURE_NAMES)
-NUM_ACTIONS = len(ACTION_NAMES)
-MODEL_INPUT_SIZE = NUM_INPUT_FEATURES
-MODEL_OUTPUT_SIZE = NUM_ACTIONS
+OBS_DIM = len(INPUT_FEATURE_NAMES)
+ACT_DIM = len(ACTION_NAMES)
+NUM_INPUT_FEATURES = OBS_DIM
+NUM_ACTIONS = ACT_DIM
+MODEL_INPUT_SIZE = OBS_DIM
+MODEL_OUTPUT_SIZE = ACT_DIM
 
 # Model and training
 MAX_MEMORY = 100_000
-BATCH_SIZE = 1_000
+BATCH_SIZE = 512
 LEARNING_RATE = 1e-3
+GAMMA = 0.95
+MAX_TRAINING_STEPS = 1_500_000
+CHECKPOINT_EVERY_STEPS = 100_000
+EPSILON_DECAY = 0.9999966714
 HIDDEN_DIMENSIONS = [32]
 MODEL_SUBDIR = "_".join(str(size) for size in HIDDEN_DIMENSIONS)
 MODEL_DIR = PROJECT_ROOT / "model" / MODEL_SUBDIR
@@ -118,22 +120,17 @@ MODEL_SAVE_RETRIES = 5
 MODEL_SAVE_RETRY_DELAY_SECONDS = 0.2
 AVG100_WINDOW = 100
 BEST_MODEL_MIN_EPISODES = AVG100_WINDOW
-GAMMA = 0.9
-EPSILON_START = 0.5
-EPSILON_DECAY = 0.999995
-EPSILON_END = 0.05
 
 # Reward shaping
 REWARD_FOOD = 10.0
-REWARD_DEATH_OR_TIMEOUT = -5.0
-REWARD_STEP = -0.01
+PENALTY_LOSE = -5.0
+PROGRESS_SCALE = 1.0
+PROGRESS_CLIP = 0.2
+PENALTY_STEP = -0.01
 REWARD_COMPONENTS = {
-    "food": REWARD_FOOD,
-    "death_or_timeout": REWARD_DEATH_OR_TIMEOUT,
-    "step": REWARD_STEP,
+    "outcome.penalty_lose": PENALTY_LOSE,
+    "event.reward_food": REWARD_FOOD,
+    "progress.scale": PROGRESS_SCALE,
+    "progress.clip": PROGRESS_CLIP,
+    "step.penalty_step": PENALTY_STEP,
 }
-
-# Colors
-# Re-exported shared palette constants:
-# COLOR_AQUA, COLOR_DEEP_TEAL, COLOR_CORAL, COLOR_BRICK_RED,
-# COLOR_SLATE_GRAY, COLOR_FOG_GRAY, COLOR_CHARCOAL, COLOR_NEAR_BLACK

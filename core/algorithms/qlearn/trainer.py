@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import random
 from typing import Any
 
@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from core.algorithms.base import Algorithm
+from core.algorithms.exploration import EpsilonController, ExplorationConfig, resolve_exploration_config
 from core.algorithms.qlearn.networks import LinearQNet
 from core.io.checkpoint import load_torch_checkpoint, save_torch_checkpoint
 
@@ -26,9 +27,7 @@ class QLearnConfig:
     gamma: float = 0.9
     max_memory: int = 100_000
     batch_size: int = 1_000
-    epsilon_start: float = 0.5
-    epsilon_decay: float = 0.999995
-    epsilon_end: float = 0.05
+    exploration: ExplorationConfig | dict[str, object] = field(default_factory=ExplorationConfig)
     use_gpu: bool = False
 
 
@@ -93,7 +92,8 @@ class QLearnAlgorithm(Algorithm):
         self.trainer = QTrainer(self.model, lr=config.learning_rate, gamma=config.gamma)
         self.memory: deque[tuple[np.ndarray, int, float, np.ndarray, bool]] = deque(maxlen=int(config.max_memory))
 
-        self.epsilon = float(config.epsilon_start)
+        self._exploration = EpsilonController(resolve_exploration_config(config.exploration))
+        self.epsilon = float(self._exploration.epsilon)
         self.n_games = 0
         self._episode_done = False
         self._last_short_loss = 0.0
@@ -105,7 +105,6 @@ class QLearnAlgorithm(Algorithm):
 
     def act(self, obs: np.ndarray, explore: bool) -> int:
         if explore:
-            self.epsilon = max(float(self.config.epsilon_end), self.epsilon * float(self.config.epsilon_decay))
             if random.random() < self.epsilon:
                 return random.randint(0, int(self.config.action_dim) - 1)
 
@@ -129,7 +128,23 @@ class QLearnAlgorithm(Algorithm):
             next_obs,
             done,
         )
+        self.epsilon = float(self._exploration.advance_step())
         self._episode_done = done
+
+    def on_episode_end(self, avg_reward: float) -> dict[str, float | int | str] | None:
+        bump = self._exploration.on_episode_end(avg_reward)
+        self.epsilon = float(self._exploration.epsilon)
+        if bump is None:
+            return None
+        return {
+            "bump": "on",
+            "epsilon": float(bump.epsilon),
+            "hold_steps": int(bump.hold_steps),
+            "reason": str(bump.reason),
+        }
+
+    def exploration_avg_window(self) -> int | None:
+        return int(self._exploration.config.avg_window_episodes)
 
     def update(self) -> dict[str, float]:
         if not self._episode_done:
@@ -165,6 +180,7 @@ class QLearnAlgorithm(Algorithm):
                 "model": self.model.state_dict(),
                 "optimizer": self.trainer.optimizer.state_dict(),
                 "epsilon": self.epsilon,
+                "exploration_state": self._exploration.state_dict(),
                 "n_games": self.n_games,
             },
         )
@@ -176,7 +192,12 @@ class QLearnAlgorithm(Algorithm):
             optimizer_state = checkpoint.get("optimizer")
             if optimizer_state is not None:
                 self.trainer.optimizer.load_state_dict(optimizer_state)
-            self.epsilon = float(checkpoint.get("epsilon", self.epsilon))
+            exploration_state = checkpoint.get("exploration_state")
+            if isinstance(exploration_state, dict):
+                self._exploration.load_state_dict(exploration_state)
+            else:
+                self._exploration.set_epsilon(float(checkpoint.get("epsilon", self.epsilon)))
+            self.epsilon = float(self._exploration.epsilon)
             self.n_games = int(checkpoint.get("n_games", self.n_games))
             return
 

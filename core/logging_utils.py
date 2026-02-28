@@ -97,3 +97,63 @@ def log_run_context(mode: str, context: dict[str, Any]) -> None:
         key_value_separator=":",
     )
 
+
+def log_episode_line(
+    *,
+    episode: int,
+    ep_len: int,
+    reward: float,
+    avg_reward: float,
+    best_avg: float,
+    steps: int,
+) -> None:
+    log_key_values(
+        "rl_toybox.train",
+        {
+            "Episode": int(episode),
+            "Ep Len": int(ep_len),
+            "Reward": float(reward),
+            "Avg Reward": float(avg_reward),
+            "Best Avg": float(best_avg),
+            "Steps": int(steps),
+        },
+        key_value_separator=":",
+    )
+
+
+def log_iteration_line(
+    *,
+    iteration: int,
+    steps: int,
+    episodes: int,
+    avg_reward: float,
+    best_avg: float,
+) -> None:
+    log_key_values(
+        "rl_toybox.train",
+        {
+            "Iter": int(iteration),
+            "Steps": int(steps),
+            "Episodes": int(episodes),
+            "Avg Reward": float(avg_reward),
+            "Best Avg": float(best_avg),
+        },
+        key_value_separator=":",
+    )
+
+
+def log_save_line(
+    *,
+    kind: str,
+    at: str,
+    path: str | Path,
+    avg_reward: float | None = None,
+) -> None:
+    values: OrderedDict[str, Any] = OrderedDict()
+    values["Save"] = str(kind)
+    values["At"] = str(at)
+    if avg_reward is not None:
+        values["Avg Reward"] = float(avg_reward)
+    values["Path"] = format_display_path(path)
+    log_key_values("rl_toybox.train", dict(values), key_value_separator=":")
+

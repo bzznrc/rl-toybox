@@ -18,6 +18,10 @@ def clip_unit(value: float) -> float:
     return clip(float(value), 0.0, 1.0)
 
 
+def signed_potential_shaping(phi_prev: float, phi_next: float, *, scale: float, clip_abs: float) -> float:
+    return clip(float(scale) * (float(phi_next) - float(phi_prev)), -abs(float(clip_abs)), abs(float(clip_abs)))
+
+
 def normalize_last_action(action_index: int, action_count: int) -> float:
     count = max(1, int(action_count))
     if count <= 1:

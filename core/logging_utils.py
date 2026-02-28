@@ -111,11 +111,11 @@ def log_episode_line(
         "rl_toybox.train",
         {
             "Episode": int(episode),
-            "Ep. Len": int(ep_len),
+            "Length": int(ep_len),
             "Reward": f"{float(reward):.2f}",
             "Average": f"{float(avg_reward):.2f}",
             "Best": f"{float(best_avg):.2f}",
-            "Epsilon": "n/a" if epsilon is None else f"{float(epsilon):.3f}x",
+            "Epsilon": "n/a" if epsilon is None else f"{float(epsilon):.3f}",
         },
         key_value_separator=":",
     )

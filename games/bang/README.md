@@ -82,13 +82,13 @@ Key hyperparameters:
 - DQN mode: `double_dqn=True`, `dueling=True`, `prioritized_replay=True`
 - PER: `per_alpha=0.6`, `per_beta_start=0.4`, `per_beta_frames=10_000_000`, `per_epsilon=1e-4`
 - Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=6_000_000`
-- Plateau bump/hold: `avg_window=100`, `patience=30`, `min_improvement=0.20`, `eps_bump_cap=0.25`, `hold_steps=50_000`, `cooldown_episodes=30`
+- Plateau bump/cooldown: `avg_window=100`, `patience=50`, `min_improvement=0.10`, `eps_bump_cap=0.25`, `cooldown_steps=50_000`
 
 Exploration is multiplicative per env step: `eps = max(eps_min, eps * eps_decay)`,
 with `eps_decay = (eps_min / eps_start) ** (1.0 / eps_decay_steps)`.
-On plateau, if `eps <= 0.25`, bump `eps` to `0.25` and hold for `N` steps (cooldown `M` episodes).
-If `eps > 0.25`, no bump is applied; regular decay continues.
-The hold window prevents repeated rapid drops back to minimum epsilon.
+On plateau, if `eps < 0.25`, bump `eps` to `0.25` and start cooldown for `50_000` steps.
+During cooldown, additional bumps are blocked, but epsilon continues normal multiplicative decay.
+This cooldown window prevents rapid repeat bumps while preserving exploration decay.
 
 Play AI:
 

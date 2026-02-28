@@ -88,12 +88,12 @@ Key hyperparameters:
 - Algo: `learning_rate=3e-4`, `gamma=0.99`, `batch_size=128`, `replay_size=200_000`, `target_sync_every_steps=2_000`, `grad_clip_norm=10.0`
 - DQN mode: `double_dqn=False`, `dueling=False`, `prioritized_replay=False`
 - Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=1_200_000`
-- Plateau bump/hold: `avg_window=100`, `patience=30`, `min_improvement=0.20`, `eps_bump_cap=0.25`, `hold_steps=50_000`, `cooldown_episodes=30`
+- Plateau bump/cooldown: `avg_window=100`, `patience=50`, `min_improvement=0.10`, `eps_bump_cap=0.25`, `cooldown_steps=50_000`
 
 Exploration uses multiplicative epsilon decay per env step: `eps = max(eps_min, eps * eps_decay)`,
 with `eps_decay = (eps_min / eps_start) ** (1.0 / eps_decay_steps)`.
-On plateau, if `eps <= 0.25`, bump `eps` to `0.25` and hold for `N` steps (cooldown `M` episodes).
-If `eps > 0.25`, no bump is applied; regular decay continues.
+On plateau, if `eps < 0.25`, bump `eps` to `0.25` and start cooldown for `50_000` steps.
+During cooldown, additional bumps are blocked, but epsilon continues normal multiplicative decay.
 This keeps exploration from snapping straight back to the minimum.
 
 Play AI:

@@ -112,10 +112,10 @@ def run_off_policy_training(
             exploration_event = algorithm.on_episode_end(float(exploration_avg_reward))
             if exploration_event is not None and str(exploration_event.get("bump", "off")).lower() == "on":
                 epsilon = float(exploration_event.get("epsilon", 0.0))
-                hold_steps = int(exploration_event.get("hold_steps", 0))
-                reason = str(exploration_event.get("reason", "plateau"))
+                cooldown_steps = int(exploration_event.get("cooldown_steps", 0))
+                reason = str(exploration_event.get("reason", "Plateau"))
                 logging.getLogger("rl_toybox.train").info(
-                    f"Explore\tBump: on\tEps: {epsilon:.2f}\tHoldSteps: {hold_steps}\tReason: {reason}"
+                    f"Explore\tBump: on\tEps: {epsilon:.2f}\tCooldown Steps: {cooldown_steps}\tReason: {reason}"
                 )
                 last_logged_step = int(total_steps)
 

@@ -12,11 +12,10 @@ OFF_POLICY_EXPLORATION_DEFAULTS = ExplorationConfig(
     eps_start=1.0,
     eps_min=0.05,
     avg_window_episodes=100,
-    patience_episodes=30,
-    min_improvement=0.20,
+    patience_episodes=50,
+    min_improvement=0.10,
     eps_bump_cap=0.25,
-    bump_hold_steps=50_000,
-    bump_cooldown_episodes=30,
+    bump_cooldown_steps=50_000,
 )
 
 OFF_POLICY_TRAIN_DEFAULTS: dict[str, Any] = {
@@ -31,7 +30,10 @@ def make_exploration_config(
     eps_start: float,
     eps_min: float,
     eps_decay_steps: int,
+    patience_episodes: int = 50,
+    min_improvement: float = 0.10,
     eps_bump_cap: float = 0.25,
+    bump_cooldown_steps: int = 50_000,
 ) -> dict[str, Any]:
     exploration = asdict(OFF_POLICY_EXPLORATION_DEFAULTS)
     exploration["eps_start"] = float(eps_start)
@@ -41,5 +43,8 @@ def make_exploration_config(
         eps_min=float(eps_min),
         eps_decay_steps=int(eps_decay_steps),
     )
+    exploration["patience_episodes"] = int(patience_episodes)
+    exploration["min_improvement"] = float(min_improvement)
     exploration["eps_bump_cap"] = float(eps_bump_cap)
+    exploration["bump_cooldown_steps"] = int(bump_cooldown_steps)
     return exploration

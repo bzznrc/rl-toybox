@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
         "--resume",
         default="auto",
         choices=["auto", "none", "checkpoint", "best"],
-        help="Resume source for model weights",
+        help="Resume source for model weights (when best is loaded, epsilon resets to eps_bump_cap for epsilon-based algos)",
     )
     parser.add_argument("--max-steps", type=int, default=None, help="Override off-policy max training steps")
     parser.add_argument("--max-iterations", type=int, default=None, help="Override on-policy iteration count")
@@ -35,6 +35,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _set_resume_best_epsilon_to_bump_cap(algorithm: object) -> float | None:
+    exploration = getattr(algorithm, "_exploration", None)
+    if exploration is None:
+        return None
+
+    config = getattr(exploration, "config", None)
+    bump_cap = getattr(config, "eps_bump_cap", None)
+    set_epsilon = getattr(exploration, "set_epsilon", None)
+    if bump_cap is None or not callable(set_epsilon):
+        return None
+
+    updated_epsilon = float(set_epsilon(float(bump_cap)))
+    if hasattr(algorithm, "epsilon"):
+        setattr(algorithm, "epsilon", updated_epsilon)
+    return updated_epsilon
+
+
 def main() -> None:
     args = parse_args()
     configure_logging()
@@ -48,6 +65,19 @@ def main() -> None:
     resume_path = resolve_resume_path(args.resume, run_paths.checkpoint_path, run_paths.best_path)
     if resume_path is not None:
         algorithm.load(str(resume_path))
+        resumed_from_best = resume_path == run_paths.best_path
+        if resumed_from_best:
+            bumped_epsilon = _set_resume_best_epsilon_to_bump_cap(algorithm)
+            if bumped_epsilon is not None:
+                log_key_values(
+                    "rl_toybox.train",
+                    {
+                        "Bump": "resume_best",
+                        "Epsilon": f"{float(bumped_epsilon):.3f}",
+                    },
+                    prefix="Explore",
+                    key_value_separator=":",
+                )
 
     env = spec.make_env(mode="train", render=bool(args.render))
     try:

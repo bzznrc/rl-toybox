@@ -139,7 +139,7 @@ class QLearnAlgorithm(Algorithm):
         return {
             "bump": "on",
             "epsilon": float(bump.epsilon),
-            "hold_steps": int(bump.hold_steps),
+            "cooldown_steps": int(bump.cooldown_steps),
             "reason": str(bump.reason),
         }
 

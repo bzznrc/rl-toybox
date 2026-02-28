@@ -29,18 +29,17 @@ class ExplorationConfig:
     eps_min: float = 0.05
     eps_decay: float = 0.999995
     avg_window_episodes: int = 100
-    patience_episodes: int = 30
-    min_improvement: float = 0.20
+    patience_episodes: int = 50
+    min_improvement: float = 0.10
     eps_bump_cap: float = 0.25
-    bump_hold_steps: int = 50_000
-    bump_cooldown_episodes: int = 30
+    bump_cooldown_steps: int = 50_000
 
 
 @dataclass(frozen=True)
 class ExplorationBumpEvent:
     epsilon: float
-    hold_steps: int
-    reason: str = "plateau"
+    cooldown_steps: int
+    reason: str = "Plateau"
 
 
 def resolve_exploration_config(
@@ -56,12 +55,18 @@ def resolve_exploration_config(
     legacy_bump = config_data.pop("bump_epsilon", None)
     if "eps_bump_cap" not in config_data and legacy_bump is not None:
         config_data["eps_bump_cap"] = float(legacy_bump)
+    # Removed in favor of always-on decay with cooldown-only bump gating.
+    config_data.pop("bump_hold_steps", None)
+    # Backward compatibility for older cooldown key.
+    legacy_cooldown_episodes = config_data.pop("bump_cooldown_episodes", None)
+    if "bump_cooldown_steps" not in config_data and legacy_cooldown_episodes is not None:
+        config_data["bump_cooldown_steps"] = int(legacy_cooldown_episodes)
 
     return ExplorationConfig(**config_data)
 
 
 class EpsilonController:
-    """Multiplicative epsilon decay with plateau-triggered bump and hold."""
+    """Multiplicative epsilon decay with plateau-triggered bump and cooldown."""
 
     def __init__(
         self,
@@ -72,18 +77,13 @@ class EpsilonController:
         self.config = config
         self.epsilon = self._clamp(initial_epsilon if initial_epsilon is not None else float(config.eps_start))
 
-        self._hold_steps_remaining = 0
-        self._cooldown_episodes_remaining = 0
+        self._cooldown_steps_remaining = 0
         self._episodes_since_improvement = 0
         self._reference_avg_reward: float | None = None
 
     @property
-    def hold_steps_remaining(self) -> int:
-        return int(self._hold_steps_remaining)
-
-    @property
-    def cooldown_episodes_remaining(self) -> int:
-        return int(self._cooldown_episodes_remaining)
+    def cooldown_steps_remaining(self) -> int:
+        return int(self._cooldown_steps_remaining)
 
     def _clamp(self, epsilon: float) -> float:
         return max(float(self.config.eps_min), float(epsilon))
@@ -93,9 +93,8 @@ class EpsilonController:
         return float(self.epsilon)
 
     def advance_step(self) -> float:
-        if self._hold_steps_remaining > 0:
-            self._hold_steps_remaining -= 1
-            return float(self.epsilon)
+        if self._cooldown_steps_remaining > 0:
+            self._cooldown_steps_remaining -= 1
 
         self.epsilon = self._clamp(float(self.epsilon) * float(self.config.eps_decay))
         return float(self.epsilon)
@@ -112,42 +111,43 @@ class EpsilonController:
         else:
             self._episodes_since_improvement += 1
 
-        if self._cooldown_episodes_remaining > 0:
-            self._cooldown_episodes_remaining -= 1
-            return None
-
-        if self._hold_steps_remaining > 0:
+        if self._cooldown_steps_remaining > 0:
             return None
 
         if self._episodes_since_improvement < int(self.config.patience_episodes):
             return None
 
-        if float(self.epsilon) > float(self.config.eps_bump_cap):
+        if float(self.epsilon) >= float(self.config.eps_bump_cap):
             return None
 
         self.epsilon = float(self.config.eps_bump_cap)
-        self._hold_steps_remaining = int(self.config.bump_hold_steps)
-        self._cooldown_episodes_remaining = int(self.config.bump_cooldown_episodes)
+        self._cooldown_steps_remaining = int(self.config.bump_cooldown_steps)
         self._episodes_since_improvement = 0
         self._reference_avg_reward = avg_reward
         return ExplorationBumpEvent(
             epsilon=float(self.epsilon),
-            hold_steps=int(self._hold_steps_remaining),
+            cooldown_steps=int(self._cooldown_steps_remaining),
         )
 
     def state_dict(self) -> dict[str, float | int | None]:
         return {
             "epsilon": float(self.epsilon),
-            "hold_steps_remaining": int(self._hold_steps_remaining),
-            "cooldown_episodes_remaining": int(self._cooldown_episodes_remaining),
+            "cooldown_steps_remaining": int(self._cooldown_steps_remaining),
             "episodes_since_improvement": int(self._episodes_since_improvement),
             "reference_avg_reward": self._reference_avg_reward,
         }
 
     def load_state_dict(self, state: Mapping[str, object]) -> None:
         self.set_epsilon(float(state.get("epsilon", self.epsilon)))
-        self._hold_steps_remaining = max(0, int(state.get("hold_steps_remaining", 0)))
-        self._cooldown_episodes_remaining = max(0, int(state.get("cooldown_episodes_remaining", 0)))
+        self._cooldown_steps_remaining = max(
+            0,
+            int(
+                state.get(
+                    "cooldown_steps_remaining",
+                    state.get("cooldown_episodes_remaining", 0),
+                )
+            ),
+        )
         self._episodes_since_improvement = max(0, int(state.get("episodes_since_improvement", 0)))
 
         reference = state.get("reference_avg_reward")

@@ -49,18 +49,36 @@ def test_plateau_does_not_bump_above_cap() -> None:
             patience_episodes=1,
             min_improvement=0.1,
             eps_bump_cap=0.25,
-            bump_hold_steps=5,
-            bump_cooldown_episodes=2,
+            bump_cooldown_steps=5,
         )
     )
 
     assert controller.on_episode_end(0.0) is None
     assert controller.on_episode_end(0.0) is None
     assert controller.epsilon == pytest.approx(0.30)
-    assert controller.hold_steps_remaining == 0
+    assert controller.cooldown_steps_remaining == 0
 
 
-def test_plateau_bumps_to_cap_when_epsilon_is_at_or_below_cap() -> None:
+def test_plateau_does_not_bump_at_cap() -> None:
+    controller = EpsilonController(
+        ExplorationConfig(
+            eps_start=0.25,
+            eps_min=0.05,
+            eps_decay=1.0,
+            patience_episodes=1,
+            min_improvement=0.1,
+            eps_bump_cap=0.25,
+            bump_cooldown_steps=7,
+        )
+    )
+
+    assert controller.on_episode_end(0.0) is None
+    assert controller.on_episode_end(0.0) is None
+    assert controller.epsilon == pytest.approx(0.25)
+    assert controller.cooldown_steps_remaining == 0
+
+
+def test_plateau_bumps_to_cap_when_epsilon_is_below_cap() -> None:
     controller = EpsilonController(
         ExplorationConfig(
             eps_start=0.20,
@@ -69,8 +87,7 @@ def test_plateau_bumps_to_cap_when_epsilon_is_at_or_below_cap() -> None:
             patience_episodes=1,
             min_improvement=0.1,
             eps_bump_cap=0.25,
-            bump_hold_steps=7,
-            bump_cooldown_episodes=3,
+            bump_cooldown_steps=7,
         )
     )
 
@@ -78,11 +95,12 @@ def test_plateau_bumps_to_cap_when_epsilon_is_at_or_below_cap() -> None:
     bump = controller.on_episode_end(0.0)
     assert bump is not None
     assert bump.epsilon == pytest.approx(0.25)
+    assert bump.cooldown_steps == 7
     assert controller.epsilon == pytest.approx(0.25)
-    assert controller.hold_steps_remaining == 7
+    assert controller.cooldown_steps_remaining == 7
 
 
-def test_bump_hold_freezes_decay_for_hold_steps() -> None:
+def test_decay_continues_after_bump_and_cooldown_blocks_rebump() -> None:
     controller = EpsilonController(
         ExplorationConfig(
             eps_start=0.20,
@@ -91,8 +109,7 @@ def test_bump_hold_freezes_decay_for_hold_steps() -> None:
             patience_episodes=1,
             min_improvement=0.1,
             eps_bump_cap=0.25,
-            bump_hold_steps=3,
-            bump_cooldown_episodes=1,
+            bump_cooldown_steps=3,
         )
     )
 
@@ -101,9 +118,13 @@ def test_bump_hold_freezes_decay_for_hold_steps() -> None:
     assert bump is not None
     assert controller.epsilon == pytest.approx(0.25)
 
-    assert controller.advance_step() == pytest.approx(0.25)
-    assert controller.advance_step() == pytest.approx(0.25)
-    assert controller.advance_step() == pytest.approx(0.25)
-    assert controller.hold_steps_remaining == 0
-
     assert controller.advance_step() == pytest.approx(0.125)
+    assert controller.cooldown_steps_remaining == 2
+    assert controller.on_episode_end(0.0) is None
+    assert controller.advance_step() == pytest.approx(0.0625)
+    assert controller.advance_step() == pytest.approx(0.05)
+    assert controller.cooldown_steps_remaining == 0
+
+    rebump = controller.on_episode_end(0.0)
+    assert rebump is not None
+    assert controller.epsilon == pytest.approx(0.25)

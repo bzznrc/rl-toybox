@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from core.logging_utils import configure_logging, log_key_values, log_run_context
 from core.runners.off_policy import OffPolicyConfig, run_off_policy_training
@@ -17,9 +18,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--render", action="store_true", help="Show Arcade window during training")
     parser.add_argument(
         "--resume",
-        default="auto",
-        choices=["auto", "none", "checkpoint", "best"],
-        help="Resume source for model weights (when best is loaded, epsilon resets to eps_bump_cap for epsilon-based algos)",
+        default="ask",
+        choices=["ask", "auto", "none", "new", "checkpoint", "best"],
+        help=(
+            "Resume source for model weights. "
+            "'ask' prompts New vs Best; when best is loaded, epsilon resets to eps_bump_cap for epsilon-based algos"
+        ),
     )
     parser.add_argument("--max-steps", type=int, default=None, help="Override off-policy max training steps")
     parser.add_argument("--max-iterations", type=int, default=None, help="Override on-policy iteration count")
@@ -52,6 +56,21 @@ def _set_resume_best_epsilon_to_bump_cap(algorithm: object) -> float | None:
     return updated_epsilon
 
 
+def _prompt_resume_mode() -> str:
+    while True:
+        print("Train Start")
+        print("  [1] New (start from scratch)")
+        print("  [2] Best (resume from best model)")
+        selection = input("Choose start mode [1/2]: ").strip().lower()
+
+        if selection in {"1", "new", "n"}:
+            return "none"
+        if selection in {"2", "best", "b"}:
+            return "best"
+
+        print("Invalid selection. Please choose 1 (New) or 2 (Best).")
+
+
 def main() -> None:
     args = parse_args()
     configure_logging()
@@ -62,7 +81,23 @@ def main() -> None:
     run_paths = prepared.run_paths
     algorithm = prepared.algorithm
 
-    resume_path = resolve_resume_path(args.resume, run_paths.checkpoint_path, run_paths.best_path)
+    resume_mode = str(args.resume).strip().lower()
+    if resume_mode == "new":
+        resume_mode = "none"
+    if resume_mode == "ask":
+        if sys.stdin.isatty():
+            resume_mode = _prompt_resume_mode()
+        else:
+            resume_mode = "auto"
+
+    resume_path = resolve_resume_path(resume_mode, run_paths.checkpoint_path, run_paths.best_path)
+    if resume_mode == "best" and resume_path is None:
+        log_key_values(
+            "rl_toybox.train",
+            {"Resume": "best_missing", "Fallback": "scratch"},
+            prefix="Train",
+            key_value_separator=":",
+        )
     if resume_path is not None:
         algorithm.load(str(resume_path))
         resumed_from_best = resume_path == run_paths.best_path

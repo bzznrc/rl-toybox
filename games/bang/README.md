@@ -82,7 +82,7 @@ Key hyperparameters:
 - DQN mode: `double_dqn=True`, `dueling=True`, `prioritized_replay=True`
 - PER: `per_alpha=0.6`, `per_beta_start=0.4`, `per_beta_frames=10_000_000`, `per_epsilon=1e-4`
 - Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=6_000_000`
-- Plateau bump/cooldown: `avg_window=100`, `patience=50`, `min_improvement=0.10`, `eps_bump_cap=0.25`, `cooldown_steps=50_000`
+- Plateau bump/cooldown: `avg_window=100`, `patience=100`, `min_improvement=0.10`, `eps_bump_cap=0.25`, `cooldown_steps=50_000`
 
 Exploration is multiplicative per env step: `eps = max(eps_min, eps * eps_decay)`,
 with `eps_decay = (eps_min / eps_start) ** (1.0 / eps_decay_steps)`.

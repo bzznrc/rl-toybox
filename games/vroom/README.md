@@ -88,7 +88,7 @@ Key hyperparameters:
 - Algo: `learning_rate=3e-4`, `gamma=0.99`, `batch_size=128`, `replay_size=200_000`, `target_sync_every_steps=2_000`, `grad_clip_norm=10.0`
 - DQN mode: `double_dqn=False`, `dueling=False`, `prioritized_replay=False`
 - Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=1_200_000`
-- Plateau bump/cooldown: `avg_window=100`, `patience=50`, `min_improvement=0.10`, `eps_bump_cap=0.25`, `cooldown_steps=50_000`
+- Plateau bump/cooldown: `avg_window=100`, `patience=100`, `min_improvement=0.10`, `eps_bump_cap=0.25`, `cooldown_steps=50_000`
 
 Exploration uses multiplicative epsilon decay per env step: `eps = max(eps_min, eps * eps_decay)`,
 with `eps_decay = (eps_min / eps_start) ** (1.0 / eps_decay_steps)`.

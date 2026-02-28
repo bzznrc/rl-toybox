@@ -29,7 +29,7 @@ class ExplorationConfig:
     eps_min: float = 0.05
     eps_decay: float = 0.999995
     avg_window_episodes: int = 100
-    patience_episodes: int = 50
+    patience_episodes: int = 100
     min_improvement: float = 0.10
     eps_bump_cap: float = 0.25
     bump_cooldown_steps: int = 50_000

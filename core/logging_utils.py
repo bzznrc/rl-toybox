@@ -105,17 +105,17 @@ def log_episode_line(
     reward: float,
     avg_reward: float,
     best_avg: float,
-    steps: int,
+    epsilon: float | None,
 ) -> None:
     log_key_values(
         "rl_toybox.train",
         {
             "Episode": int(episode),
-            "Ep Len": int(ep_len),
-            "Reward": float(reward),
-            "Avg Reward": float(avg_reward),
-            "Best Avg": float(best_avg),
-            "Steps": int(steps),
+            "Ep. Len": int(ep_len),
+            "Reward": f"{float(reward):.2f}",
+            "Average": f"{float(avg_reward):.2f}",
+            "Best": f"{float(best_avg):.2f}",
+            "Epsilon": "n/a" if epsilon is None else f"{float(epsilon):.3f}x",
         },
         key_value_separator=":",
     )

@@ -120,13 +120,20 @@ def run_off_policy_training(
                 last_logged_step = int(total_steps)
 
             if total_episodes % max(1, int(config.log_every_episodes)) == 0:
+                episode_epsilon: float | None = None
+                algorithm_epsilon = getattr(algorithm, "epsilon", None)
+                if algorithm_epsilon is not None:
+                    episode_epsilon = float(algorithm_epsilon)
+                elif exploration_event is not None and "epsilon" in exploration_event:
+                    episode_epsilon = float(exploration_event["epsilon"])
+
                 log_episode_line(
                     episode=int(total_episodes),
                     ep_len=int(episode_steps),
                     reward=float(episode_reward),
                     avg_reward=float(avg_reward),
                     best_avg=float(best_avg_reward if best_avg_reward > float("-inf") else avg_reward),
-                    steps=int(total_steps),
+                    epsilon=episode_epsilon,
                 )
                 last_logged_step = int(total_steps)
 

@@ -6,6 +6,23 @@ from dataclasses import dataclass
 from typing import Mapping
 
 
+def compute_eps_decay(eps_start: float, eps_min: float, eps_decay_steps: int) -> float:
+    eps_start_value = float(eps_start)
+    eps_min_value = float(eps_min)
+    steps = int(eps_decay_steps)
+
+    if eps_start_value <= 0.0:
+        raise ValueError("eps_start must be > 0.")
+    if eps_min_value <= 0.0:
+        raise ValueError("eps_min must be > 0.")
+    if steps <= 0:
+        raise ValueError("eps_decay_steps must be > 0.")
+    if eps_min_value >= eps_start_value:
+        raise ValueError("eps_min must be < eps_start.")
+
+    return (eps_min_value / eps_start_value) ** (1.0 / float(steps))
+
+
 @dataclass(frozen=True)
 class ExplorationConfig:
     eps_start: float = 1.0
@@ -14,7 +31,7 @@ class ExplorationConfig:
     avg_window_episodes: int = 100
     patience_episodes: int = 30
     min_improvement: float = 0.20
-    bump_epsilon: float = 0.20
+    eps_bump_cap: float = 0.25
     bump_hold_steps: int = 50_000
     bump_cooldown_episodes: int = 30
 
@@ -33,7 +50,14 @@ def resolve_exploration_config(
         return ExplorationConfig()
     if isinstance(value, ExplorationConfig):
         return value
-    return ExplorationConfig(**dict(value))
+
+    config_data = dict(value)
+    # Backward compatibility for older config payloads.
+    legacy_bump = config_data.pop("bump_epsilon", None)
+    if "eps_bump_cap" not in config_data and legacy_bump is not None:
+        config_data["eps_bump_cap"] = float(legacy_bump)
+
+    return ExplorationConfig(**config_data)
 
 
 class EpsilonController:
@@ -98,7 +122,10 @@ class EpsilonController:
         if self._episodes_since_improvement < int(self.config.patience_episodes):
             return None
 
-        self.epsilon = max(float(self.epsilon), float(self.config.bump_epsilon))
+        if float(self.epsilon) > float(self.config.eps_bump_cap):
+            return None
+
+        self.epsilon = float(self.config.eps_bump_cap)
         self._hold_steps_remaining = int(self.config.bump_hold_steps)
         self._cooldown_episodes_remaining = int(self.config.bump_cooldown_episodes)
         self._episodes_since_improvement = 0

@@ -33,7 +33,12 @@ SPEC = GameSpec(
         "grad_clip_norm": config.GRAD_CLIP_NORM,
         "learn_start_steps": config.LEARN_START_STEPS,
         "train_every_steps": config.TRAIN_EVERY_STEPS,
-        "exploration": make_exploration_config(config.EPSILON_DECAY),
+        "exploration": make_exploration_config(
+            config.EPSILON_START,
+            config.EPSILON_MIN,
+            config.EPSILON_DECAY_STEPS,
+            eps_bump_cap=config.EPS_BUMP_CAP,
+        ),
         "use_gpu": config.USE_GPU,
         "dueling": True,
         "double_dqn": True,

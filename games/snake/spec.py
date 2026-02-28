@@ -28,7 +28,12 @@ SPEC = GameSpec(
         "gamma": config.GAMMA,
         "max_memory": config.MAX_MEMORY,
         "batch_size": config.BATCH_SIZE,
-        "exploration": make_exploration_config(config.EPSILON_DECAY),
+        "exploration": make_exploration_config(
+            config.EPSILON_START,
+            config.EPSILON_MIN,
+            config.EPSILON_DECAY_STEPS,
+            eps_bump_cap=config.EPS_BUMP_CAP,
+        ),
         "use_gpu": False,
     },
     train_config={

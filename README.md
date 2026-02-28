@@ -47,7 +47,7 @@ python -m scripts.play_user --game bang
 Training output is tab-separated and compact:
 
 - Header (once): `Train\tGame: ...\tAlgo: ...\tRun: ...\tResume: ...\tRender: off/on`
-- Off-policy episode line: `Episode: N\tEp Len: M\tReward: r\tAvg Reward: ar\tBest Avg: bar\tSteps: s`
+- Off-policy episode line: `Episode: N\tEp. Len: M\tReward: r\tAverage: ar\tBest: bar\tEpsilon: exxx`
 - On-policy iteration line: `Iter: I\tSteps: s\tEpisodes: e\tAvg Reward: ar\tBest Avg: bar`
 - Save line: `Save: best|checkpoint\tAt: step/iter ...\tAvg Reward: ar\tPath: ...`
 

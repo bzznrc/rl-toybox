@@ -52,11 +52,13 @@ Key hyperparameters:
 
 - Train: `max_steps=1_500_000`, `checkpoint_every_steps=100_000`
 - Algo: `learning_rate=1e-3`, `gamma=0.95`, `max_memory=100_000`, `batch_size=512`
-- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay=0.9999966714`
-- Plateau bump/hold: `avg_window=100`, `patience=30`, `min_improvement=0.20`, bump to `eps>=0.20`, `hold_steps=50_000`, `cooldown_episodes=30`
+- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=900_000`
+- Plateau bump/hold: `avg_window=100`, `patience=30`, `min_improvement=0.20`, `eps_bump_cap=0.25`, `hold_steps=50_000`, `cooldown_episodes=30`
 
-Exploration uses multiplicative epsilon decay per env step: `eps = max(eps_min, eps * eps_decay)`.
-When rolling avg reward plateaus, epsilon is bumped and then held for fixed steps before decay resumes.
+Exploration uses multiplicative epsilon decay per env step: `eps = max(eps_min, eps * eps_decay)`,
+with `eps_decay = (eps_min / eps_start) ** (1.0 / eps_decay_steps)`.
+On plateau, if `eps <= 0.25`, bump `eps` to `0.25` and hold for `N` steps (cooldown `M` episodes).
+If `eps > 0.25`, no bump is applied; regular decay continues.
 This avoids immediate collapse back to minimum exploration during overnight runs.
 
 Play AI:

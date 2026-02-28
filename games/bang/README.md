@@ -81,11 +81,13 @@ Key hyperparameters:
 - Algo: `learning_rate=2.5e-4`, `gamma=0.99`, `batch_size=256`, `replay_size=500_000`, `target_sync_every_steps=10_000`, `grad_clip_norm=10.0`
 - DQN mode: `double_dqn=True`, `dueling=True`, `prioritized_replay=True`
 - PER: `per_alpha=0.6`, `per_beta_start=0.4`, `per_beta_frames=10_000_000`, `per_epsilon=1e-4`
-- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay=0.9999995007`
-- Plateau bump/hold: `avg_window=100`, `patience=30`, `min_improvement=0.20`, bump to `eps>=0.20`, `hold_steps=50_000`, `cooldown_episodes=30`
+- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=6_000_000`
+- Plateau bump/hold: `avg_window=100`, `patience=30`, `min_improvement=0.20`, `eps_bump_cap=0.25`, `hold_steps=50_000`, `cooldown_episodes=30`
 
-Exploration is multiplicative per env step: `eps = max(eps_min, eps * eps_decay)`.
-If rolling avg reward plateaus, epsilon is bumped and held before decay resumes.
+Exploration is multiplicative per env step: `eps = max(eps_min, eps * eps_decay)`,
+with `eps_decay = (eps_min / eps_start) ** (1.0 / eps_decay_steps)`.
+On plateau, if `eps <= 0.25`, bump `eps` to `0.25` and hold for `N` steps (cooldown `M` episodes).
+If `eps > 0.25`, no bump is applied; regular decay continues.
 The hold window prevents repeated rapid drops back to minimum epsilon.
 
 Play AI:

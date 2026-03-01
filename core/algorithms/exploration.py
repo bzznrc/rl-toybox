@@ -25,14 +25,14 @@ def compute_eps_decay(eps_start: float, eps_min: float, eps_decay_steps: int) ->
 
 @dataclass(frozen=True)
 class ExplorationConfig:
-    eps_start: float = 1.0
-    eps_min: float = 0.05
-    eps_decay: float = 0.999995
+    eps_start: float
+    eps_min: float
+    eps_decay: float
+    patience_episodes: int
+    min_improvement: float
+    eps_bump_cap: float
+    bump_cooldown_steps: int
     avg_window_episodes: int = 100
-    patience_episodes: int = 100
-    min_improvement: float = 0.10
-    eps_bump_cap: float = 0.25
-    bump_cooldown_steps: int = 50_000
 
 
 @dataclass(frozen=True)
@@ -46,11 +46,19 @@ def resolve_exploration_config(
     value: ExplorationConfig | Mapping[str, object] | None,
 ) -> ExplorationConfig:
     if value is None:
-        return ExplorationConfig()
+        raise ValueError("exploration config is required for epsilon-based algorithms.")
     if isinstance(value, ExplorationConfig):
         return value
 
     config_data = dict(value)
+    # Backward compatibility for older config payloads using decay steps.
+    legacy_decay_steps = config_data.pop("eps_decay_steps", None)
+    if "eps_decay" not in config_data and legacy_decay_steps is not None:
+        config_data["eps_decay"] = compute_eps_decay(
+            eps_start=float(config_data["eps_start"]),
+            eps_min=float(config_data["eps_min"]),
+            eps_decay_steps=int(legacy_decay_steps),
+        )
     # Backward compatibility for older config payloads.
     legacy_bump = config_data.pop("bump_epsilon", None)
     if "eps_bump_cap" not in config_data and legacy_bump is not None:
@@ -78,8 +86,8 @@ class EpsilonController:
         self.epsilon = self._clamp(initial_epsilon if initial_epsilon is not None else float(config.eps_start))
 
         self._cooldown_steps_remaining = 0
-        self._episodes_since_improvement = 0
-        self._reference_avg_reward: float | None = None
+        self._episodes_since_best = 0
+        self._best_avg_reward: float | None = None
 
     @property
     def cooldown_steps_remaining(self) -> int:
@@ -102,19 +110,19 @@ class EpsilonController:
     def on_episode_end(self, avg_reward: float) -> ExplorationBumpEvent | None:
         avg_reward = float(avg_reward)
 
-        if self._reference_avg_reward is None:
-            self._reference_avg_reward = avg_reward
-            self._episodes_since_improvement = 0
-        elif avg_reward >= float(self._reference_avg_reward) + float(self.config.min_improvement):
-            self._reference_avg_reward = avg_reward
-            self._episodes_since_improvement = 0
+        if self._best_avg_reward is None:
+            self._best_avg_reward = avg_reward
+            self._episodes_since_best = 0
+        elif avg_reward > float(self._best_avg_reward) + float(self.config.min_improvement):
+            self._best_avg_reward = avg_reward
+            self._episodes_since_best = 0
         else:
-            self._episodes_since_improvement += 1
+            self._episodes_since_best += 1
 
         if self._cooldown_steps_remaining > 0:
             return None
 
-        if self._episodes_since_improvement < int(self.config.patience_episodes):
+        if self._episodes_since_best < int(self.config.patience_episodes):
             return None
 
         if float(self.epsilon) >= float(self.config.eps_bump_cap):
@@ -122,8 +130,7 @@ class EpsilonController:
 
         self.epsilon = float(self.config.eps_bump_cap)
         self._cooldown_steps_remaining = int(self.config.bump_cooldown_steps)
-        self._episodes_since_improvement = 0
-        self._reference_avg_reward = avg_reward
+        self._episodes_since_best = 0
         return ExplorationBumpEvent(
             epsilon=float(self.epsilon),
             cooldown_steps=int(self._cooldown_steps_remaining),
@@ -133,8 +140,8 @@ class EpsilonController:
         return {
             "epsilon": float(self.epsilon),
             "cooldown_steps_remaining": int(self._cooldown_steps_remaining),
-            "episodes_since_improvement": int(self._episodes_since_improvement),
-            "reference_avg_reward": self._reference_avg_reward,
+            "episodes_since_best": int(self._episodes_since_best),
+            "best_avg_reward": self._best_avg_reward,
         }
 
     def load_state_dict(self, state: Mapping[str, object]) -> None:
@@ -148,7 +155,10 @@ class EpsilonController:
                 )
             ),
         )
-        self._episodes_since_improvement = max(0, int(state.get("episodes_since_improvement", 0)))
+        self._episodes_since_best = max(
+            0,
+            int(state.get("episodes_since_best", state.get("episodes_since_improvement", 0))),
+        )
 
-        reference = state.get("reference_avg_reward")
-        self._reference_avg_reward = None if reference is None else float(reference)
+        best = state.get("best_avg_reward", state.get("reference_avg_reward"))
+        self._best_avg_reward = None if best is None else float(best)

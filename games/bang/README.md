@@ -81,12 +81,13 @@ Key hyperparameters:
 - Algo: `learning_rate=2.5e-4`, `gamma=0.99`, `batch_size=256`, `replay_size=500_000`, `target_sync_every_steps=10_000`, `grad_clip_norm=10.0`
 - DQN mode: `double_dqn=True`, `dueling=True`, `prioritized_replay=True`
 - PER: `per_alpha=0.6`, `per_beta_start=0.4`, `per_beta_frames=10_000_000`, `per_epsilon=1e-4`
-- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=6_000_000`
-- Plateau bump/cooldown: `avg_window=100`, `patience=100`, `min_improvement=0.10`, `eps_bump_cap=0.25`, `cooldown_steps=50_000`
+- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=2_500_000`
+- Plateau bump/cooldown: `avg_window=100`, `patience=300`, `min_improvement=0.10`, `eps_bump_cap=0.25`, `cooldown_steps=1_500_000`
+- Stats/saving gate: rolling avg/best tracking, plateau checks, checkpoint saves, and best-model saves start after `100` completed episodes.
 
 Exploration is multiplicative per env step: `eps = max(eps_min, eps * eps_decay)`,
 with `eps_decay = (eps_min / eps_start) ** (1.0 / eps_decay_steps)`.
-On plateau, if `eps < 0.25`, bump `eps` to `0.25` and start cooldown for `50_000` steps.
+On plateau, if `eps < 0.25`, bump `eps` to `0.25` and start cooldown for `1_500_000` steps.
 During cooldown, additional bumps are blocked, but epsilon continues normal multiplicative decay.
 This cooldown window prevents rapid repeat bumps while preserving exploration decay.
 

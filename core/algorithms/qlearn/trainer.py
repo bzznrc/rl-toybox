@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 import random
 from typing import Any
 
@@ -27,7 +27,7 @@ class QLearnConfig:
     gamma: float = 0.9
     max_memory: int = 100_000
     batch_size: int = 1_000
-    exploration: ExplorationConfig | dict[str, object] = field(default_factory=ExplorationConfig)
+    exploration: ExplorationConfig | dict[str, object] | None = None
     use_gpu: bool = False
 
 

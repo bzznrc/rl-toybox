@@ -91,6 +91,11 @@ Default algo is PPO (categorical policy):
 rl-toybox-train --game kick --algo ppo
 ```
 
+Key hyperparameters:
+
+- Train: `max_iterations=1500`, `rollout_steps=2048`, `checkpoint_every_iterations=10`, `reward_window=100`
+- Algo: `learning_rate=3e-4`, `gamma=0.99`, `gae_lambda=0.95`, `clip_ratio=0.2`, `update_epochs=4`, `minibatch_size=512`, `entropy_coef=0.01`, `value_coef=0.5`, `max_grad_norm=0.5`
+
 Play AI:
 
 ```bash

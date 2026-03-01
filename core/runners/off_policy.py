@@ -22,6 +22,7 @@ class OffPolicyConfig:
     updates_per_step: int = 1
     checkpoint_every_steps: int = 50_000
     reward_window: int = 100
+    min_episodes_for_stats: int = 100
     log_every_episodes: int = 1
     log_heartbeat_steps: int = 0
 
@@ -46,6 +47,7 @@ def run_off_policy_training(
 
     reward_window: deque[float] = deque(maxlen=reward_window_size)
     exploration_window: deque[float] = deque(maxlen=exploration_window_size)
+    min_episodes_for_stats = max(0, int(config.min_episodes_for_stats))
     best_avg_reward = float("-inf")
     update_attempts = 0
     updates = 0
@@ -82,7 +84,7 @@ def run_off_policy_training(
                     last_loss = float(metrics["loss"])
                     updates += 1
 
-        if total_steps % int(config.checkpoint_every_steps) == 0:
+        if total_steps % int(config.checkpoint_every_steps) == 0 and total_episodes >= min_episodes_for_stats:
             algorithm.save(str(run_paths.checkpoint_path))
             log_save_line(
                 kind="checkpoint",
@@ -95,21 +97,25 @@ def run_off_policy_training(
             total_episodes += 1
             reward_window.append(episode_reward)
             exploration_window.append(episode_reward)
+            stats_ready = total_episodes >= min_episodes_for_stats
 
-            avg_reward = float(mean(reward_window))
-            exploration_avg_reward = float(mean(exploration_window))
-            if avg_reward > best_avg_reward:
-                best_avg_reward = avg_reward
-                algorithm.save(str(run_paths.best_path))
-                log_save_line(
-                    kind="best",
-                    at=f"step {int(total_steps)}",
-                    avg_reward=float(avg_reward),
-                    path=run_paths.best_path,
-                )
-                last_logged_step = int(total_steps)
+            avg_reward: float | None = None
+            exploration_event: dict[str, float | int | str] | None = None
+            if stats_ready:
+                avg_reward = float(mean(reward_window))
+                exploration_avg_reward = float(mean(exploration_window))
+                if avg_reward > best_avg_reward:
+                    best_avg_reward = avg_reward
+                    algorithm.save(str(run_paths.best_path))
+                    log_save_line(
+                        kind="best",
+                        at=f"step {int(total_steps)}",
+                        avg_reward=float(avg_reward),
+                        path=run_paths.best_path,
+                    )
+                    last_logged_step = int(total_steps)
 
-            exploration_event = algorithm.on_episode_end(float(exploration_avg_reward))
+                exploration_event = algorithm.on_episode_end(float(exploration_avg_reward))
             if exploration_event is not None and str(exploration_event.get("bump", "off")).lower() == "on":
                 epsilon = float(exploration_event.get("epsilon", 0.0))
                 cooldown_steps = int(exploration_event.get("cooldown_steps", 0))
@@ -131,8 +137,12 @@ def run_off_policy_training(
                     episode=int(total_episodes),
                     ep_len=int(episode_steps),
                     reward=float(episode_reward),
-                    avg_reward=float(avg_reward),
-                    best_avg=float(best_avg_reward if best_avg_reward > float("-inf") else avg_reward),
+                    avg_reward=avg_reward,
+                    best_avg=(
+                        float(best_avg_reward)
+                        if stats_ready and best_avg_reward > float("-inf")
+                        else None
+                    ),
                     epsilon=episode_epsilon,
                 )
                 last_logged_step = int(total_steps)
@@ -153,12 +163,13 @@ def run_off_policy_training(
             )
             last_logged_step = int(total_steps)
 
-    algorithm.save(str(run_paths.checkpoint_path))
-    log_save_line(
-        kind="checkpoint",
-        at=f"step {int(total_steps)}",
-        path=run_paths.checkpoint_path,
-    )
+    if total_episodes >= min_episodes_for_stats:
+        algorithm.save(str(run_paths.checkpoint_path))
+        log_save_line(
+            kind="checkpoint",
+            at=f"step {int(total_steps)}",
+            path=run_paths.checkpoint_path,
+        )
 
     final_metrics: dict[str, float | int] = {
         "total_steps": total_steps,

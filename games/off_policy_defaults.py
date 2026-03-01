@@ -2,27 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any
 
-from core.algorithms.exploration import ExplorationConfig, compute_eps_decay
+from core.algorithms.exploration import compute_eps_decay
 
 
-OFF_POLICY_EXPLORATION_DEFAULTS = ExplorationConfig(
-    eps_start=1.0,
-    eps_min=0.05,
-    avg_window_episodes=100,
-    patience_episodes=100,
-    min_improvement=0.10,
-    eps_bump_cap=0.25,
-    bump_cooldown_steps=50_000,
-)
+EXPLORATION_AVG_WINDOW_EPISODES = 100
+MIN_EPISODES_FOR_STATS = 100
 
 OFF_POLICY_TRAIN_DEFAULTS: dict[str, Any] = {
     "train_after_steps": 0,
     "update_every_steps": 1,
     "updates_per_step": 1,
-    "reward_window": int(OFF_POLICY_EXPLORATION_DEFAULTS.avg_window_episodes),
+    "reward_window": int(EXPLORATION_AVG_WINDOW_EPISODES),
+    "min_episodes_for_stats": int(MIN_EPISODES_FOR_STATS),
 }
 
 
@@ -30,21 +23,24 @@ def make_exploration_config(
     eps_start: float,
     eps_min: float,
     eps_decay_steps: int,
-    patience_episodes: int = 100,
-    min_improvement: float = 0.10,
-    eps_bump_cap: float = 0.25,
-    bump_cooldown_steps: int = 50_000,
+    *,
+    patience_episodes: int,
+    min_improvement: float,
+    eps_bump_cap: float,
+    bump_cooldown_steps: int,
+    avg_window_episodes: int = EXPLORATION_AVG_WINDOW_EPISODES,
 ) -> dict[str, Any]:
-    exploration = asdict(OFF_POLICY_EXPLORATION_DEFAULTS)
-    exploration["eps_start"] = float(eps_start)
-    exploration["eps_min"] = float(eps_min)
-    exploration["eps_decay"] = compute_eps_decay(
-        eps_start=float(eps_start),
-        eps_min=float(eps_min),
-        eps_decay_steps=int(eps_decay_steps),
-    )
-    exploration["patience_episodes"] = int(patience_episodes)
-    exploration["min_improvement"] = float(min_improvement)
-    exploration["eps_bump_cap"] = float(eps_bump_cap)
-    exploration["bump_cooldown_steps"] = int(bump_cooldown_steps)
-    return exploration
+    return {
+        "eps_start": float(eps_start),
+        "eps_min": float(eps_min),
+        "eps_decay": compute_eps_decay(
+            eps_start=float(eps_start),
+            eps_min=float(eps_min),
+            eps_decay_steps=int(eps_decay_steps),
+        ),
+        "avg_window_episodes": int(avg_window_episodes),
+        "patience_episodes": int(patience_episodes),
+        "min_improvement": float(min_improvement),
+        "eps_bump_cap": float(eps_bump_cap),
+        "bump_cooldown_steps": int(bump_cooldown_steps),
+    }

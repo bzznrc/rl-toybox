@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 import random
 from typing import Any
 
@@ -36,7 +36,7 @@ class DQNConfig:
     grad_clip_norm: float = 10.0
     learn_start_steps: int = 5_000
     train_every_steps: int = 4
-    exploration: ExplorationConfig | dict[str, object] = field(default_factory=ExplorationConfig)
+    exploration: ExplorationConfig | dict[str, object] | None = None
     use_gpu: bool = False
     dueling: bool = True
     double_dqn: bool = True

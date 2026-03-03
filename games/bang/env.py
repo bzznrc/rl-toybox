@@ -1134,6 +1134,13 @@ class BaseGame:
             ),
         )
 
+    @staticmethod
+    def _turn_toward_angle(current_angle: float, target_angle: float, max_step_degrees: float) -> float:
+        delta = normalize_angle_degrees(float(target_angle) - float(current_angle))
+        max_step = max(0.0, float(max_step_degrees))
+        step = max(-max_step, min(max_step, float(delta)))
+        return (float(current_angle) + float(step)) % 360.0
+
     def _available_escape_offsets(self, actor: Actor, angle_to_target: float) -> list[float]:
         free_offsets: list[float] = []
         for offset in ENEMY_ESCAPE_ANGLE_OFFSETS_DEGREES:
@@ -1208,9 +1215,11 @@ class BaseGame:
         else:
             angle_to_target = math.degrees(math.atan2(to_target.y, to_target.x)) % 360
 
-        aim_error = random.choice(self.enemy_shot_error_choices)
-        aim_angle = (angle_to_target + aim_error) % 360
-        actor.angle = aim_angle
+        actor.angle = self._turn_toward_angle(
+            current_angle=float(actor.angle),
+            target_angle=float(angle_to_target),
+            max_step_degrees=float(AIM_RATE_PER_STEP),
+        )
 
         self._step_scripted_movement(actor, target, angle_to_target)
 
@@ -1218,7 +1227,11 @@ class BaseGame:
         if self._has_clear_path_between(actor, target):
             shoot_probability = min(1.0, shoot_probability * 1.25)
         if random.random() < shoot_probability:
+            original_angle = float(actor.angle)
+            aim_error = random.choice(self.enemy_shot_error_choices)
+            actor.angle = (float(angle_to_target) + float(aim_error)) % 360.0
             projectile = actor.shoot()
+            actor.angle = original_angle
             if projectile:
                 self.projectiles.append(projectile)
 

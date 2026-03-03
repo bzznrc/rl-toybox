@@ -115,10 +115,10 @@ MAX_LEVEL = 3
 REWARD_ROLLING_WINDOW = 100
 
 CURRICULUM_PROMOTION = {
-    "min_episodes_per_level": 200,
-    "check_window": 100,
+    "min_episodes_per_level": 250,
+    "check_window": 25,
     "success_threshold": 0.40,
-    "consecutive_checks_required": 3,
+    "consecutive_checks_required": 2,
 }
 
 LEVEL_SETTINGS = {
@@ -148,10 +148,10 @@ REWARD_WIN = 10.0
 PENALTY_LOSE = -5.0
 REWARD_KILL = 2.0
 PENALTY_STEP = -0.005
-ENGAGEMENT_SCALE = 0.2
-ENGAGEMENT_CLIP = 0.1
-HAZARD_SCALE = 0.2
-HAZARD_CLIP = 0.1
+ENGAGEMENT_SCALE = 0.5
+ENGAGEMENT_CLIP = 0.25
+HAZARD_SCALE = 0.5
+HAZARD_CLIP = 0.25
 REWARD_COMPONENTS = {
     "outcome.reward_win": REWARD_WIN,
     "outcome.penalty_lose": PENALTY_LOSE,

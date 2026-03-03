@@ -54,7 +54,8 @@ def run_on_policy_training(
     episode_reward = 0.0
     episode_steps = 0
     reward_window: deque[float] = deque(maxlen=max(1, int(config.reward_window)))
-    success_window: deque[int] = deque(maxlen=max(1, int(config.reward_window)))
+    success_window_by_level: dict[int, deque[int]] = {}
+    episodes_by_level: dict[int, int] = {}
     reward_window_by_level: dict[int, deque[float]] = {}
     min_episodes_for_stats = 100
     best_avg_reward_by_level: dict[int, float] = {}
@@ -96,15 +97,21 @@ def run_on_policy_training(
                     episode_success = 1 if int(info.get("success", 0)) > 0 else 0
                 except (TypeError, ValueError):
                     episode_success = 1 if bool(info.get("win", False)) else 0
-                success_window.append(int(episode_success))
+                level_success_window = success_window_by_level.setdefault(
+                    int(episode_level),
+                    deque(maxlen=max(1, int(config.reward_window))),
+                )
+                level_success_window.append(int(episode_success))
+                episodes_by_level[int(episode_level)] = int(episodes_by_level.get(int(episode_level), 0)) + 1
                 if bool(info.get("level_changed", False)):
                     bump_epsilon_to_cap(algorithm)
                 current_level = _infer_current_level(env, default=episode_level)
-                stats_ready = total_episodes >= int(min_episodes_for_stats)
-                avg_reward_ep = float(mean(reward_window)) if stats_ready else None
-                avg_success_ep = float(mean(success_window)) if stats_ready else None
+                level_episode_count = int(episodes_by_level.get(int(episode_level), 0))
+                stats_ready_level = level_episode_count >= int(min_episodes_for_stats)
+                avg_reward_ep = float(mean(level_reward_window)) if stats_ready_level else None
+                avg_success_ep = float(mean(level_success_window)) if stats_ready_level else None
 
-                if stats_ready:
+                if stats_ready_level:
                     avg_reward_level = float(mean(level_reward_window))
                     best_avg_level = best_avg_reward_by_level.get(int(episode_level), float("-inf"))
                     if avg_reward_level > float(best_avg_level):
@@ -128,10 +135,15 @@ def run_on_policy_training(
                     ep_len=int(episode_steps),
                     reward=float(episode_reward),
                     avg_reward=avg_reward_ep,
-                    best_avg=(float(best_avg_for_level) if stats_ready and best_avg_for_level is not None else None),
+                    best_avg=(
+                        float(best_avg_for_level)
+                        if stats_ready_level and best_avg_for_level is not None
+                        else None
+                    ),
                     epsilon=None,
                     success=int(episode_success),
                     avg_success=avg_success_ep,
+                    best_avg_label=f"BR{int(episode_level)}",
                     reward_components=components_text,
                 )
                 last_logged_step = int(total_steps)
@@ -200,4 +212,3 @@ def run_on_policy_training(
     }
     write_metrics(run_paths.metrics_path, final_metrics)
     return final_metrics
-

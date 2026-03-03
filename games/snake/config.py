@@ -43,8 +43,8 @@ INPUT_FEATURE_NAMES = [
     "ray_fwd",
     "ray_left",
     "ray_right",
-    "tgt_dx",
-    "tgt_dy",
+    "tgt_rel_angle_sin",
+    "tgt_rel_angle_cos",
     "tgt_manhattan_dist",
     "tgt_dist_delta",
     "self_steps_since_food",
@@ -62,41 +62,41 @@ ACT_DIM = len(ACTION_NAMES)
 MIN_LEVEL = 1
 MAX_LEVEL = 3
 REWARD_ROLLING_WINDOW = 100
+SUCCESS_FOODS_REQUIRED = 5
 
 CURRICULUM_PROMOTION = {
-    "min_episodes_per_level": 200,
-    "check_window": 100,
+    "min_episodes_per_level": 250,
+    "check_window": 25,
     "success_threshold": 0.80,
-    "consecutive_checks_required": 3,
+    "consecutive_checks_required": 2,
 }
 
 LEVEL_SETTINGS = {
     1: {
         "num_obstacles": 0,
-        "timeout_steps_per_length": 160,
+        "timeout_steps_per_length": 120,
     },
     2: {
-        "num_obstacles": 4,
-        "timeout_steps_per_length": 130,
+        "num_obstacles": 6,
+        "timeout_steps_per_length": 100,
     },
     3: {
-        "num_obstacles": 8,
-        "timeout_steps_per_length": 100,
+        "num_obstacles": 12,
+        "timeout_steps_per_length": 80,
     },
 }
 
 
 # REWARDS
 PENALTY_LOSE = -5.0
-REWARD_FOOD = 10.0
-PENALTY_STEP = -0.01
+REWARD_FOOD = 1.0
+PENALTY_STEP = -0.005
 PROGRESS_SCALE = 1.0
-PROGRESS_CLIP = 0.2
+PROGRESS_CLIP = 0.05
 REWARD_COMPONENTS = {
     "outcome.penalty_lose": PENALTY_LOSE,
     "event.reward_food": REWARD_FOOD,
     "progress.scale": PROGRESS_SCALE,
-    "progress.clip": PROGRESS_CLIP,
     "step.penalty_step": PENALTY_STEP,
 }
 

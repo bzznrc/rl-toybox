@@ -282,6 +282,7 @@ class VroomEnv(Env):
         self.num_cars = max(1, min(int(settings["num_cars"]), len(self.player_color_pairs)))
         self.opponent_speed_cap = self._clamp(float(settings["opponent_speed_cap"]), 0.0, 1.0)
         self.track_obstacle_clusters = max(0, int(settings["obstacle_clusters"]))
+        self.ai_obstacle_avoid_chance = self._clamp(float(settings.get("opponent_obstacle_avoid_chance", 0.75)), 0.0, 1.0)
 
     @staticmethod
     def _clamp(value: float, low: float, high: float) -> float:
@@ -866,25 +867,29 @@ class VroomEnv(Env):
         target_x, target_y = self.track_centerline[target_idx]
         desired_heading = math.degrees(math.atan2(target_y - car.y, target_x - car.x))
         delta = self._normalize_degrees(desired_heading - car.heading_degrees)
+        _, _, forward_speed, _ = self._project_to_car_frame(car)
 
-        steer = 0.0
-        if delta > 5.0:
-            steer = 1.0
-        elif delta < -5.0:
-            steer = -1.0
+        max_forward_speed = float(self.max_speed) * float(self.opponent_speed_cap)
+        min_forward_speed = 0.5 * max_forward_speed
+
+        if abs(delta) <= 2.0:
+            steer = 0.0
+        else:
+            steer = self._clamp(float(delta) / 18.0, -1.0, 1.0)
 
         throttle = 1.0
-        if abs(delta) > 42.0:
-            throttle = 0.42
-        if distance > self.track_half_width * 0.9:
-            throttle = max(throttle, 0.55)
-        if car.in_contact:
-            throttle = max(throttle, 0.65)
+        abs_delta = abs(float(delta))
+        if abs_delta > 55.0:
+            throttle = 0.0
+        elif abs_delta > 35.0:
+            throttle = 0.20
 
         if int(car.obstacle_avoid_frames) > 0:
             car.obstacle_avoid_frames = int(car.obstacle_avoid_frames) - 1
             steer = float(car.obstacle_avoid_steer)
-            throttle = max(throttle, 0.72)
+            throttle = min(throttle, 0.20)
+            if forward_speed < float(min_forward_speed):
+                throttle = 1.0
             return steer, throttle
 
         ahead = self._closest_obstacle_ahead(car)
@@ -895,8 +900,12 @@ class VroomEnv(Env):
                 steer = -1.0 if lateral >= 0.0 else 1.0
                 car.obstacle_avoid_steer = float(steer)
                 car.obstacle_avoid_frames = int(self.ai_avoid_frames)
-                throttle = max(throttle, 0.68)
+                throttle = min(throttle, 0.20)
+                if forward_speed < float(min_forward_speed):
+                    throttle = 1.0
                 return steer, throttle
+        if forward_speed < float(min_forward_speed):
+            throttle = 1.0
         return steer, throttle
 
     def _player_controls_from_action(self, action_idx: int) -> tuple[float, float]:

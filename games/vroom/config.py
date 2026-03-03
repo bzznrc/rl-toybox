@@ -70,10 +70,10 @@ MAX_LEVEL = 3
 REWARD_ROLLING_WINDOW = 100
 
 CURRICULUM_PROMOTION = {
-    "min_episodes_per_level": 200,
-    "check_window": 100,
+    "min_episodes_per_level": 250,
+    "check_window": 25,
     "success_threshold": 0.60,
-    "consecutive_checks_required": 3,
+    "consecutive_checks_required": 2,
 }
 
 LEVEL_SETTINGS = {
@@ -81,16 +81,19 @@ LEVEL_SETTINGS = {
         "num_cars": 1,
         "opponent_speed_cap": 0.0,
         "obstacle_clusters": 2,
+        "opponent_obstacle_avoid_chance": 0.00,
     },
     2: {
         "num_cars": 2,
         "opponent_speed_cap": 0.75,
         "obstacle_clusters": 4,
+        "opponent_obstacle_avoid_chance": 0.70,
     },
     3: {
         "num_cars": 4,
         "opponent_speed_cap": 1.0,
         "obstacle_clusters": 4,
+        "opponent_obstacle_avoid_chance": 0.90,
     },
 }
 
@@ -98,15 +101,14 @@ LEVEL_SETTINGS = {
 # REWARDS
 REWARD_WIN = 10.0
 PENALTY_LOSE = -5.0
-PENALTY_STEP = -0.01
-PROGRESS_SCALE = 1.0
-PROGRESS_CLIP = 0.2
-PENALTY_COLLISION = -1.0
+PENALTY_STEP = -0.005
+PROGRESS_SCALE = 5.0
+PROGRESS_CLIP = 0.25
+PENALTY_COLLISION = -0.5
 REWARD_COMPONENTS = {
     "outcome.reward_win": REWARD_WIN,
     "outcome.penalty_lose": PENALTY_LOSE,
     "progress.scale": PROGRESS_SCALE,
-    "progress.clip": PROGRESS_CLIP,
     "event.penalty_collision": PENALTY_COLLISION,
     "step.penalty_step": PENALTY_STEP,
 }

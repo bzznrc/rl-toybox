@@ -51,6 +51,7 @@ from games.snake.config import (
     PENALTY_STEP,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
+    SUCCESS_FOODS_REQUIRED,
     TILE_SIZE,
     TRAINING_FPS,
     WINDOW_TITLE,
@@ -151,15 +152,53 @@ class BaseSnakeGame:
         return 2
 
     def _place_food(self) -> None:
-        while True:
-            x = random.randint(0, (self.width - TILE_SIZE) // TILE_SIZE) * TILE_SIZE
-            y = random.randint(0, (self.height - BB_HEIGHT - TILE_SIZE) // TILE_SIZE) * TILE_SIZE
-            if y >= self.height - BB_HEIGHT:
+        grid_w = max(1, int(self.width // TILE_SIZE))
+        grid_h = max(1, int((self.height - BB_HEIGHT) // TILE_SIZE))
+        preferred_tiles: list[Point] = []
+        fallback_tiles: list[Point] = []
+        for cell_x in range(grid_w):
+            for cell_y in range(grid_h):
+                tile = self._point_from_cells(cell_x, cell_y)
+                if tile in self.snake or tile in self.obstacles:
+                    continue
+                fallback_tiles.append(tile)
+                if self._count_free_neighbors(tile) >= 2:
+                    preferred_tiles.append(tile)
+        pool = preferred_tiles if preferred_tiles else fallback_tiles
+        if not pool:
+            self.food = self.head
+            return
+        self.food = random.choice(pool)
+
+    @staticmethod
+    def _point_from_cells(cell_x: int, cell_y: int) -> Point:
+        return Point(float(cell_x * TILE_SIZE), float(cell_y * TILE_SIZE))
+
+    def _normalize_neighbor_tile(self, tile: Point) -> Point | None:
+        if WRAP_AROUND:
+            wrapped_x = float(tile.x % self.width)
+            wrapped_y = float(tile.y % (self.height - BB_HEIGHT))
+            return Point(wrapped_x, wrapped_y)
+        if 0 <= tile.x < self.width and 0 <= tile.y < self.height - BB_HEIGHT:
+            return tile
+        return None
+
+    def _count_free_neighbors(self, tile: Point) -> int:
+        neighbors = (
+            Point(tile.x - TILE_SIZE, tile.y),
+            Point(tile.x + TILE_SIZE, tile.y),
+            Point(tile.x, tile.y - TILE_SIZE),
+            Point(tile.x, tile.y + TILE_SIZE),
+        )
+        free_neighbors = 0
+        for neighbor in neighbors:
+            normalized = self._normalize_neighbor_tile(neighbor)
+            if normalized is None:
                 continue
-            food = Point(x, y)
-            if food not in self.snake and food not in self.obstacles:
-                self.food = food
-                return
+            if normalized in self.snake or normalized in self.obstacles:
+                continue
+            free_neighbors += 1
+        return free_neighbors
 
     def _place_obstacles(self) -> None:
         self.obstacles = []
@@ -482,14 +521,33 @@ class TrainingSnakeGame(BaseSnakeGame):
         manhattan_dist = abs(dx_cells) + abs(dy_cells)
         return float(clip_unit(float(manhattan_dist) / float(max_manhattan)))
 
-    def _food_progress_potential(self) -> float:
-        return -float(self._food_manhattan_norm())
+    def _hunger_cap_steps(self, *, snake_length: int | None = None) -> int:
+        length = max(1, int(len(self.snake) if snake_length is None else snake_length))
+        return max(1, int(self.timeout_steps_per_length) * length)
+
+    def _food_progress_potential(
+        self,
+        *,
+        steps_since_food: int | None = None,
+        hunger_cap_steps: int | None = None,
+    ) -> float:
+        dist_food_norm = float(self._food_manhattan_norm())
+        hunger_steps = int(self.steps_since_food if steps_since_food is None else steps_since_food)
+        hunger_cap = max(1, int(self._hunger_cap_steps() if hunger_cap_steps is None else hunger_cap_steps))
+        hunger_norm = float(clip_unit(float(hunger_steps) / float(hunger_cap)))
+        return float(-dist_food_norm - 0.5 * hunger_norm)
 
     def play_step(self, action: list[int]) -> tuple[float, bool, int]:
         self.frame_iteration += 1
         self.poll_events()
 
-        phi_prev = float(self._food_progress_potential())
+        hunger_cap_steps = int(self._hunger_cap_steps(snake_length=len(self.snake)))
+        phi_prev = float(
+            self._food_progress_potential(
+                steps_since_food=int(self.steps_since_food),
+                hunger_cap_steps=hunger_cap_steps,
+            )
+        )
         action_idx = self._action_index(action)
         self.last_action_index = int(action_idx)
         self._move(action_idx)
@@ -504,12 +562,21 @@ class TrainingSnakeGame(BaseSnakeGame):
         }
         timeout_limit = max(1, int(self.timeout_steps_per_length) * max(1, len(self.snake)))
         if self._has_collision() or self.frame_iteration > timeout_limit:
-            reward += float(PENALTY_LOSE)
-            reward_breakdown["outcome.penalty_lose"] = float(PENALTY_LOSE)
+            reached_success_target = int(self.score) >= int(SUCCESS_FOODS_REQUIRED)
+            if not reached_success_target:
+                reward += float(PENALTY_LOSE)
+                reward_breakdown["outcome.penalty_lose"] = float(PENALTY_LOSE)
             self.last_reward_breakdown = reward_breakdown
             return reward, True, self.score
 
-        phi_next = float(self._food_progress_potential())
+        ate_food = bool(self.head == self.food)
+        next_steps_since_food = 0 if ate_food else int(self.steps_since_food) + 1
+        phi_next = float(
+            self._food_progress_potential(
+                steps_since_food=next_steps_since_food,
+                hunger_cap_steps=hunger_cap_steps,
+            )
+        )
         progress_reward = float(
             signed_potential_shaping(
                 phi_prev=phi_prev,
@@ -521,7 +588,7 @@ class TrainingSnakeGame(BaseSnakeGame):
         reward += progress_reward
         reward_breakdown["progress.shape"] = progress_reward
 
-        if self.head == self.food:
+        if ate_food:
             self.score += 1
             self.foods_eaten += 1
             reward += float(REWARD_FOOD)
@@ -532,7 +599,7 @@ class TrainingSnakeGame(BaseSnakeGame):
             self._prev_tgt_manhattan_norm = None
         else:
             self.snake.pop()
-            self.steps_since_food += 1
+            self.steps_since_food = int(next_steps_since_food)
 
         self.draw_frame()
         self.frame_clock.tick(TRAINING_FPS)
@@ -544,8 +611,6 @@ class TrainingSnakeGame(BaseSnakeGame):
         grid_w, grid_h = self._grid_dims()
         grid_cells = max(1, grid_w * grid_h)
         max_manhattan = max(1, (grid_w // 2 + grid_h // 2) if WRAP_AROUND else (grid_w - 1 + grid_h - 1))
-        norm_dx_scale = max(1.0, (grid_w / 2.0) if WRAP_AROUND else float(grid_w - 1))
-        norm_dy_scale = max(1.0, (grid_h / 2.0) if WRAP_AROUND else float(grid_h - 1))
 
         dir_x, dir_y = self._direction_vector(self.direction)
         left_x, left_y = self._left_vector(dir_x, dir_y)
@@ -561,6 +626,15 @@ class TrainingSnakeGame(BaseSnakeGame):
         dy_cells = self._wrap_delta_cells(raw_dy, grid_h) if WRAP_AROUND else raw_dy
         manhattan_dist = abs(dx_cells) + abs(dy_cells)
         manhattan_norm = clip_unit(float(manhattan_dist) / float(max_manhattan))
+        target_norm = float(np.hypot(float(dx_cells), float(dy_cells)))
+        if target_norm <= 1e-8:
+            tgt_rel_angle_cos = 1.0
+            tgt_rel_angle_sin = 0.0
+        else:
+            tgt_x = float(dx_cells) / target_norm
+            tgt_y = float(dy_cells) / target_norm
+            tgt_rel_angle_cos = float(clip_signed(float(heading_cos) * tgt_x + float(heading_sin) * tgt_y))
+            tgt_rel_angle_sin = float(clip_signed(float(heading_cos) * tgt_y - float(heading_sin) * tgt_x))
         if self._prev_tgt_manhattan_norm is None:
             tgt_dist_delta = 0.0
         else:
@@ -575,13 +649,14 @@ class TrainingSnakeGame(BaseSnakeGame):
             "ray_fwd": float(self._ray_distance_to_collision(dir_x, dir_y)),
             "ray_left": float(self._ray_distance_to_collision(left_x, left_y)),
             "ray_right": float(self._ray_distance_to_collision(right_x, right_y)),
-            "tgt_dx": float(clip_signed(float(dx_cells) / norm_dx_scale)),
-            "tgt_dy": float(clip_signed(float(dy_cells) / norm_dy_scale)),
+            "tgt_rel_angle_sin": float(tgt_rel_angle_sin),
+            "tgt_rel_angle_cos": float(tgt_rel_angle_cos),
             "tgt_manhattan_dist": float(manhattan_norm),
             "tgt_dist_delta": float(tgt_dist_delta),
             "self_steps_since_food": float(clip_unit(float(self.steps_since_food) / float(grid_cells))),
         }
         state = np.asarray(ordered_feature_vector(SNAKE_INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
+        assert len(state) == SNAKE_OBS_DIM
         if state.shape != (SNAKE_OBS_DIM,):
             raise RuntimeError(f"Snake observation expected {SNAKE_OBS_DIM} features, got {state.shape[0]}")
         return state
@@ -671,6 +746,7 @@ class SnakeEnv(Env):
         else:
             values = TrainingSnakeGame.get_state_vector(self.game)  # type: ignore[misc]
         obs = np.asarray(values, dtype=np.float32)
+        assert len(obs) == self.OBS_DIM
         if obs.shape != (self.OBS_DIM,):
             raise RuntimeError(f"Snake observation expected {self.OBS_DIM} features, got {obs.shape[0]}")
         if not np.isfinite(obs).all():
@@ -712,7 +788,7 @@ class SnakeEnv(Env):
             "reward_breakdown": step_breakdown,
         }
         if done:
-            success = 1 if int(score) > 0 else 0
+            success = 1 if int(score) >= int(SUCCESS_FOODS_REQUIRED) else 0
             info["success"] = int(success)
             info["reward_components"] = self._episode_reward_components.totals()
             self._last_episode_level = int(episode_level)

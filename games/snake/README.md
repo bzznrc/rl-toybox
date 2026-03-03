@@ -16,7 +16,7 @@ Grid Snake environment with obstacles.
   - Level 2: `4` obstacles, timeout `130 * snake_length`
   - Level 3: `8` obstacles, timeout `100 * snake_length`
 
-Success (per episode): `1` if at least one food was eaten, else `0`.
+Success (per episode): `1` if at least `5` foods were eaten (`SUCCESS_FOODS_REQUIRED`), else `0`.
 Average Success (`AS`) is the rolling mean over the curriculum `check_window`.
 
 ## Controls (Human)
@@ -33,8 +33,8 @@ Average Success (`AS`) is the rolling mean over the curriculum `check_window`.
   - `ray_fwd`
   - `ray_left`
   - `ray_right`
-  - `tgt_dx`
-  - `tgt_dy`
+  - `tgt_rel_angle_sin`
+  - `tgt_rel_angle_cos`
   - `tgt_manhattan_dist`
   - `tgt_dist_delta`
   - `self_steps_since_food`
@@ -52,10 +52,12 @@ Ray semantics:
 
 - Event `REWARD_FOOD`: `+10` when food is eaten.
 - Outcome `PENALTY_LOSE`: `-5` on death or timeout.
-- Progress shaping: `r_progress = clip(1.0 * (Phi' - Phi), -0.2, +0.2)` with `Phi = -dist_food_norm`.
-- Step `PENALTY_STEP`: `-0.01` every training step.
+- Progress shaping: `r_progress = clip(1.0 * (Phi' - Phi), -0.2, +0.2)` with `Phi = -dist_food_norm - 0.5*hunger_norm`.
+- Step `PENALTY_STEP`: `-0.005` every training step.
 
-`dist_food_norm` is the normalized Manhattan head-to-food distance (shortest wrapped path when wrap-around is enabled), so moving toward food increases `Phi` and gives positive signed-ΔPhi shaping.
+`dist_food_norm` is the normalized Manhattan head-to-food distance (shortest wrapped path when wrap-around is enabled).
+`hunger_norm` is `clamp(self_steps_since_food / hunger_cap_steps, 0, 1)`.
+Progress reward uses signed DeltaPhi with clipping, so moving toward food and reducing hunger pressure increases `Phi`.
 
 ## Training
 
@@ -95,7 +97,7 @@ rl-toybox-play-user --game snake
 
 Training episode logs use compact tab-separated fields:
 
-`Ep:<ep>\tLv:<level>\tLen:<len>\tR:<reward>\tAR:<avg_reward|n/a>\tBR:<best_avg|n/a>\tE:<epsilon|n/a>\tS:<0/1>\tAS:<avg_success|n/a>\t<components>`
+`Ep:<ep>\tLv:<level>\tLen:<len>\tR:<reward>\tAR:<avg_reward|n/a>\tBR<level>:<best_avg|n/a>\tE:<epsilon|n/a>\tS:<0/1>\tAS:<avg_success|n/a>\t<components>`
 
-- `AR`, `BR`, `AS` are shown as `n/a` until the minimum stats gate is met (`100` episodes).
+- `AR`, `BR<level>`, `AS` are level-scoped and shown as `n/a` until the minimum stats gate is met (`100` episodes) for that level.
 - Reward components are appended as one space-separated blob (for Snake: `F L P S`).

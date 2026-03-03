@@ -109,10 +109,10 @@ MAX_LEVEL = 3
 REWARD_ROLLING_WINDOW = 100
 
 CURRICULUM_PROMOTION = {
-    "min_episodes_per_level": 200,
-    "check_window": 100,
-    "success_threshold": 0.70,
-    "consecutive_checks_required": 3,
+    "min_episodes_per_level": 250,
+    "check_window": 25,
+    "success_threshold": 0.40,
+    "consecutive_checks_required": 2,
 }
 
 LEVEL_SETTINGS = {
@@ -144,7 +144,6 @@ REWARD_COMPONENTS = {
     "outcome.reward_score": REWARD_SCORE,
     "outcome.penalty_concede": PENALTY_CONCEDE,
     "progress.scale": PROGRESS_SCALE,
-    "progress.clip": PROGRESS_CLIP,
     "event.reward_possession_gain": REWARD_POSSESSION_GAIN,
     "event.penalty_possession_loss": PENALTY_POSSESSION_LOSS,
     "event.penalty_kick_cost": PENALTY_KICK_COST,

@@ -37,8 +37,16 @@ def main() -> None:
     del obs
     try:
         while True:
-            _, _, done, _ = env.step(0)
+            _, _, done, info = env.step(0)
             if done:
+                races_total = info.get("races_total")
+                races_finished = info.get("races_finished")
+                try:
+                    if races_total is not None and races_finished is not None:
+                        if int(races_finished) >= int(races_total):
+                            break
+                except (TypeError, ValueError):
+                    pass
                 env.reset()
     finally:
         env.close()

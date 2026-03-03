@@ -136,6 +136,7 @@ def log_episode_line(
     epsilon: float | None,
     success: int,
     avg_success: float | None,
+    best_avg_label: str = "BR",
     reward_components: str | None = None,
 ) -> None:
     avg_reward_text = "n/a" if avg_reward is None else f"{float(avg_reward):.2f}"
@@ -149,7 +150,7 @@ def log_episode_line(
         f"Len:{int(ep_len):>5}",
         f"R:{float(reward):>8.2f}",
         f"AR:{avg_reward_text:>8}",
-        f"BR:{best_reward_text:>8}",
+        f"{str(best_avg_label)}:{best_reward_text:>8}",
         f"E:{epsilon_text:>5}",
         f"S:{success_value:>1}",
         f"AS:{avg_success_text:>5}",
@@ -192,16 +193,10 @@ def log_save_line(
     kind_value = str(kind).strip().lower()
     if kind_value == "checkpoint":
         kind_value = "check"
-    values: OrderedDict[str, Any] = OrderedDict()
-    values["Lv"] = int(level)
-    values["At"] = str(at)
-    if avg_reward is not None:
-        values["Avg Reward"] = float(avg_reward)
-    values["Path"] = format_display_path(path)
-    log_key_values(
-        "rl_toybox.train",
-        dict(values),
-        prefix=f">>> Save: {kind_value:<7}",
-        key_value_separator=":",
+    # Keep signature stable for callers, but save logs are intentionally minimal.
+    _ = (level, at, avg_reward)
+    kind_label = {"best": "Best", "check": "Check"}.get(kind_value, kind_value.title())
+    logging.getLogger("rl_toybox.train").info(
+        f">>> Save: {kind_label}\tPath: {format_display_path(path)}"
     )
 

@@ -131,7 +131,7 @@ rl-toybox-play-user --game vroom
 
 Training episode logs use compact tab-separated fields:
 
-`Ep:<ep>\tLv:<level>\tLen:<len>\tR:<reward>\tAR:<avg_reward|n/a>\tBR:<best_avg|n/a>\tE:<epsilon|n/a>\tS:<0/1>\tAS:<avg_success|n/a>\t<components>`
+`Ep:<ep>\tLv:<level>\tLen:<len>\tR:<reward>\tAR:<avg_reward|n/a>\tBR<level>:<best_avg|n/a>\tE:<epsilon|n/a>\tS:<0/1>\tAS:<avg_success|n/a>\t<components>`
 
-- `AR`, `BR`, `AS` are shown as `n/a` until the minimum stats gate is met (`100` episodes).
+- `AR`, `BR<level>`, `AS` are level-scoped and shown as `n/a` until the minimum stats gate is met (`100` episodes) for that level.
 - Reward components are appended as one space-separated blob (for Vroom: `W L P C S`).

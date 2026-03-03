@@ -43,6 +43,17 @@ def resolve_show_game(show_game_override: bool | None, default_value: bool) -> b
     return bool(show_game_override)
 
 
+def resolve_play_level(
+    *,
+    level: int | None,
+    min_level: int,
+    max_level: int,
+    default_level: int = 3,
+) -> int:
+    candidate = int(default_level if level is None else level)
+    return max(int(min_level), min(int(candidate), int(max_level)))
+
+
 def validate_level_settings(
     *,
     min_level: int,

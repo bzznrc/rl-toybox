@@ -9,11 +9,11 @@ from games.snake.env import SnakeEnv
 from games.spec_types import GameSpec
 
 
-def make_env(mode: str, render: bool):
-    return SnakeEnv(mode=mode, render=render)
+def make_env(mode: str, render: bool, level: int | None = None):
+    return SnakeEnv(mode=mode, render=render, level=level)
 
 
-RUN_NAME = config.MODEL_SUBDIR
+RUN_NAME = "_".join(str(size) for size in config.HIDDEN_DIMENSIONS)
 
 SPEC = GameSpec(
     game_id="snake",
@@ -37,11 +37,13 @@ SPEC = GameSpec(
             eps_bump_cap=config.EPS_BUMP_CAP,
             bump_cooldown_steps=config.EPS_BUMP_COOLDOWN_STEPS,
         ),
-        "use_gpu": False,
+        "use_gpu": config.USE_GPU,
     },
     train_config={
         **OFF_POLICY_TRAIN_DEFAULTS,
         "max_steps": config.MAX_TRAINING_STEPS,
         "checkpoint_every_steps": config.CHECKPOINT_EVERY_STEPS,
+        "reward_window": config.REWARD_ROLLING_WINDOW,
+        "min_episodes_for_stats": config.REWARD_ROLLING_WINDOW,
     },
 )

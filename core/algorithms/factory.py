@@ -23,10 +23,14 @@ def build_algorithm(
     if algo_key == "dqn":
         if not isinstance(action_space, Discrete):
             raise TypeError("DQN requires Discrete action space.")
+        config_data = dict(algo_config)
+        # Centralize update cadence in the off-policy runner.
+        config_data.pop("learn_start_steps", None)
+        config_data.pop("train_every_steps", None)
         config = DQNConfig(
             obs_dim=int(obs_dim),
             action_dim=int(action_space.n),
-            **dict(algo_config),
+            **config_data,
         )
         return DQNAlgorithm(config)
 

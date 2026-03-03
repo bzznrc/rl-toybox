@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 import random
 import time
@@ -24,12 +24,12 @@ from core.arcade_style import (
     COLOR_P4_PURPLE,
     COLOR_SLATE_GRAY,
     COLOR_SOFT_WHITE,
-    DEFAULT_BOTTOM_BAR_HEIGHT,
-    DEFAULT_GRID_COLUMNS,
-    DEFAULT_GRID_ROWS,
-    DEFAULT_TILE_SIZE,
-    screen_height,
-    screen_width,
+)
+from core.curriculum import (
+    ThreeLevelCurriculum,
+    advance_curriculum,
+    build_curriculum_config,
+    validate_curriculum_level_settings,
 )
 from core.envs.base import Env
 from core.io_schema import (
@@ -47,11 +47,19 @@ from core.primitives import (
     resolve_circle_collisions,
     status_icon_size,
 )
+from core.rewards import RewardBreakdown
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
+from core.utils import resolve_play_level
 from games.vroom.config import (
     ACTION_NAMES as VROOM_ACTION_NAMES,
     ACT_DIM as VROOM_ACT_DIM,
+    BB_HEIGHT,
+    CURRICULUM_PROMOTION,
+    FPS,
+    LEVEL_SETTINGS,
     INPUT_FEATURE_NAMES as VROOM_INPUT_FEATURE_NAMES,
+    MAX_LEVEL,
+    MIN_LEVEL,
     OBS_DIM as VROOM_OBS_DIM,
     PENALTY_COLLISION,
     PENALTY_LOSE,
@@ -59,19 +67,20 @@ from games.vroom.config import (
     PROGRESS_CLIP,
     PROGRESS_SCALE,
     REWARD_WIN,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    TILE_SIZE,
+    TRAINING_FPS,
+    WINDOW_TITLE,
 )
 from games.vroom.trackgen import TrackGenConfig, generate_track
 
 
-TILE_SIZE = DEFAULT_TILE_SIZE
-GRID_WIDTH = DEFAULT_GRID_COLUMNS
-GRID_HEIGHT = DEFAULT_GRID_ROWS
-BB_HEIGHT = DEFAULT_BOTTOM_BAR_HEIGHT
-SCREEN_WIDTH = screen_width(GRID_WIDTH, TILE_SIZE)
-SCREEN_HEIGHT = screen_height(GRID_HEIGHT, TILE_SIZE, BB_HEIGHT)
-FPS = 60
-TRAINING_FPS = 0
-WINDOW_TITLE = "Vroom"
+validate_curriculum_level_settings(
+    min_level=MIN_LEVEL,
+    max_level=MAX_LEVEL,
+    level_settings=LEVEL_SETTINGS,
+)
 
 
 @dataclass
@@ -105,9 +114,18 @@ class VroomEnv(Env):
     ACTION_RIGHT_THROTTLE = 5
 
     NUM_CARS = 4
-    TOTAL_RACES = 10
+    TRAINING_TOTAL_RACES = 1
+    HUMAN_TOTAL_RACES = 10
+    REWARD_COMPONENT_ORDER = ("W", "L", "P", "C", "S")
+    REWARD_COMPONENT_KEY_TO_CODE = {
+        "outcome.reward_win": "W",
+        "outcome.penalty_lose": "L",
+        "progress.shape": "P",
+        "event.penalty_collision": "C",
+        "step.penalty_step": "S",
+    }
 
-    def __init__(self, mode: str = "train", render: bool = False) -> None:
+    def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
         self.mode = str(mode)
         self.show_game = bool(render)
         self.frame_clock = ArcadeFrameClock()
@@ -214,9 +232,29 @@ class VroomEnv(Env):
         self.player_index = 0
         self.winner_index: int | None = None
         self.last_race_winner: int | None = None
-        self.total_races = int(self.TOTAL_RACES)
+        self.total_races = int(self._resolve_total_races())
         self.current_race = 1
         self.win_history: list[int | None] = []
+        self.num_cars = int(self.NUM_CARS)
+        self.opponent_speed_cap = 1.0
+        self.track_obstacle_clusters = int(self.track_config.obstacle_clusters)
+        curriculum_config = build_curriculum_config(
+            min_level=int(MIN_LEVEL),
+            max_level=int(MAX_LEVEL),
+            promotion_settings=CURRICULUM_PROMOTION,
+        )
+        self._curriculum = (
+            ThreeLevelCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
+            if self.mode == "train"
+            else None
+        )
+        self._current_level = (
+            int(self._curriculum.get_level())
+            if self._curriculum is not None
+            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=3)
+        )
+        self._last_episode_level = int(self._current_level)
+        self._last_episode_success = 0
 
         self.steps = 0
         self.done = False
@@ -230,7 +268,20 @@ class VroomEnv(Env):
         self._force_zero_deltas = False
         self._prev_progress_potential = 0.0
         self._prev_player_in_contact = False
+        self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
+        self._apply_level_settings(int(self._current_level))
         self.reset()
+
+    def _resolve_total_races(self) -> int:
+        if self.mode == "human":
+            return int(self.HUMAN_TOTAL_RACES)
+        return int(self.TRAINING_TOTAL_RACES)
+
+    def _apply_level_settings(self, level: int) -> None:
+        settings = LEVEL_SETTINGS.get(int(level), LEVEL_SETTINGS[int(MIN_LEVEL)])
+        self.num_cars = max(1, min(int(settings["num_cars"]), len(self.player_color_pairs)))
+        self.opponent_speed_cap = self._clamp(float(settings["opponent_speed_cap"]), 0.0, 1.0)
+        self.track_obstacle_clusters = max(0, int(settings["obstacle_clusters"]))
 
     @staticmethod
     def _clamp(value: float, low: float, high: float) -> float:
@@ -252,11 +303,12 @@ class VroomEnv(Env):
         return math.hypot(x2 - x1, y2 - y1)
 
     def _generate_track(self, seed: int) -> None:
+        track_config = replace(self.track_config, obstacle_clusters=int(self.track_obstacle_clusters))
         track = generate_track(
             seed=int(seed),
             width=int(SCREEN_WIDTH),
             height=int(self.track_bottom),
-            config=self.track_config,
+            config=track_config,
             build_texture=self.show_game,
         )
         self.track_centerline = list(track["centerline"])  # type: ignore[arg-type]
@@ -424,7 +476,13 @@ class VroomEnv(Env):
         index_gap = max(6, int(self.car_size * 0.30))
 
         cars: list[RaceCar] = []
-        lane_offsets = (-1.5, -0.5, 0.5, 1.5)
+        lane_offsets_by_count: dict[int, tuple[float, ...]] = {
+            1: (0.0,),
+            2: (-0.5, 0.5),
+            3: (-1.0, 0.0, 1.0),
+            4: (-1.5, -0.5, 0.5, 1.5),
+        }
+        lane_offsets = lane_offsets_by_count.get(int(self.num_cars), lane_offsets_by_count[4])
         base_idx = (self.start_index - index_gap) % max(1, self.track_count)
         max_jump = max(1, min(self.track_count // 4, 70))
         spacing_scales = (1.0, 0.9, 0.8, 0.7, 0.6)
@@ -462,7 +520,7 @@ class VroomEnv(Env):
         tx, ty = self.track_tangents[spawn_idx]
         nx, ny = -ty, tx
         heading = math.degrees(math.atan2(ty, tx))
-        for idx in range(self.NUM_CARS):
+        for idx in range(int(self.num_cars)):
             desired_lateral = resolved_offsets[idx % len(resolved_offsets)]
             x = cx + nx * desired_lateral
             y = cy + ny * desired_lateral
@@ -493,7 +551,14 @@ class VroomEnv(Env):
         lateral_speed = car.vx * side_x + car.vy * side_y
         return forward_x, forward_y, forward_speed, lateral_speed
 
-    def _apply_car_controls(self, car: RaceCar, steer: float, throttle: float) -> None:
+    def _apply_car_controls(
+        self,
+        car: RaceCar,
+        steer: float,
+        throttle: float,
+        *,
+        max_forward_speed: float | None = None,
+    ) -> None:
         _, _, forward_speed, lateral_speed = self._project_to_car_frame(car)
         speed_ratio = min(1.0, abs(forward_speed) / max(1e-6, self.max_speed))
         throttle_load = max(0.0, float(throttle))
@@ -515,7 +580,8 @@ class VroomEnv(Env):
         forward_speed += float(throttle) * self.accel_force * accel_scale
         if throttle < 0.0:
             forward_speed += float(throttle) * self.brake_force * accel_scale
-        forward_speed = self._clamp(forward_speed, -self.max_reverse_speed, self.max_speed)
+        allowed_forward_speed = float(self.max_speed if max_forward_speed is None else max_forward_speed)
+        forward_speed = self._clamp(forward_speed, -self.max_reverse_speed, allowed_forward_speed)
         lateral_speed *= self.lateral_grip
 
         car.vx = forward_x * forward_speed + side_x * lateral_speed
@@ -717,18 +783,6 @@ class VroomEnv(Env):
                 if self.winner_index is None:
                     self.winner_index = idx
 
-    def _leader_index(self) -> int | None:
-        if not self.cars:
-            return None
-        best_idx = 0
-        best_key = (self.cars[0].lap_progress, float(self.cars[0].track_index))
-        for idx, car in enumerate(self.cars[1:], start=1):
-            key = (car.lap_progress, float(car.track_index))
-            if key > best_key:
-                best_key = key
-                best_idx = idx
-        return int(best_idx)
-
     def _player_progress_potential(self) -> float:
         if not self.cars or self.track_count <= 0:
             return 0.0
@@ -773,7 +827,7 @@ class VroomEnv(Env):
         obstacle_count = int(len(self.obstacles))
         if obstacle_count <= 0:
             return
-        for car_idx in range(self.NUM_CARS):
+        for car_idx in range(int(self.num_cars)):
             if car_idx == self.player_index:
                 continue
             for obs_idx in range(obstacle_count):
@@ -863,9 +917,11 @@ class VroomEnv(Env):
         for idx, car in enumerate(self.cars):
             if idx == self.player_index:
                 steer, throttle = self._player_controls_from_action(action_idx)
+                allowed_speed = float(self.max_speed)
             else:
                 steer, throttle = self._ai_control_for_car(idx, car)
-            self._apply_car_controls(car, steer, throttle)
+                allowed_speed = float(self.max_speed) * float(self.opponent_speed_cap)
+            self._apply_car_controls(car, steer, throttle, max_forward_speed=allowed_speed)
 
         for car in self.cars:
             car.x += car.vx
@@ -895,6 +951,8 @@ class VroomEnv(Env):
 
     def _nearest_opponent(self, player: RaceCar) -> RaceCar:
         opponents = [car for idx, car in enumerate(self.cars) if idx != self.player_index]
+        if not opponents:
+            return player
         return min(opponents, key=lambda other: self._distance(player.x, player.y, other.x, other.y))
 
     def _compute_obs(self, *, zero_deltas: bool = False) -> np.ndarray:
@@ -975,11 +1033,13 @@ class VroomEnv(Env):
         return obs
 
     def reset(self) -> np.ndarray:
+        self._apply_level_settings(int(self._current_level))
         self.current_race = 1
         self.win_history = []
         self.last_race_winner = None
         self.player_index = 0
         self.done = False
+        self._episode_reward_components.reset()
         self.last_action_index = self.ACTION_COAST
         self._prev_self_lat_offset = 0.0
         self._prev_self_fwd_speed = 0.0
@@ -988,7 +1048,12 @@ class VroomEnv(Env):
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         if self.done:
-            return self._last_obs, 0.0, True, {"win": self.last_race_winner == self.player_index}
+            return self._last_obs, 0.0, True, {
+                "win": self.last_race_winner == self.player_index,
+                "success": int(self._last_episode_success),
+                "level": int(self._last_episode_level),
+                "reward_components": self._episode_reward_components.totals(),
+            }
 
         self.window_controller.poll_events_or_raise()
         if self.mode == "human":
@@ -1011,6 +1076,8 @@ class VroomEnv(Env):
             "outcome.reward_win": 0.0,
             "outcome.penalty_lose": 0.0,
         }
+        episode_level = int(self._current_level)
+        episode_success = 0
         if self.mode != "human":
             reward += float(PENALTY_STEP)
             reward_breakdown["step.penalty_step"] = float(PENALTY_STEP)
@@ -1035,29 +1102,48 @@ class VroomEnv(Env):
                 reward_breakdown["event.penalty_collision"] = float(PENALTY_COLLISION)
             self._prev_player_in_contact = bool(player.in_contact)
 
-        race_finished = (self.winner_index is not None) or (self.steps >= self.max_steps)
+        timed_out = bool((self.winner_index is None) and (self.steps >= self.max_steps))
+        race_finished = bool((self.winner_index is not None) or timed_out)
         if race_finished:
-            race_winner = self.winner_index if self.winner_index is not None else self._leader_index()
+            race_winner = int(self.winner_index) if self.winner_index is not None else None
             if self.mode != "human":
-                if race_winner == self.player_index:
+                player_won = race_winner == self.player_index
+                if player_won:
                     reward += float(REWARD_WIN)
                     reward_breakdown["outcome.reward_win"] = float(REWARD_WIN)
                 else:
                     reward += float(PENALTY_LOSE)
                     reward_breakdown["outcome.penalty_lose"] = float(PENALTY_LOSE)
+                episode_success = 1 if player_won else 0
             self._finalize_race(race_winner)
+        if self.mode != "human":
+            self._episode_reward_components.add_from_mapping(reward_breakdown, self.REWARD_COMPONENT_KEY_TO_CODE)
 
         self.render()
         self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
 
         info = {
             "win": bool(self.last_race_winner == self.player_index) if race_finished else False,
+            "success": int(episode_success) if race_finished else 0,
             "winner_index": -1 if self.last_race_winner is None else int(self.last_race_winner),
             "race": int(min(self.current_race, self.total_races)),
             "races_finished": int(len(self.win_history)),
             "races_total": int(self.total_races),
+            "level": int(episode_level),
+            "level_changed": False,
             "reward_breakdown": reward_breakdown if self.mode != "human" else {},
         }
+        if self.done:
+            info["reward_components"] = self._episode_reward_components.totals()
+            self._last_episode_level = int(episode_level)
+            self._last_episode_success = int(episode_success)
+            self._current_level, level_changed = advance_curriculum(
+                self._curriculum,
+                success=int(episode_success),
+                current_level=int(self._current_level),
+                apply_level=self._apply_level_settings,
+            )
+            info["level_changed"] = bool(level_changed)
         return self._compute_obs(), float(reward), bool(self.done), info
 
     def _draw_track(self) -> None:

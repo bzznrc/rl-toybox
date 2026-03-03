@@ -19,19 +19,29 @@ from core.arcade_style import (
     COLOR_NEAR_BLACK,
     COLOR_SLATE_GRAY,
 )
+from core.curriculum import (
+    ThreeLevelCurriculum,
+    advance_curriculum,
+    build_curriculum_config,
+    validate_curriculum_level_settings,
+)
 from core.envs.base import Env
 from core.io_schema import clip_signed, clip_unit, normalize_last_action, ordered_feature_vector, signed_potential_shaping
 from core.primitives import draw_two_tone_tile, spawn_connected_random_walk_shapes
+from core.rewards import RewardBreakdown
 from games.snake.config import (
     ACTION_NAMES as SNAKE_ACTION_NAMES,
     ACT_DIM as SNAKE_ACT_DIM,
     BB_HEIGHT,
     CELL_INSET,
+    CURRICULUM_PROMOTION,
     FPS,
+    LEVEL_SETTINGS,
     MAX_OBSTACLE_SECTIONS,
+    MAX_LEVEL,
     MIN_OBSTACLE_SECTIONS,
+    MIN_LEVEL,
     NN_CONTROL_MARKER_SIZE_PX,
-    NUM_OBSTACLES,
     OBS_DIM as SNAKE_OBS_DIM,
     INPUT_FEATURE_NAMES as SNAKE_INPUT_FEATURE_NAMES,
     PENALTY_LOSE,
@@ -47,6 +57,14 @@ from games.snake.config import (
     WRAP_AROUND,
 )
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
+from core.utils import resolve_play_level
+
+
+validate_curriculum_level_settings(
+    min_level=MIN_LEVEL,
+    max_level=MAX_LEVEL,
+    level_settings=LEVEL_SETTINGS,
+)
 
 
 class Direction(Enum):
@@ -86,6 +104,7 @@ class BaseSnakeGame:
         self.score = 0
         self.food = Point(0, 0)
         self.obstacles: list[Point] = []
+        self.num_obstacles = int(LEVEL_SETTINGS[int(MIN_LEVEL)]["num_obstacles"])
         self.frame_iteration = 0
         self.last_action_index = 0
         self.steps_since_food = 0
@@ -144,8 +163,11 @@ class BaseSnakeGame:
 
     def _place_obstacles(self) -> None:
         self.obstacles = []
+        shape_count = max(0, int(self.num_obstacles))
+        if shape_count <= 0:
+            return
         shapes = spawn_connected_random_walk_shapes(
-            shape_count=NUM_OBSTACLES,
+            shape_count=shape_count,
             min_sections=MIN_OBSTACLE_SECTIONS,
             max_sections=MAX_OBSTACLE_SECTIONS,
             sample_start_fn=self._sample_valid_obstacle_start,
@@ -367,10 +389,13 @@ class TrainingSnakeGame(BaseSnakeGame):
 
     def __init__(self, show_game: bool = True) -> None:
         super().__init__(show_game=show_game)
+        self.timeout_steps_per_length = 100
+        self.foods_eaten = 0
         self.last_reward_breakdown: dict[str, float] = {}
 
     def reset(self) -> None:
         super().reset()
+        self.foods_eaten = 0
         self.last_reward_breakdown = {
             "step.penalty_step": 0.0,
             "progress.shape": 0.0,
@@ -477,7 +502,8 @@ class TrainingSnakeGame(BaseSnakeGame):
             "event.reward_food": 0.0,
             "outcome.penalty_lose": 0.0,
         }
-        if self._has_collision() or self.frame_iteration > 100 * len(self.snake):
+        timeout_limit = max(1, int(self.timeout_steps_per_length) * max(1, len(self.snake)))
+        if self._has_collision() or self.frame_iteration > timeout_limit:
             reward += float(PENALTY_LOSE)
             reward_breakdown["outcome.penalty_lose"] = float(PENALTY_LOSE)
             self.last_reward_breakdown = reward_breakdown
@@ -497,6 +523,7 @@ class TrainingSnakeGame(BaseSnakeGame):
 
         if self.head == self.food:
             self.score += 1
+            self.foods_eaten += 1
             reward += float(REWARD_FOOD)
             reward_breakdown["event.reward_food"] = float(REWARD_FOOD)
             self._place_food()
@@ -586,13 +613,48 @@ class SnakeEnv(Env):
     ACTION_NAMES = tuple(SNAKE_ACTION_NAMES)
     OBS_DIM = int(SNAKE_OBS_DIM)
     ACT_DIM = int(SNAKE_ACT_DIM)
+    REWARD_COMPONENT_ORDER = ("F", "L", "P", "S")
+    REWARD_COMPONENT_KEY_TO_CODE = {
+        "event.reward_food": "F",
+        "outcome.penalty_lose": "L",
+        "progress.shape": "P",
+        "step.penalty_step": "S",
+    }
 
-    def __init__(self, mode: str = "train", render: bool = False) -> None:
+    def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
         self.mode = str(mode)
+        curriculum_config = build_curriculum_config(
+            min_level=int(MIN_LEVEL),
+            max_level=int(MAX_LEVEL),
+            promotion_settings=CURRICULUM_PROMOTION,
+        )
+        self._curriculum = (
+            ThreeLevelCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
+            if self.mode == "train"
+            else None
+        )
+        self._current_level = (
+            int(self._curriculum.get_level())
+            if self._curriculum is not None
+            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=3)
+        )
+        self._last_episode_level = int(self._current_level)
+        self._last_episode_success = 0
+        self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
         if self.mode == "human":
             self.game = HumanSnakeGame(show_game=bool(render))
+            self._apply_level_settings(int(self._current_level))
         else:
             self.game = TrainingSnakeGame(show_game=bool(render))
+            self._apply_level_settings(int(self._current_level))
+
+    def _apply_level_settings(self, level: int) -> None:
+        settings = LEVEL_SETTINGS.get(int(level), LEVEL_SETTINGS[int(MIN_LEVEL)])
+        if not isinstance(self.game, BaseSnakeGame):
+            return
+        self.game.num_obstacles = max(0, int(settings["num_obstacles"]))
+        if isinstance(self.game, TrainingSnakeGame):
+            self.game.timeout_steps_per_length = max(1, int(settings["timeout_steps_per_length"]))
 
     @staticmethod
     def _action_to_one_hot(action_idx: int) -> list[int]:
@@ -604,6 +666,8 @@ class SnakeEnv(Env):
     def _state_vector(self) -> np.ndarray:
         if hasattr(self.game, "get_state_vector"):
             values = self.game.get_state_vector()
+        elif self.mode == "human":
+            values = np.zeros((self.OBS_DIM,), dtype=np.float32)
         else:
             values = TrainingSnakeGame.get_state_vector(self.game)  # type: ignore[misc]
         obs = np.asarray(values, dtype=np.float32)
@@ -614,22 +678,53 @@ class SnakeEnv(Env):
         return obs
 
     def reset(self) -> np.ndarray:
+        self._apply_level_settings(int(self._current_level))
         self.game.reset()
+        self._episode_reward_components.reset()
         return self._state_vector()
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         if self.mode == "human":
             done, score = self.game.play_step()
             obs = self._state_vector()
-            return obs, 0.0, bool(done), {"score": int(score), "win": False}
+            info: dict[str, object] = {
+                "score": int(score),
+                "win": False,
+                "level": int(self._current_level),
+                "success": 0,
+            }
+            if done:
+                info["reward_components"] = self._episode_reward_components.totals()
+            return obs, 0.0, bool(done), info
 
         reward, done, score = self.game.play_step(self._action_to_one_hot(int(action)))
         obs = self._state_vector()
-        return obs, float(reward), bool(done), {
+        step_breakdown = dict(getattr(self.game, "last_reward_breakdown", {}))
+        self._episode_reward_components.add_from_mapping(step_breakdown, self.REWARD_COMPONENT_KEY_TO_CODE)
+
+        episode_level = int(self._current_level)
+        info: dict[str, object] = {
             "score": int(score),
             "win": False,
-            "reward_breakdown": dict(getattr(self.game, "last_reward_breakdown", {})),
+            "level": int(episode_level),
+            "success": 0,
+            "level_changed": False,
+            "reward_breakdown": step_breakdown,
         }
+        if done:
+            success = 1 if int(score) > 0 else 0
+            info["success"] = int(success)
+            info["reward_components"] = self._episode_reward_components.totals()
+            self._last_episode_level = int(episode_level)
+            self._last_episode_success = int(success)
+            self._current_level, level_changed = advance_curriculum(
+                self._curriculum,
+                success=int(success),
+                current_level=int(self._current_level),
+                apply_level=self._apply_level_settings,
+            )
+            info["level_changed"] = bool(level_changed)
+        return obs, float(reward), bool(done), info
 
     def render(self) -> None:
         # Snake self-renders inside play_step when show_game is enabled.

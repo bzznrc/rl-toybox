@@ -54,8 +54,26 @@ Ray semantics:
 
 - Each race is exactly `1` lap.
 - New random smooth closed-loop track at every reset/new race.
-- `4` cars on the grid; player car is teal.
 - If any car completes a lap, race ends and next reset starts a new one.
+- Episode race-count depends on mode:
+  - `train` / `eval`: `1` race per episode.
+  - `human` (`rl-toybox-play-user`): `10` races per set.
+
+## Curriculum (Train)
+
+- Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
+- Promotion parameters are configured in `games/vroom/config.py` via `CURRICULUM_PROMOTION`:
+  - `min_episodes_per_level`
+  - `check_window`
+  - `success_threshold`
+  - `consecutive_checks_required`
+- Vroom level settings:
+  - Level 1: `1` car (player only), no obstacles
+  - Level 2: `2` cars, opponent speed cap `0.75x`, no obstacles
+  - Level 3: `4` cars, full opponent speed, obstacle clusters enabled
+
+Success (per episode): `1` if player wins the race; else `0`.
+Average Success (`AS`) is the rolling mean over the curriculum `check_window`.
 
 ## Physics
 
@@ -84,16 +102,16 @@ rl-toybox-train --game vroom
 
 Key hyperparameters:
 
-- Train: `max_steps=2_000_000`, `learn_start_steps=20_000`, `train_every_steps=1`, `updates_per_train=1`, `checkpoint_every_steps=100_000`
+- Train: `max_steps=2_000_000`, `train_after_steps=20_000`, `update_every_steps=4`, `updates_per_step=1`, `checkpoint_every_steps=100_000`
 - Algo: `learning_rate=3e-4`, `gamma=0.99`, `batch_size=128`, `replay_size=200_000`, `target_sync_every_steps=2_000`, `grad_clip_norm=10.0`
 - DQN mode: `double_dqn=False`, `dueling=False`, `prioritized_replay=False`
-- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=700_000`
-- Plateau bump/cooldown: `avg_window=100`, `patience=200`, `min_improvement=0.10`, `eps_bump_cap=0.20`, `cooldown_steps=300_000`
+- Exploration: `eps_start=1.0`, `eps_min=0.05`, `eps_decay_steps=1_000_000`
+- Plateau bump/cooldown: `avg_window=100`, `patience=200`, `min_improvement=0.10`, `eps_bump_cap=0.40`, `cooldown_steps=500_000`
 - Stats/saving gate: rolling avg/best tracking, plateau checks, checkpoint saves, and best-model saves start after `100` completed episodes.
 
 Exploration uses multiplicative epsilon decay per env step: `eps = max(eps_min, eps * eps_decay)`,
 with `eps_decay = (eps_min / eps_start) ** (1.0 / eps_decay_steps)`.
-On plateau, if `eps < 0.20`, bump `eps` to `0.20` and start cooldown for `300_000` steps.
+On plateau, if `eps < 0.40`, bump `eps` to `0.40` and start cooldown for `500_000` steps.
 During cooldown, additional bumps are blocked, but epsilon continues normal multiplicative decay.
 This keeps exploration from snapping straight back to the minimum.
 
@@ -108,3 +126,12 @@ Play user:
 ```bash
 rl-toybox-play-user --game vroom
 ```
+
+## Episode Log Fields
+
+Training episode logs use compact tab-separated fields:
+
+`Ep:<ep>\tLv:<level>\tLen:<len>\tR:<reward>\tAR:<avg_reward|n/a>\tBR:<best_avg|n/a>\tE:<epsilon|n/a>\tS:<0/1>\tAS:<avg_success|n/a>\t<components>`
+
+- `AR`, `BR`, `AS` are shown as `n/a` until the minimum stats gate is met (`100` episodes).
+- Reward components are appended as one space-separated blob (for Vroom: `W L P C S`).

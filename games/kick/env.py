@@ -1,4 +1,4 @@
-"""Simple 11v11 football environment with human and RL control modes."""
+"""Football environment with human and RL control modes."""
 
 from __future__ import annotations
 
@@ -21,6 +21,12 @@ from core.arcade_style import (
     COLOR_SLATE_GRAY,
     COLOR_SOFT_WHITE,
 )
+from core.curriculum import (
+    ThreeLevelCurriculum,
+    advance_curriculum,
+    build_curriculum_config,
+    validate_curriculum_level_settings,
+)
 from core.envs.base import Env
 from core.io_schema import clip_signed, clip_unit, normalize_last_action, ordered_feature_vector, signed_potential_shaping
 from core.primitives import (
@@ -32,16 +38,22 @@ from core.primitives import (
     resolve_circle_collisions,
     status_icon_size,
 )
+from core.rewards import RewardBreakdown
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
+from core.utils import resolve_play_level
 from games.kick.config import (
     ACTION_NAMES as KICK_ACTION_NAMES,
     ACT_DIM as KICK_ACT_DIM,
     BALL_RADIUS_SCALE,
     BB_HEIGHT,
     CELL_INSET,
+    CURRICULUM_PROMOTION,
     FPS,
     GAME_SPEED_SCALE,
     INPUT_FEATURE_NAMES as KICK_INPUT_FEATURE_NAMES,
+    LEVEL_SETTINGS,
+    MAX_LEVEL,
+    MIN_LEVEL,
     OBS_DIM as KICK_OBS_DIM,
     PHYSICS_DT,
     PENALTY_AREA_DEPTH_RATIO,
@@ -69,6 +81,13 @@ from games.kick.config import (
 )
 
 
+validate_curriculum_level_settings(
+    min_level=MIN_LEVEL,
+    max_level=MAX_LEVEL,
+    level_settings=LEVEL_SETTINGS,
+)
+
+
 @dataclass
 class KickPlayer:
     team: str
@@ -88,7 +107,7 @@ class KickPlayer:
 
 
 class KickEnv(Env):
-    """11v11 top-down football environment.
+    """Top-down football environment with curriculum-sized teams.
 
     Human controls:
     - Move: WASD
@@ -141,10 +160,39 @@ class KickEnv(Env):
     }
     OBS_NEAREST_PLAYERS = 2
     MATCH_DURATION_SECONDS = 60.0
+    REWARD_COMPONENT_ORDER = ("G", "C", "P", "O", "K", "S")
+    REWARD_COMPONENT_KEY_TO_CODE = {
+        "outcome.reward_score": "G",
+        "outcome.penalty_concede": "C",
+        "progress.shape": "P",
+        "event.reward_possession_gain": "O",
+        "event.penalty_possession_loss": "O",
+        "event.penalty_kick_cost": "K",
+        "step.penalty_step": "S",
+    }
 
-    def __init__(self, mode: str = "train", render: bool = False) -> None:
+    def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
         self.mode = str(mode)
         self.show_game = bool(render)
+        curriculum_config = build_curriculum_config(
+            min_level=int(MIN_LEVEL),
+            max_level=int(MAX_LEVEL),
+            promotion_settings=CURRICULUM_PROMOTION,
+        )
+        self._curriculum = (
+            ThreeLevelCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
+            if self.mode == "train"
+            else None
+        )
+        self._current_level = (
+            int(self._curriculum.get_level())
+            if self._curriculum is not None
+            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=3)
+        )
+        self._last_episode_level = int(self._current_level)
+        self._last_episode_success = 0
+        self._active_roles = list(self.ROLE_ORDER)
+        self._players_per_team = len(self._active_roles)
         self.frame_clock = ArcadeFrameClock()
         self.window_controller = ArcadeWindowController(
             SCREEN_WIDTH,
@@ -192,7 +240,7 @@ class KickEnv(Env):
         self.all_players: list[KickPlayer] = []
         self.left_goalkeeper: KickPlayer | None = None
         self.right_goalkeeper: KickPlayer | None = None
-        self.controlled_index = 9
+        self.controlled_index = 0
 
         self.ball_x = 0.0
         self.ball_y = 0.0
@@ -214,18 +262,49 @@ class KickEnv(Env):
         self._prev_tab_down = False
         self._prev_left_mouse_down = False
         self._human_shot_hold_start: float | None = None
+        self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
 
-        self._build_teams()
+        self._apply_level_change(int(self._current_level))
         self.reset()
 
+    def _default_controlled_index(self) -> int:
+        if not self.left_players:
+            return 0
+        for preferred_role in ("ST1", "ST2", "LCM", "RCM", "GK"):
+            for idx, player in enumerate(self.left_players):
+                if str(player.role) == preferred_role:
+                    return int(idx)
+        return max(0, len(self.left_players) - 1)
+
+    def _apply_level_settings(self, level: int) -> None:
+        settings = LEVEL_SETTINGS.get(int(level), LEVEL_SETTINGS[int(MIN_LEVEL)])
+        active_roles = settings["active_roles"]
+        normalized_roles = [str(role) for role in active_roles if str(role) in self.ROLE_ORDER]
+        if "GK" not in normalized_roles:
+            normalized_roles.insert(0, "GK")
+        deduped_roles: list[str] = []
+        for role in normalized_roles:
+            if role not in deduped_roles:
+                deduped_roles.append(role)
+        players_per_team = max(1, int(settings["players_per_team"]))
+        self._current_level = int(level)
+        self._players_per_team = max(1, min(players_per_team, len(self.ROLE_ORDER)))
+        self._active_roles = list(deduped_roles[: self._players_per_team])
+
+    def _apply_level_change(self, level: int) -> None:
+        self._apply_level_settings(int(level))
+        self._build_teams()
+
     def _build_teams(self) -> None:
-        self.left_players = self._team_from_442(self.TEAM_LEFT)
-        self.right_players = self._team_from_442(self.TEAM_RIGHT)
+        roles = list(self._active_roles[: max(1, int(self._players_per_team))])
+        self.left_players = self._team_for_roles(self.TEAM_LEFT, roles)
+        self.right_players = self._team_for_roles(self.TEAM_RIGHT, roles)
         self.all_players = [*self.left_players, *self.right_players]
         self.left_goalkeeper = self.left_players[0]
         self.right_goalkeeper = self.right_players[0]
+        self.controlled_index = int(self._default_controlled_index())
 
-    def _team_from_442(self, team: str) -> list[KickPlayer]:
+    def _team_for_roles(self, team: str, roles: list[str]) -> list[KickPlayer]:
         y4 = (
             self.pitch_top + self.pitch_height * 0.16,
             self.pitch_top + self.pitch_height * 0.38,
@@ -264,7 +343,7 @@ class KickEnv(Env):
         }
 
         players: list[KickPlayer] = []
-        for role in self.ROLE_ORDER:
+        for role in roles:
             px, py = placement[role]
             players.append(
                 KickPlayer(
@@ -926,6 +1005,16 @@ class KickEnv(Env):
                 self._set_ball_owner(keeper)
                 break
 
+    def _kickoff_starter(self, team: str) -> KickPlayer:
+        players = self.left_players if str(team) == self.TEAM_LEFT else self.right_players
+        if not players:
+            raise RuntimeError("Kickoff starter requested with no players")
+        for preferred_role in ("ST1", "ST2", "LCM", "RCM", "GK"):
+            for player in players:
+                if str(player.role) == preferred_role:
+                    return player
+        return players[-1]
+
     def _restart_kickoff(self, kickoff_team: str) -> None:
         for player in self.all_players:
             player.x = player.home_x
@@ -943,7 +1032,7 @@ class KickEnv(Env):
         self.ball_y = self.pitch_center_y
         self.ball_vx = 0.0
         self.ball_vy = 0.0
-        starter = self.left_players[9] if kickoff_team == self.TEAM_LEFT else self.right_players[9]
+        starter = self._kickoff_starter(kickoff_team)
         starter.x = self.ball_x - (TILE_SIZE * 0.6 if kickoff_team == self.TEAM_LEFT else -TILE_SIZE * 0.6)
         starter.y = self.ball_y
         starter.angle = 0.0 if kickoff_team == self.TEAM_LEFT else 180.0
@@ -1186,12 +1275,14 @@ class KickEnv(Env):
         return obs
 
     def reset(self) -> np.ndarray:
+        self._apply_level_change(int(self._current_level))
         self.left_score = 0
         self.right_score = 0
         self.steps = 0
         self.done = False
+        self._episode_reward_components.reset()
         self.freeze_frames = 0
-        self.controlled_index = 9
+        self.controlled_index = int(self._default_controlled_index())
         self._prev_tab_down = False
         self._prev_left_mouse_down = False
         self._human_shot_hold_start = None
@@ -1407,13 +1498,17 @@ class KickEnv(Env):
         if self.done:
             return self._obs(), 0.0, True, {
                 "win": bool(self.left_score > self.right_score),
+                "success": int(self._last_episode_success),
                 "score_left": int(self.left_score),
                 "score_right": int(self.right_score),
                 "time_left_ratio": float(self._remaining_time_ratio()),
                 "controlled_role": self._controlled_player().role,
+                "level": int(self._last_episode_level),
+                "reward_components": self._episode_reward_components.totals(),
                 "reward_breakdown": {},
             }
 
+        episode_level = int(self._current_level)
         action_idx = self.ACTION_STAY if self.mode == "human" else self._decode_action(action)
         parsed_action = action if self.mode != "human" else self.ACTION_STAY
         phi_prev = float(self._ball_progress_potential()) if self.mode != "human" else 0.0
@@ -1427,20 +1522,39 @@ class KickEnv(Env):
 
         if self.mode != "human":
             reward, reward_breakdown = self._score_reward(action_idx=action_idx, phi_prev=phi_prev, phi_next=phi_next)
+            self._episode_reward_components.add_from_mapping(
+                reward_breakdown,
+                self.REWARD_COMPONENT_KEY_TO_CODE,
+            )
         else:
             reward = 0.0
             reward_breakdown = {}
 
         done = bool(self.done)
         win = bool(done and self.left_score > self.right_score)
+        success = 1 if win else 0
         info = {
             "win": win,
+            "success": int(success) if done else 0,
             "score_left": int(self.left_score),
             "score_right": int(self.right_score),
             "time_left_ratio": float(self._remaining_time_ratio()),
             "controlled_role": self._controlled_player().role,
+            "level": int(episode_level),
+            "level_changed": False,
             "reward_breakdown": reward_breakdown,
         }
+        if done:
+            info["reward_components"] = self._episode_reward_components.totals()
+            self._last_episode_level = int(episode_level)
+            self._last_episode_success = int(success)
+            self._current_level, level_changed = advance_curriculum(
+                self._curriculum,
+                success=int(success),
+                current_level=int(self._current_level),
+                apply_level=self._apply_level_change,
+            )
+            info["level_changed"] = bool(level_changed)
         return self._obs(), float(reward), bool(done), info
 
     def close(self) -> None:

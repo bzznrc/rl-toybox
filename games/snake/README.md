@@ -2,6 +2,23 @@
 
 Grid Snake environment with obstacles.
 
+## Curriculum (Train)
+
+- Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
+- Promotion parameters are configured in `games/snake/config.py` via `CURRICULUM_PROMOTION`:
+  - `min_episodes_per_level`
+  - `check_window`
+  - `success_threshold`
+  - `consecutive_checks_required`
+- `WRAP_AROUND` is configured globally in `games/snake/config.py` (currently always enabled).
+- Snake level settings:
+  - Level 1: `0` obstacles, timeout `160 * snake_length`
+  - Level 2: `4` obstacles, timeout `130 * snake_length`
+  - Level 3: `8` obstacles, timeout `100 * snake_length`
+
+Success (per episode): `1` if at least one food was eaten, else `0`.
+Average Success (`AS`) is the rolling mean over the curriculum `check_window`.
+
 ## Controls (Human)
 
 - Move: `W/A/S/D`
@@ -73,3 +90,12 @@ Play user:
 ```bash
 rl-toybox-play-user --game snake
 ```
+
+## Episode Log Fields
+
+Training episode logs use compact tab-separated fields:
+
+`Ep:<ep>\tLv:<level>\tLen:<len>\tR:<reward>\tAR:<avg_reward|n/a>\tBR:<best_avg|n/a>\tE:<epsilon|n/a>\tS:<0/1>\tAS:<avg_success|n/a>\t<components>`
+
+- `AR`, `BR`, `AS` are shown as `n/a` until the minimum stats gate is met (`100` episodes).
+- Reward components are appended as one space-separated blob (for Snake: `F L P S`).

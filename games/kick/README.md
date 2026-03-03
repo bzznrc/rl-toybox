@@ -1,6 +1,6 @@
 # Kick
 
-11v11 football environment (Arcade-style top-down) with PPO-oriented discrete actions.
+Football environment (Arcade-style top-down) with PPO-oriented discrete actions.
 
 ## Algorithm / Network
 
@@ -83,6 +83,22 @@ Notes:
 
 The progress potential is based on normalized ball distance to the opponent goal center; moving the ball toward goal increases `Phi` and yields positive signed-ΔPhi shaping.
 
+## Curriculum (Train)
+
+- Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
+- Promotion parameters are configured in `games/kick/config.py` via `CURRICULUM_PROMOTION`:
+  - `min_episodes_per_level`
+  - `check_window`
+  - `success_threshold`
+  - `consecutive_checks_required`
+- Kick level settings:
+  - Level 1: `3v3`
+  - Level 2: `7v7`
+  - Level 3: `11v11`
+
+Success (per episode): `1` if left team scores more than it concedes, else `0`.
+Average Success (`AS`) is the rolling mean over the curriculum `check_window`.
+
 ## Training
 
 Default algo is PPO (categorical policy):
@@ -107,3 +123,12 @@ Play user:
 ```bash
 rl-toybox-play-user --game kick
 ```
+
+## Episode Log Fields
+
+Training episode logs use compact tab-separated fields:
+
+`Ep:<ep>\tLv:<level>\tLen:<len>\tR:<reward>\tAR:<avg_reward|n/a>\tBR:<best_avg|n/a>\tE:<epsilon|n/a>\tS:<0/1>\tAS:<avg_success|n/a>\t<components>`
+
+- `AR`, `BR`, `AS` are shown as `n/a` until the minimum stats gate is met (`100` episodes).
+- Reward components are appended as one space-separated blob (for Kick: `G C P O K S`).

@@ -7,7 +7,8 @@ from games.spec_types import GameSpec
 from games.stomp.env import StompEnv
 
 
-def make_env(mode: str, render: bool):
+def make_env(mode: str, render: bool, level: int | None = None):
+    del level
     return StompEnv(mode=mode, render=render)
 
 

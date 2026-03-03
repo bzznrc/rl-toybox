@@ -9,11 +9,11 @@ from games.off_policy_defaults import OFF_POLICY_TRAIN_DEFAULTS, make_exploratio
 from games.spec_types import GameSpec
 
 
-def make_env(mode: str, render: bool):
-    return BangEnv(mode=mode, render=render)
+def make_env(mode: str, render: bool, level: int | None = None):
+    return BangEnv(mode=mode, render=render, level=level)
 
 
-RUN_NAME = config.MODEL_SUBDIR
+RUN_NAME = "_".join(str(size) for size in config.HIDDEN_DIMENSIONS)
 
 SPEC = GameSpec(
     game_id="bang",
@@ -31,8 +31,6 @@ SPEC = GameSpec(
         "replay_size": config.REPLAY_BUFFER_SIZE,
         "target_sync_every": config.TARGET_SYNC_EVERY,
         "grad_clip_norm": config.GRAD_CLIP_NORM,
-        "learn_start_steps": config.LEARN_START_STEPS,
-        "train_every_steps": config.TRAIN_EVERY_STEPS,
         "exploration": make_exploration_config(
             config.EPSILON_START,
             config.EPSILON_MIN,
@@ -56,7 +54,9 @@ SPEC = GameSpec(
         "max_steps": config.TOTAL_TRAINING_STEPS,
         "train_after_steps": config.LEARN_START_STEPS,
         "update_every_steps": config.TRAIN_EVERY_STEPS,
-        "updates_per_step": config.GRADIENT_STEPS_PER_UPDATE,
+        "updates_per_step": config.UPDATES_PER_TRAIN,
         "checkpoint_every_steps": config.CHECKPOINT_EVERY_STEPS,
+        "reward_window": config.REWARD_ROLLING_WINDOW,
+        "min_episodes_for_stats": config.REWARD_ROLLING_WINDOW,
     },
 )

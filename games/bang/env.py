@@ -24,11 +24,11 @@ from core.arcade_style import (
     COLOR_SLATE_GRAY,
     COLOR_SOFT_WHITE,
 )
+from core.curriculum import ThreeLevelCurriculum, advance_curriculum, build_curriculum_config
 from core.envs.base import Env
 from core.io_schema import (
     clip_signed,
     clip_unit,
-    normalize_last_action,
     normalized_ray_first_hit,
     ordered_feature_vector,
     signed_potential_shaping,
@@ -39,6 +39,7 @@ from core.primitives import (
     draw_two_tone_tile,
     spawn_connected_random_walk_shapes,
 )
+from core.rewards import RewardBreakdown
 
 from games.bang.config import (
     ACTION_NAMES as BANG_ACTION_NAMES,
@@ -54,8 +55,10 @@ from games.bang.config import (
     AIM_TOLERANCE_DEGREES,
     BB_HEIGHT,
     CELL_INSET,
+    CURRICULUM_PROMOTION,
     ENEMY_ESCAPE_ANGLE_OFFSETS_DEGREES,
     ENEMY_ESCAPE_FOLLOW_FRAMES,
+    ENEMY_SHOT_ERROR_CHOICES,
     ENEMY_SPAWN_X_RATIO,
     EVENT_TIMER_NORMALIZATION_FRAMES,
     FPS,
@@ -88,7 +91,6 @@ from games.bang.config import (
     SCREEN_WIDTH,
     SHOOT_COOLDOWN_FRAMES,
     SPAWN_Y_OFFSET,
-    PLAY_OPPONENT_LEVEL,
     TILE_SIZE,
     TRAINING_FPS,
     WINDOW_TITLE,
@@ -105,7 +107,7 @@ from core.runtime import (
     rotate_degrees,
     square_obstacle_between_points,
 )
-from core.utils import env_int, validate_level_settings
+from core.utils import resolve_play_level, validate_level_settings
 
 
 ALL_PLAYER_ORDER = ("P1", "P2", "P3", "P4")
@@ -127,25 +129,6 @@ def _resolve_player_order(num_players: int) -> tuple[str, ...]:
 
 def _num_players_for_level(level: int) -> int:
     return int(LEVEL_SETTINGS[int(level)]["num_players"])
-
-
-def _level_for_num_players(num_players: int) -> int | None:
-    target_players = int(num_players)
-    for level in range(int(MIN_LEVEL), int(MAX_LEVEL) + 1):
-        if _num_players_for_level(level) == target_players:
-            return int(level)
-    return None
-
-
-def _resolve_play_level_from_env(default_level: int = PLAY_OPPONENT_LEVEL) -> int:
-    players_override = env_int("BANG_PLAYERS", 0)
-    if players_override in SUPPORTED_PLAYER_COUNTS:
-        level_for_players = _level_for_num_players(players_override)
-        if level_for_players is not None:
-            return level_for_players
-
-    level_override = env_int("BANG_PLAY_LEVEL", int(default_level))
-    return max(MIN_LEVEL, min(int(level_override), MAX_LEVEL))
 
 
 PLAYER_STYLES = {
@@ -202,6 +185,15 @@ SCRIPTED_TARGET_POLICY = {
 CONTROL_MODE_HUMAN = "human"
 CONTROL_MODE_SCRIPTED = "scripted"
 CONTROL_MODE_NN = "nn"
+HUMAN_ACTION_KEY_BINDINGS = {
+    ACTION_MOVE_UP: (arcade.key.W,),
+    ACTION_MOVE_DOWN: (arcade.key.S,),
+    ACTION_MOVE_LEFT: (arcade.key.A,),
+    ACTION_MOVE_RIGHT: (arcade.key.D,),
+    ACTION_AIM_LEFT: (arcade.key.LEFT,),
+    ACTION_AIM_RIGHT: (arcade.key.RIGHT,),
+    ACTION_SHOOT: (arcade.key.SPACE,),
+}
 
 
 @dataclass
@@ -582,7 +574,7 @@ class BaseGame:
 
         self.num_obstacles = settings["num_obstacles"]
         self.enemy_move_probability = settings["enemy_move_probability"]
-        self.enemy_shot_error_choices = settings["enemy_shot_error_choices"]
+        self.enemy_shot_error_choices = list(ENEMY_SHOT_ERROR_CHOICES)
         self.enemy_shoot_probability = settings["enemy_shoot_probability"]
 
     def _set_player_count(self, num_players: int) -> None:
@@ -777,10 +769,48 @@ class BaseGame:
                 return True
         return False
 
+    def _human_action_pressed(self, action_index: int) -> bool:
+        keys = HUMAN_ACTION_KEY_BINDINGS.get(int(action_index), ())
+        return any(self.window_controller.is_key_down(key) for key in keys)
+
+    def _resolve_human_action(self) -> int:
+        move_up = self._human_action_pressed(ACTION_MOVE_UP)
+        move_down = self._human_action_pressed(ACTION_MOVE_DOWN)
+        move_left = self._human_action_pressed(ACTION_MOVE_LEFT)
+        move_right = self._human_action_pressed(ACTION_MOVE_RIGHT)
+        aim_left = self._human_action_pressed(ACTION_AIM_LEFT)
+        aim_right = self._human_action_pressed(ACTION_AIM_RIGHT)
+        shoot = self._human_action_pressed(ACTION_SHOOT)
+
+        # Single discrete action per step: shoot > aim > movement > stop.
+        if shoot:
+            return ACTION_SHOOT
+        if aim_left and not aim_right:
+            return ACTION_AIM_LEFT
+        if aim_right and not aim_left:
+            return ACTION_AIM_RIGHT
+        if move_up and not move_down:
+            return ACTION_MOVE_UP
+        if move_down and not move_up:
+            return ACTION_MOVE_DOWN
+        if move_left and not move_right:
+            return ACTION_MOVE_LEFT
+        if move_right and not move_left:
+            return ACTION_MOVE_RIGHT
+        return ACTION_STOP_MOVE
+
     def apply_player_action(self, action_index: int | None) -> None:
         if not self.player.is_alive:
             self.frames_since_last_shot += 1
             return
+
+        control_mode = self.player_control_modes.get(self.player.team)
+        # Human and NN-controlled player aim are per-step (non-sticky).
+        if control_mode in (CONTROL_MODE_HUMAN, CONTROL_MODE_NN):
+            self._set_actor_aim_intent(self.player, 0)
+        if control_mode == CONTROL_MODE_HUMAN:
+            # Match move_stop behavior when no WASD movement action is selected this frame.
+            self._set_actor_move_intent(self.player, 0, 0)
 
         shot_fired = False
         if action_index is not None:
@@ -1343,16 +1373,33 @@ class BaseGame:
         ray_right = self._ray_distance(self.player.angle + 90.0)
         ray_back = self._ray_distance(self.player.angle + 180.0)
         player_angle_radians = math.radians(self.player.angle)
+        player_angle_sin = float(math.sin(player_angle_radians))
+        player_angle_cos = float(math.cos(player_angle_radians))
+
+        tgt_vec_x = float(tgt_dx)
+        tgt_vec_y = float(tgt_dy)
+        tgt_norm = math.sqrt((tgt_vec_x * tgt_vec_x) + (tgt_vec_y * tgt_vec_y))
+        if tgt_norm <= 1e-8:
+            tgt_rel_angle_sin = 0.0
+            tgt_rel_angle_cos = 1.0
+        else:
+            tgt_rel_angle_cos = clip_signed(
+                ((player_angle_cos * tgt_vec_x) + (player_angle_sin * tgt_vec_y)) / tgt_norm
+            )
+            tgt_rel_angle_sin = clip_signed(
+                ((player_angle_cos * tgt_vec_y) - (player_angle_sin * tgt_vec_x)) / tgt_norm
+            )
+
+        self_shot_cd_norm = clip_unit(float(self.player.cooldown_frames) / max(1, SHOOT_COOLDOWN_FRAMES))
+        self_tgt_seen_norm = clip_unit(float(time_since_last_seen_enemy))
 
         feature_values = {
-            "self_angle_sin": float(math.sin(player_angle_radians)),
-            "self_angle_cos": float(math.cos(player_angle_radians)),
+            "self_angle_sin": player_angle_sin,
+            "self_angle_cos": player_angle_cos,
             "self_move_intent_x": float(self.player.move_intent_x),
             "self_move_intent_y": float(self.player.move_intent_y),
-            "self_aim_intent": float(self.player.aim_intent),
-            "self_last_action": float(normalize_last_action(self.last_action_index, BANG_ACT_DIM)),
-            "self_time_since_shot": float(clip_unit(self.frames_since_last_shot / max(1, SHOOT_COOLDOWN_FRAMES))),
-            "self_time_since_tgt_seen": float(clip_unit(time_since_last_seen_enemy)),
+            "self_shot_cd_norm": float(self_shot_cd_norm),
+            "self_tgt_seen_norm": float(self_tgt_seen_norm),
             "ray_fwd": float(ray_fwd),
             "ray_left": float(ray_left),
             "ray_right": float(ray_right),
@@ -1363,6 +1410,8 @@ class BaseGame:
             "tgt_dvy": float(tgt_dvy),
             "tgt_dist": float(tgt_dist),
             "tgt_in_los": float(tgt_in_los),
+            "tgt_rel_angle_sin": float(tgt_rel_angle_sin),
+            "tgt_rel_angle_cos": float(tgt_rel_angle_cos),
             "haz_dx": float(haz_dx),
             "haz_dy": float(haz_dy),
             "haz_dvx": float(haz_dvx),
@@ -1399,9 +1448,8 @@ class BaseGame:
 class HumanGame(BaseGame):
     """Human-play mode."""
 
-    def __init__(self, show_game: bool = True):
-        level = _resolve_play_level_from_env(default_level=PLAY_OPPONENT_LEVEL)
-        super().__init__(level=level, show_game=show_game)
+    def __init__(self, show_game: bool = True, level: int = 1):
+        super().__init__(level=int(level), show_game=show_game)
 
     def play_step(self) -> None:
         self.frame_count += 1
@@ -1410,59 +1458,7 @@ class HumanGame(BaseGame):
 
         action = None
         if self.player.is_alive:
-            move_up = self.window_controller.is_key_down(arcade.key.W)
-            move_down = self.window_controller.is_key_down(arcade.key.S)
-            move_left = self.window_controller.is_key_down(arcade.key.A)
-            move_right = self.window_controller.is_key_down(arcade.key.D)
-
-            if move_up and not move_down:
-                self._set_actor_move_intent(self.player, 0, 1)
-                movement_action = ACTION_MOVE_UP
-            elif move_down and not move_up:
-                self._set_actor_move_intent(self.player, 0, -1)
-                movement_action = ACTION_MOVE_DOWN
-            elif move_left and not move_right:
-                self._set_actor_move_intent(self.player, -1, 0)
-                movement_action = ACTION_MOVE_LEFT
-            elif move_right and not move_left:
-                self._set_actor_move_intent(self.player, 1, 0)
-                movement_action = ACTION_MOVE_RIGHT
-            else:
-                self._set_actor_move_intent(self.player, 0, 0)
-                movement_action = ACTION_STOP_MOVE
-
-            # Prefer mouse/touchpad aiming in human mode.
-            mouse_pos = self.window_controller.mouse_position()
-            if mouse_pos is not None:
-                mouse_x, mouse_y_arcade = mouse_pos
-                mouse_y = self.window_controller.to_top_left_y(mouse_y_arcade)
-                to_cursor = Vec2(mouse_x, mouse_y) - self.player.position
-                if length_squared(to_cursor) > 0:
-                    self.player.angle = math.degrees(math.atan2(to_cursor.y, to_cursor.x)) % 360
-                self._set_actor_aim_intent(self.player, 0)
-                self.last_action_index = movement_action
-            else:
-                aim_left = self.window_controller.is_key_down(arcade.key.Q) or self.window_controller.is_key_down(
-                    arcade.key.LEFT
-                )
-                aim_right = self.window_controller.is_key_down(arcade.key.E) or self.window_controller.is_key_down(
-                    arcade.key.RIGHT
-                )
-                if aim_left and not aim_right:
-                    self._set_actor_aim_intent(self.player, -1)
-                    self.last_action_index = ACTION_AIM_LEFT
-                elif aim_right and not aim_left:
-                    self._set_actor_aim_intent(self.player, 1)
-                    self.last_action_index = ACTION_AIM_RIGHT
-                else:
-                    self.last_action_index = movement_action
-
-            shoot_pressed = self.window_controller.is_key_down(
-                arcade.key.SPACE
-            ) or self.window_controller.is_mouse_button_down(arcade.MOUSE_BUTTON_LEFT)
-            action = ACTION_SHOOT if shoot_pressed else None
-            if shoot_pressed:
-                self.last_action_index = ACTION_SHOOT
+            action = self._resolve_human_action()
         else:
             self._set_actor_move_intent(self.player, 0, 0)
             self._set_actor_aim_intent(self.player, 0)
@@ -1607,6 +1603,15 @@ class BangEnv(Env):
     ACTION_NAMES = tuple(BANG_ACTION_NAMES)
     OBS_DIM = int(BANG_OBS_DIM)
     ACT_DIM = int(BANG_ACT_DIM)
+    REWARD_COMPONENT_ORDER = ("W", "L", "K", "E", "D", "S")
+    REWARD_COMPONENT_KEY_TO_CODE = {
+        "outcome.reward_win": "W",
+        "outcome.penalty_lose": "L",
+        "event.reward_kill": "K",
+        "progress.engagement_shape": "E",
+        "progress.hazard_shape": "D",
+        "step.penalty_step": "S",
+    }
 
     def __init__(
         self,
@@ -1618,24 +1623,47 @@ class BangEnv(Env):
     ) -> None:
         self.mode = str(mode)
         show_game = bool(render)
+        curriculum_config = build_curriculum_config(
+            min_level=int(MIN_LEVEL),
+            max_level=int(MAX_LEVEL),
+            promotion_settings=CURRICULUM_PROMOTION,
+        )
+        self._curriculum = (
+            ThreeLevelCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
+            if self.mode == "train"
+            else None
+        )
+        self._current_level = (
+            int(self._curriculum.get_level())
+            if self._curriculum is not None
+            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=3)
+        )
+        self._last_episode_level = int(self._current_level)
+        self._last_episode_success = 0
+        self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
 
         if self.mode == "human":
-            self.game = HumanGame(show_game=show_game)
+            self.game = HumanGame(show_game=show_game, level=int(self._current_level))
             return
 
-        if level is None:
-            if self.mode == "train":
-                level = MIN_LEVEL
-            else:
-                level = _resolve_play_level_from_env(default_level=PLAY_OPPONENT_LEVEL)
+        level = int(self._current_level)
         if end_on_player_death is None:
             end_on_player_death = self.mode == "train"
 
+        self._current_level = int(level)
         self.game = TrainingGame(
             level=int(level),
             show_game=show_game,
             end_on_player_death=bool(end_on_player_death),
         )
+        self._apply_level_settings(int(self._current_level))
+
+    def _apply_level_settings(self, level: int) -> None:
+        if not hasattr(self, "game"):
+            return
+        game_level = int(max(MIN_LEVEL, min(int(level), MAX_LEVEL)))
+        self.game.level = int(game_level)
+        self.game.configure_level()
 
     @staticmethod
     def _action_to_one_hot(action_idx: int) -> list[int]:
@@ -1647,27 +1675,49 @@ class BangEnv(Env):
     @staticmethod
     def _obs_from_state_vector(state_vector: list[float]) -> np.ndarray:
         obs = np.asarray(state_vector, dtype=np.float32)
+        assert len(obs) == int(BangEnv.OBS_DIM)
         if obs.shape != (int(BangEnv.OBS_DIM),):
             raise RuntimeError(f"Bang observation expected {BangEnv.OBS_DIM} features, got {obs.shape[0]}")
         return obs
 
     def reset(self) -> np.ndarray:
+        if self.mode == "train":
+            self._apply_level_settings(int(self._current_level))
         self.game.reset()
+        self._episode_reward_components.reset()
         return self._obs_from_state_vector(self.game.get_state_vector())
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         if self.mode == "human":
             self.game.play_step()
             obs = self._obs_from_state_vector(self.game.get_state_vector())
-            return obs, 0.0, False, {}
+            return obs, 0.0, False, {"level": int(getattr(self.game, "level", 1)), "success": 0}
 
         action_idx = int(action)
         reward, done, reward_breakdown = self.game.play_step(self._action_to_one_hot(action_idx))
+        self._episode_reward_components.add_from_mapping(reward_breakdown, self.REWARD_COMPONENT_KEY_TO_CODE)
         obs = self._obs_from_state_vector(self.game.get_state_vector())
-        info = {
+        episode_level = int(self._current_level) if self.mode == "train" else int(getattr(self.game, "level", 1))
+        win = bool(done and self.game.is_player_last_alive())
+        success = 1 if win else 0
+        info: dict[str, object] = {
             "reward_breakdown": reward_breakdown,
-            "win": bool(done and self.game.is_player_last_alive()),
+            "win": bool(win),
+            "success": int(success) if done else 0,
+            "level": int(episode_level),
+            "level_changed": False,
         }
+        if done:
+            info["reward_components"] = self._episode_reward_components.totals()
+            self._last_episode_level = int(episode_level)
+            self._last_episode_success = int(success)
+            self._current_level, level_changed = advance_curriculum(
+                self._curriculum,
+                success=int(success),
+                current_level=int(self._current_level),
+                apply_level=self._apply_level_settings,
+            )
+            info["level_changed"] = bool(level_changed)
         return obs, float(reward), bool(done), info
 
     def render(self) -> None:

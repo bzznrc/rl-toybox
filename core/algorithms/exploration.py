@@ -162,3 +162,22 @@ class EpsilonController:
 
         best = state.get("best_avg_reward", state.get("reference_avg_reward"))
         self._best_avg_reward = None if best is None else float(best)
+
+
+def bump_epsilon_to_cap(algorithm: object) -> float | None:
+    """Raise epsilon to eps_bump_cap when curriculum level increases."""
+    exploration = getattr(algorithm, "_exploration", None)
+    if exploration is None:
+        return None
+
+    config = getattr(exploration, "config", None)
+    set_epsilon = getattr(exploration, "set_epsilon", None)
+    current_epsilon = getattr(exploration, "epsilon", None)
+    bump_cap = getattr(config, "eps_bump_cap", None)
+    if bump_cap is None or current_epsilon is None or not callable(set_epsilon):
+        return None
+
+    updated_epsilon = float(set_epsilon(max(float(current_epsilon), float(bump_cap))))
+    if hasattr(algorithm, "epsilon"):
+        setattr(algorithm, "epsilon", updated_epsilon)
+    return float(updated_epsilon)

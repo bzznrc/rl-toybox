@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 from core.logging_utils import configure_logging, log_key_values, log_run_context
 from core.runners.off_policy import OffPolicyConfig, run_off_policy_training
 from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
-from scripts.common import prepare_run, resolve_resume_path
+from scripts.common import prepare_run, resolve_current_level, resolve_resume_path
+
+
+def _normalize_choice(value: str) -> str:
+    return str(value).strip().lower()
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,11 +21,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--render", action="store_true", help="Show Arcade window during training")
     parser.add_argument(
         "--resume",
-        default="ask",
-        choices=["ask", "auto", "none", "new", "checkpoint", "best"],
+        default="new",
+        type=_normalize_choice,
+        choices=["auto", "none", "new", "check", "checkpoint", "best"],
         help=(
             "Resume source for model weights. "
-            "'ask' prompts New vs Best; when best is loaded, epsilon resets to eps_bump_cap for epsilon-based algos"
+            "Default is 'new' (start from scratch). "
+            "Accepted values: New, Best, Check, Checkpoint, None, Auto. "
+            "When best is loaded, epsilon resets to eps_bump_cap for epsilon-based algos."
         ),
     )
     parser.add_argument("--max-steps", type=int, default=None, help="Override off-policy max training steps")
@@ -56,21 +62,6 @@ def _set_resume_best_epsilon_to_bump_cap(algorithm: object) -> float | None:
     return updated_epsilon
 
 
-def _prompt_resume_mode() -> str:
-    while True:
-        print("Train Start")
-        print("  [1] New (start from scratch)")
-        print("  [2] Best (resume from best model)")
-        selection = input("Choose start mode [1/2]: ").strip().lower()
-
-        if selection in {"1", "new", "n"}:
-            return "none"
-        if selection in {"2", "best", "b"}:
-            return "best"
-
-        print("Invalid selection. Please choose 1 (New) or 2 (Best).")
-
-
 def main() -> None:
     args = parse_args()
     configure_logging()
@@ -81,47 +72,54 @@ def main() -> None:
     run_paths = prepared.run_paths
     algorithm = prepared.algorithm
 
-    resume_mode = str(args.resume).strip().lower()
+    resume_mode = str(args.resume)
     if resume_mode == "new":
         resume_mode = "none"
-    if resume_mode == "ask":
-        if sys.stdin.isatty():
-            resume_mode = _prompt_resume_mode()
-        else:
-            resume_mode = "auto"
-
-    resume_path = resolve_resume_path(resume_mode, run_paths.checkpoint_path, run_paths.best_path)
-    if resume_mode == "best" and resume_path is None:
-        log_key_values(
-            "rl_toybox.train",
-            {"Resume": "best_missing", "Fallback": "scratch"},
-            prefix="Train",
-            key_value_separator=":",
-        )
-    if resume_path is not None:
-        algorithm.load(str(resume_path))
-        resumed_from_best = resume_path == run_paths.best_path
-        if resumed_from_best:
-            bumped_epsilon = _set_resume_best_epsilon_to_bump_cap(algorithm)
-            if bumped_epsilon is not None:
-                log_key_values(
-                    "rl_toybox.train",
-                    {
-                        "Bump": "resume_best",
-                        "Epsilon": f"{float(bumped_epsilon):.3f}",
-                    },
-                    prefix="Explore",
-                    key_value_separator=":",
-                )
+    if resume_mode == "checkpoint":
+        resume_mode = "check"
 
     env = spec.make_env(mode="train", render=bool(args.render))
     try:
+        current_level = resolve_current_level(env, default=1)
+        best_path_for_level = run_paths.model_path(current_level, "best")
+        resume_path = resolve_resume_path(resume_mode, run_paths, current_level)
+        if resume_mode == "best" and resume_path is None:
+            log_key_values(
+                "rl_toybox.train",
+                {"Resume": "best_missing", "Level": current_level, "Fallback": "scratch"},
+                prefix="Train",
+                key_value_separator=":",
+            )
+        if resume_mode in {"check", "checkpoint"} and resume_path is None:
+            log_key_values(
+                "rl_toybox.train",
+                {"Resume": "check_missing", "Level": current_level, "Fallback": "scratch"},
+                prefix="Train",
+                key_value_separator=":",
+            )
+        if resume_path is not None:
+            algorithm.load(str(resume_path))
+            resumed_from_best = resume_path == best_path_for_level
+            if resumed_from_best:
+                bumped_epsilon = _set_resume_best_epsilon_to_bump_cap(algorithm)
+                if bumped_epsilon is not None:
+                    log_key_values(
+                        "rl_toybox.train",
+                        {
+                            "Bump": "resume_best",
+                            "Epsilon": f"{float(bumped_epsilon):.3f}",
+                        },
+                        prefix="Explore",
+                        key_value_separator=":",
+                    )
+
         log_run_context(
             "train",
             {
                 "game": spec.game_id,
                 "algo": algo_id,
                 "run": run_paths.run_dir,
+                "level": int(current_level),
                 "resume": resume_path if resume_path is not None else "scratch",
                 "render": bool(args.render),
             },

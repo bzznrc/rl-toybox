@@ -10,7 +10,9 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "snake"
+        "snake",
+        "--level",
+        "${input:playLevel}"
       ]
     },
     {
@@ -23,10 +25,8 @@
       "args": [
         "--game",
         "snake",
-        "--model",
-        "best",
-        "--episodes",
-        "10",
+        "--level",
+        "${input:playLevel}",
         "--render"
       ]
     },
@@ -53,7 +53,9 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "vroom"
+        "vroom",
+        "--level",
+        "${input:playLevel}"
       ]
     },
     {
@@ -66,10 +68,8 @@
       "args": [
         "--game",
         "vroom",
-        "--model",
-        "best",
-        "--episodes",
-        "10",
+        "--level",
+        "${input:playLevel}",
         "--render"
       ]
     },
@@ -96,11 +96,10 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "bang"
-      ],
-      "env": {
-        "BANG_PLAYERS": "${input:bangPlayers}"
-      }
+        "bang",
+        "--level",
+        "${input:playLevel}"
+      ]
     },
     {
       "name": "Bang - Play AI",
@@ -112,15 +111,10 @@
       "args": [
         "--game",
         "bang",
-        "--model",
-        "best",
-        "--episodes",
-        "10",
+        "--level",
+        "${input:playLevel}",
         "--render"
-      ],
-      "env": {
-        "BANG_PLAYERS": "${input:bangPlayers}"
-      }
+      ]
     },
     {
       "name": "Bang - Train AI",
@@ -145,11 +139,10 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "kick"
-      ],
-      "env": {
-        "KICK_SPEED_SCALE": "${input:kickSpeedScale}"
-      }
+        "kick",
+        "--level",
+        "${input:playLevel}"
+      ]
     },
     {
       "name": "Kick - Play AI",
@@ -161,15 +154,10 @@
       "args": [
         "--game",
         "kick",
-        "--model",
-        "best",
-        "--episodes",
-        "10",
+        "--level",
+        "${input:playLevel}",
         "--render"
-      ],
-      "env": {
-        "KICK_SPEED_SCALE": "${input:kickSpeedScale}"
-      }
+      ]
     },
     {
       "name": "Kick - Train AI",
@@ -191,14 +179,14 @@
   ],
   "inputs": [
     {
-      "id": "bangPlayers",
+      "id": "playLevel",
       "type": "pickString",
-      "description": "Bang player count",
-      "default": "2",
+      "description": "Play level",
+      "default": "3",
       "options": [
+        "1",
         "2",
-        "3",
-        "4"
+        "3"
       ]
     },
     {
@@ -217,10 +205,10 @@
       "id": "trainResumeMode",
       "type": "pickString",
       "description": "Train start mode",
-      "default": "new",
+      "default": "New",
       "options": [
-        "new",
-        "best"
+        "New",
+        "Best"
       ]
     }
   ]

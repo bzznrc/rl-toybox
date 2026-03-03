@@ -1,0 +1,20 @@
+{
+  "best_avg_reward": -0.7966016077170214,
+  "config": {
+    "checkpoint_every_steps": 100000,
+    "log_every_episodes": 1,
+    "log_heartbeat_steps": 0,
+    "max_episodes": null,
+    "max_steps": 10000000,
+    "min_episodes_for_stats": 100,
+    "reward_window": 100,
+    "train_after_steps": 20000,
+    "update_every_steps": 4,
+    "updates_per_step": 1
+  },
+  "last_loss": 0.0090958122164011,
+  "total_episodes": 17131,
+  "total_steps": 10000000,
+  "update_attempts": 2495001,
+  "updates": 2495001
+}

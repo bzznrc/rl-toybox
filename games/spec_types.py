@@ -13,7 +13,7 @@ from core.envs.spaces import Space
 class GameSpec:
     game_id: str
     default_algo: str
-    make_env: Callable[[str, bool], Env]
+    make_env: Callable[..., Env]
     obs_dim: int
     action_space: Space
     run_name: str

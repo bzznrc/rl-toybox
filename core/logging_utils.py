@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from core.utils import PROJECT_ROOT
 
@@ -98,29 +98,66 @@ def log_run_context(mode: str, context: dict[str, Any]) -> None:
     )
 
 
+def _format_component_value(value: float) -> str:
+    rounded = 0.0 if abs(float(value)) < 5e-7 else float(value)
+    text = f"{rounded:.2f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if text in {"-0", "-0.0", "-0.00"}:
+        return "0"
+    return text
+
+
+def format_reward_components(components: Mapping[str, object] | None) -> str | None:
+    if not isinstance(components, Mapping) or not components:
+        return None
+
+    parts: list[str] = []
+    for code, raw_value in components.items():
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        parts.append(f"{str(code)}:{_format_component_value(value)}")
+
+    if not parts:
+        return None
+    return " ".join(parts)
+
+
 def log_episode_line(
     *,
     episode: int,
+    level: int,
     ep_len: int,
     reward: float,
     avg_reward: float | None,
     best_avg: float | None,
     epsilon: float | None,
+    success: int,
+    avg_success: float | None,
+    reward_components: str | None = None,
 ) -> None:
-    avg_text = "n/a" if avg_reward is None else f"{float(avg_reward):.2f}"
-    best_text = "n/a" if best_avg is None else f"{float(best_avg):.2f}"
-    log_key_values(
-        "rl_toybox.train",
-        {
-            "Episode": int(episode),
-            "Length": int(ep_len),
-            "Reward": f"{float(reward):.2f}",
-            "Average": avg_text,
-            "Best": best_text,
-            "Epsilon": "n/a" if epsilon is None else f"{float(epsilon):.3f}",
-        },
-        key_value_separator=":",
-    )
+    avg_reward_text = "n/a" if avg_reward is None else f"{float(avg_reward):.2f}"
+    best_reward_text = "n/a" if best_avg is None else f"{float(best_avg):.2f}"
+    avg_success_text = "n/a" if avg_success is None else f"{float(avg_success):.2f}"
+    epsilon_text = "n/a" if epsilon is None else f"{float(epsilon):.3f}"
+    success_value = 1 if int(success) > 0 else 0
+    segments = [
+        f"Ep:{int(episode):>5}",
+        f"Lv:{int(level):>1}",
+        f"Len:{int(ep_len):>5}",
+        f"R:{float(reward):>8.2f}",
+        f"AR:{avg_reward_text:>8}",
+        f"BR:{best_reward_text:>8}",
+        f"E:{epsilon_text:>5}",
+        f"S:{success_value:>1}",
+        f"AS:{avg_success_text:>5}",
+    ]
+    line = "\t".join(segments) + "\t"
+    if reward_components:
+        line += str(reward_components)
+    logging.getLogger("rl_toybox.train").info(line)
 
 
 def log_iteration_line(
@@ -147,15 +184,24 @@ def log_iteration_line(
 def log_save_line(
     *,
     kind: str,
+    level: int,
     at: str,
     path: str | Path,
     avg_reward: float | None = None,
 ) -> None:
+    kind_value = str(kind).strip().lower()
+    if kind_value == "checkpoint":
+        kind_value = "check"
     values: OrderedDict[str, Any] = OrderedDict()
-    values["Save"] = str(kind)
+    values["Lv"] = int(level)
     values["At"] = str(at)
     if avg_reward is not None:
         values["Avg Reward"] = float(avg_reward)
     values["Path"] = format_display_path(path)
-    log_key_values("rl_toybox.train", dict(values), key_value_separator=":")
+    log_key_values(
+        "rl_toybox.train",
+        dict(values),
+        prefix=f">>> Save: {kind_value:<7}",
+        key_value_separator=":",
+    )
 

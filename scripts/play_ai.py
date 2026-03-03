@@ -9,12 +9,23 @@ from core.runners.eval import run_eval
 from scripts.common import prepare_run, resolve_play_model_path
 
 
+def _normalize_choice(value: str) -> str:
+    return str(value).strip().lower()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Play with a trained RL agent")
     parser.add_argument("--game", required=True, help="Game id")
     parser.add_argument("--algo", default=None, help="Override algorithm id")
-    parser.add_argument("--model", default="best", choices=["best", "checkpoint"], help="Model artifact to load")
+    parser.add_argument(
+        "--model",
+        default="best",
+        type=_normalize_choice,
+        choices=["best", "check", "checkpoint"],
+        help="Model artifact to load",
+    )
     parser.add_argument("--episodes", type=int, default=10, help="Number of eval episodes")
+    parser.add_argument("--level", type=int, default=3, help="Play level selector (defaults to 3)")
     parser.add_argument("--render", action="store_true", help="Show Arcade window")
     return parser.parse_args()
 
@@ -29,10 +40,11 @@ def main() -> None:
     run_paths = prepared.run_paths
     algorithm = prepared.algorithm
 
-    model_path = resolve_play_model_path(run_paths, args.model)
+    model_choice = "check" if str(args.model).strip().lower() == "checkpoint" else str(args.model).strip().lower()
+    model_path = resolve_play_model_path(run_paths, model_choice, int(args.level))
     algorithm.load(str(model_path))
 
-    env = spec.make_env(mode="eval", render=bool(args.render))
+    env = spec.make_env(mode="eval", render=bool(args.render), level=int(args.level))
     try:
         log_run_context(
             "play-ai",
@@ -41,6 +53,7 @@ def main() -> None:
                 "algo": algo_id,
                 "model": model_path,
                 "episodes": int(args.episodes),
+                "level": int(args.level),
                 "render": bool(args.render),
             },
         )

@@ -34,8 +34,6 @@ class DQNConfig:
     replay_size: int = 150_000
     target_sync_every: int = 500
     grad_clip_norm: float = 10.0
-    learn_start_steps: int = 5_000
-    train_every_steps: int = 4
     exploration: ExplorationConfig | dict[str, object] | None = None
     use_gpu: bool = False
     dueling: bool = True
@@ -133,10 +131,6 @@ class DQNAlgorithm(Algorithm):
         return int(self._exploration.config.avg_window_episodes)
 
     def update(self) -> dict[str, float]:
-        if self.total_env_steps < int(self.config.learn_start_steps):
-            return {}
-        if self.total_env_steps % int(self.config.train_every_steps) != 0:
-            return {}
         if len(self.replay) < int(self.config.batch_size):
             return {}
 

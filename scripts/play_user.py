@@ -11,6 +11,7 @@ from games.registry import get_game_spec
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Play a game in human-control mode")
     parser.add_argument("--game", required=True, help="Game id")
+    parser.add_argument("--level", type=int, default=3, help="Play level selector (defaults to 3)")
     parser.add_argument("--headless", action="store_true", help="Disable rendering")
     return parser.parse_args()
 
@@ -21,12 +22,13 @@ def main() -> None:
 
     spec = get_game_spec(args.game)
     render = not bool(args.headless)
-    env = spec.make_env(mode="human", render=render)
+    env = spec.make_env(mode="human", render=render, level=int(args.level))
 
     log_run_context(
         "play-user",
         {
             "game": spec.game_id,
+            "level": int(args.level),
             "render": render,
         },
     )

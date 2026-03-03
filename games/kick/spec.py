@@ -8,12 +8,11 @@ from games.kick.env import KickEnv
 from games.spec_types import GameSpec
 
 
-def make_env(mode: str, render: bool):
-    return KickEnv(mode=mode, render=render)
+def make_env(mode: str, render: bool, level: int | None = None):
+    return KickEnv(mode=mode, render=render, level=level)
 
 
-HIDDEN_DIMENSIONS = [96, 96]
-RUN_NAME = "_".join(str(size) for size in HIDDEN_DIMENSIONS)
+RUN_NAME = "_".join(str(size) for size in config.HIDDEN_DIMENSIONS)
 
 
 SPEC = GameSpec(
@@ -24,21 +23,22 @@ SPEC = GameSpec(
     action_space=Discrete(config.ACT_DIM),
     run_name=RUN_NAME,
     algo_config={
-        "hidden_sizes": list(HIDDEN_DIMENSIONS),
-        "learning_rate": 3e-4,
-        "gamma": 0.99,
-        "gae_lambda": 0.95,
-        "clip_ratio": 0.2,
-        "update_epochs": 4,
-        "minibatch_size": 512,
-        "entropy_coef": 0.01,
-        "value_coef": 0.5,
-        "max_grad_norm": 0.5,
+        "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
+        "learning_rate": config.LEARNING_RATE,
+        "gamma": config.GAMMA,
+        "gae_lambda": config.GAE_LAMBDA,
+        "clip_ratio": config.CLIP_RATIO,
+        "update_epochs": config.UPDATE_EPOCHS,
+        "minibatch_size": config.MINIBATCH_SIZE,
+        "entropy_coef": config.ENTROPY_COEF,
+        "value_coef": config.VALUE_COEF,
+        "max_grad_norm": config.MAX_GRAD_NORM,
+        "use_gpu": config.USE_GPU,
     },
     train_config={
-        "max_iterations": 1500,
-        "rollout_steps": 2048,
-        "checkpoint_every_iterations": 10,
-        "reward_window": 100,
+        "max_iterations": config.MAX_TRAINING_ITERATIONS,
+        "rollout_steps": config.ROLLOUT_STEPS,
+        "checkpoint_every_iterations": config.CHECKPOINT_EVERY_ITERATIONS,
+        "reward_window": config.REWARD_ROLLING_WINDOW,
     },
 )

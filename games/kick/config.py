@@ -44,6 +44,7 @@ STAMINA_MIN = 0.5
 STAMINA_MAX = 1.0
 STAMINA_DRAIN_SECONDS = 5.0
 STAMINA_RECOVER_SECONDS = 1.0
+GK_HIGH_BYPASS_PROB_DEFAULT = 0.25
 
 
 # IO
@@ -56,10 +57,10 @@ INPUT_FEATURE_NAMES = [
     "self_role",
     "self_stamina",
     "self_stamina_delta",
-    "self_in_contact",
-    "self_last_action",
     "tgt_dx",
     "tgt_dy",
+    "tgt_rel_angle_sin",
+    "tgt_rel_angle_cos",
     "tgt_dvx",
     "tgt_dvy",
     "tgt_is_free",
@@ -107,6 +108,7 @@ ACT_DIM = len(ACTION_NAMES)
 MIN_LEVEL = 1
 MAX_LEVEL = 3
 REWARD_ROLLING_WINDOW = 100
+MIN_EPISODES_FOR_STATS = REWARD_ROLLING_WINDOW
 
 CURRICULUM_PROMOTION = {
     "min_episodes_per_level": 250,
@@ -119,14 +121,29 @@ LEVEL_SETTINGS = {
     1: {
         "players_per_team": 3,
         "active_roles": ["GK", "LCM", "ST1"],
+        "goals_size_scale": 2.0,
+        "enemy_stamina_scale": 0.50,
+        "enemy_shot_error_choices": [-30, 0, 30],
+        "entropy_coef": 0.25,
+        "kickoff": "GK",
     },
     2: {
         "players_per_team": 7,
         "active_roles": ["GK", "LB", "RB", "LCM", "RCM", "ST1", "ST2"],
+        "goals_size_scale": 1.5,
+        "enemy_stamina_scale": 0.75,
+        "enemy_shot_error_choices": [-20, 0, 20],
+        "entropy_coef": 0.015,
+        "kickoff": "GK",
     },
     3: {
         "players_per_team": 11,
         "active_roles": ["GK", "LB", "LCB", "RCB", "RB", "LM", "LCM", "RCM", "RM", "ST1", "ST2"],
+        "goals_size_scale": 1.0,
+        "enemy_stamina_scale": 1.0,
+        "enemy_shot_error_choices": [-10, 0, 10],
+        "entropy_coef": 0.01,
+        "kickoff": "CC",
     },
 }
 
@@ -134,27 +151,23 @@ LEVEL_SETTINGS = {
 # REWARDS
 REWARD_SCORE = 10.0
 PENALTY_CONCEDE = -5.0
-REWARD_POSSESSION_GAIN = 0.5
-PENALTY_POSSESSION_LOSS = -0.5
-PENALTY_KICK_COST = -0.01
-PENALTY_STEP = -0.001
-PROGRESS_SCALE = 1.0
-PROGRESS_CLIP = 0.2
+PENALTY_TURNOVER = -0.25
+REWARD_PROGRESS = 5.0
+PENALTY_ZONE = -0.0005
+
 REWARD_COMPONENTS = {
     "outcome.reward_score": REWARD_SCORE,
     "outcome.penalty_concede": PENALTY_CONCEDE,
-    "progress.scale": PROGRESS_SCALE,
-    "event.reward_possession_gain": REWARD_POSSESSION_GAIN,
-    "event.penalty_possession_loss": PENALTY_POSSESSION_LOSS,
-    "event.penalty_kick_cost": PENALTY_KICK_COST,
-    "step.penalty_step": PENALTY_STEP,
+    "event.penalty_turnover": PENALTY_TURNOVER,
+    "progress.reward_progress": REWARD_PROGRESS,
+    "event.penalty_zone": PENALTY_ZONE,
 }
 
 
 # TRAINING
 HIDDEN_DIMENSIONS = [96, 96]
 
-MAX_TRAINING_ITERATIONS = 1500
+MAX_TRAINING_ITERATIONS = 4500
 ROLLOUT_STEPS = 2048
 CHECKPOINT_EVERY_ITERATIONS = 10
 
@@ -164,6 +177,6 @@ GAE_LAMBDA = 0.95
 CLIP_RATIO = 0.2
 UPDATE_EPOCHS = 4
 MINIBATCH_SIZE = 512
-ENTROPY_COEF = 0.01
+ENTROPY_COEF = 0.025
 VALUE_COEF = 0.5
 MAX_GRAD_NORM = 0.5

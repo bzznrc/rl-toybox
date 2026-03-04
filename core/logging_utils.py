@@ -165,18 +165,17 @@ def log_iteration_line(
     *,
     iteration: int,
     steps: int,
-    episodes: int,
     avg_reward: float,
     best_avg: float,
+    best_avg_label: str = "BR",
 ) -> None:
     log_key_values(
         "rl_toybox.train",
         {
             "Iter": int(iteration),
             "Steps": int(steps),
-            "Episodes": int(episodes),
-            "Avg Reward": float(avg_reward),
-            "Best Avg": float(best_avg),
+            "AR": float(avg_reward),
+            str(best_avg_label): float(best_avg),
         },
         key_value_separator=":",
     )

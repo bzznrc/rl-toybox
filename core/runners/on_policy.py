@@ -6,6 +6,8 @@ from collections import deque
 from dataclasses import asdict, dataclass
 from statistics import mean
 
+import numpy as np
+
 from core.algorithms.base import Algorithm
 from core.algorithms.exploration import bump_epsilon_to_cap
 from core.envs.base import Env
@@ -25,6 +27,7 @@ class OnPolicyConfig:
     rollout_steps: int = 1024
     checkpoint_every_iterations: int = 10
     reward_window: int = 100
+    min_episodes_for_stats: int = 100
     log_every_iterations: int = 1
     log_heartbeat_steps: int = 0
 
@@ -44,6 +47,41 @@ def _infer_current_level(env: Env, default: int = 1) -> int:
     return _safe_level(level_value, default)
 
 
+def _apply_level_entropy_coef(algorithm: Algorithm, env: Env, level: int) -> float | None:
+    getter = getattr(env, "get_entropy_coef_for_level", None)
+    if not callable(getter):
+        return None
+
+    try:
+        entropy_coef = getter(int(level))
+    except TypeError:
+        entropy_coef = getter()
+    except Exception:
+        return None
+
+    if entropy_coef is None:
+        return None
+
+    config = getattr(algorithm, "config", None)
+    if config is None or not hasattr(config, "entropy_coef"):
+        return None
+
+    try:
+        entropy_value = float(entropy_coef)
+    except (TypeError, ValueError):
+        return None
+
+    setattr(config, "entropy_coef", entropy_value)
+    return entropy_value
+
+
+def _broadcast_team_signal(obs: object, value: float | bool, *, dtype: np.dtype):
+    obs_array = np.asarray(obs)
+    if obs_array.ndim == 2:
+        return np.full((int(obs_array.shape[0]),), value, dtype=dtype)
+    return value
+
+
 def run_on_policy_training(
     env: Env,
     algorithm: Algorithm,
@@ -57,25 +95,28 @@ def run_on_policy_training(
     success_window_by_level: dict[int, deque[int]] = {}
     episodes_by_level: dict[int, int] = {}
     reward_window_by_level: dict[int, deque[float]] = {}
-    min_episodes_for_stats = 100
+    min_episodes_for_stats = max(0, int(config.min_episodes_for_stats))
     best_avg_reward_by_level: dict[int, float] = {}
     total_steps = 0
     total_episodes = 0
     last_loss = 0.0
     last_logged_step = 0
     current_level = _infer_current_level(env, default=1)
+    _apply_level_entropy_coef(algorithm, env, int(current_level))
 
     for iteration in range(1, int(config.max_iterations) + 1):
         for _ in range(int(config.rollout_steps)):
             action = algorithm.act(obs, explore=True)
             next_obs, reward, done, info = env.step(action)
+            reward_for_storage = _broadcast_team_signal(obs, float(reward), dtype=np.float32)
+            done_for_storage = _broadcast_team_signal(obs, bool(done), dtype=np.bool_)
             algorithm.observe(
                 {
                     "obs": obs,
                     "action": action,
-                    "reward": float(reward),
+                    "reward": reward_for_storage,
                     "next_obs": next_obs,
-                    "done": bool(done),
+                    "done": done_for_storage,
                     "info": dict(info),
                 }
             )
@@ -106,6 +147,7 @@ def run_on_policy_training(
                 if bool(info.get("level_changed", False)):
                     bump_epsilon_to_cap(algorithm)
                 current_level = _infer_current_level(env, default=episode_level)
+                _apply_level_entropy_coef(algorithm, env, int(current_level))
                 level_episode_count = int(episodes_by_level.get(int(episode_level), 0))
                 stats_ready_level = level_episode_count >= int(min_episodes_for_stats)
                 avg_reward_ep = float(mean(level_reward_window)) if stats_ready_level else None
@@ -169,15 +211,22 @@ def run_on_policy_training(
             last_logged_step = int(total_steps)
 
         if iteration % max(1, int(config.log_every_iterations)) == 0:
-            best_global = max(best_avg_reward_by_level.values()) if best_avg_reward_by_level else avg_reward
-            log_iteration_line(
-                iteration=int(iteration),
-                steps=int(total_steps),
-                episodes=int(total_episodes),
-                avg_reward=float(avg_reward),
-                best_avg=float(best_global),
-            )
-            last_logged_step = int(total_steps)
+            # Iter-line logging disabled by request.
+            # level_reward_window = reward_window_by_level.get(int(current_level))
+            # if level_reward_window:
+            #     avg_reward_level = float(mean(level_reward_window))
+            # else:
+            #     avg_reward_level = float(avg_reward)
+            # best_avg_level = float(best_avg_reward_by_level.get(int(current_level), avg_reward_level))
+            # log_iteration_line(
+            #     iteration=int(iteration),
+            #     steps=int(total_steps),
+            #     avg_reward=float(avg_reward_level),
+            #     best_avg=float(best_avg_level),
+            #     best_avg_label=f"BR{int(current_level)}",
+            # )
+            # last_logged_step = int(total_steps)
+            pass
 
         if int(config.log_heartbeat_steps) > 0 and (int(total_steps) - int(last_logged_step)) >= int(config.log_heartbeat_steps):
             log_key_values(

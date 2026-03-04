@@ -45,11 +45,15 @@ class PPOAlgorithm(Algorithm):
         self.optimizer = optim.Adam(self.model.parameters(), lr=float(config.learning_rate))
         self.rollout = RolloutBuffer()
 
-        self._last_log_prob = 0.0
-        self._last_value = 0.0
+        self._last_log_prob: float | np.ndarray = 0.0
+        self._last_value: float | np.ndarray = 0.0
 
-    def act(self, obs: np.ndarray, explore: bool) -> int:
-        obs_tensor = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
+    def act(self, obs: np.ndarray, explore: bool) -> int | np.ndarray:
+        obs_array = np.asarray(obs, dtype=np.float32)
+        if obs_array.ndim not in {1, 2}:
+            raise ValueError(f"PPO expected obs ndim 1 or 2, got {obs_array.ndim}.")
+
+        obs_tensor = torch.as_tensor(obs_array, dtype=torch.float32, device=self.device)
         logits, value = self.model(obs_tensor)
         dist = Categorical(logits=logits)
 
@@ -59,54 +63,138 @@ class PPOAlgorithm(Algorithm):
             action_tensor = torch.argmax(logits, dim=-1)
 
         log_prob = dist.log_prob(action_tensor)
-        self._last_log_prob = float(log_prob.item())
-        self._last_value = float(value.item())
-        return int(action_tensor.item())
+        action_np = action_tensor.detach().cpu().numpy().astype(np.int64).reshape(-1)
+        log_prob_np = log_prob.detach().cpu().numpy().astype(np.float32).reshape(-1)
+        value_np = value.detach().cpu().numpy().astype(np.float32).reshape(-1)
+
+        if obs_array.ndim == 1:
+            self._last_log_prob = float(log_prob_np[0])
+            self._last_value = float(value_np[0])
+            return int(action_np[0])
+
+        self._last_log_prob = log_prob_np
+        self._last_value = value_np
+        return action_np
+
+    @staticmethod
+    def _as_batch_obs(obs: object) -> np.ndarray:
+        obs_array = np.asarray(obs, dtype=np.float32)
+        if obs_array.ndim == 1:
+            return obs_array.reshape(1, -1)
+        if obs_array.ndim == 2:
+            return obs_array
+        raise ValueError(f"PPO observe expected obs ndim 1 or 2, got {obs_array.ndim}.")
+
+    @staticmethod
+    def _broadcast_batch(values: object, batch_size: int, *, dtype: np.dtype) -> np.ndarray:
+        value_array = np.asarray(values, dtype=dtype).reshape(-1)
+        if value_array.size == 1:
+            return np.full((int(batch_size),), value_array.item(), dtype=dtype)
+        if int(value_array.size) != int(batch_size):
+            raise ValueError(
+                f"PPO observe expected batch size {int(batch_size)}, got {int(value_array.size)}."
+            )
+        return value_array.astype(dtype, copy=False)
 
     def observe(self, transition: dict[str, Any]) -> None:
-        self.rollout.observations.append(np.asarray(transition["obs"], dtype=np.float32))
-        self.rollout.actions.append(int(transition["action"]))
-        self.rollout.rewards.append(float(transition["reward"]))
-        self.rollout.dones.append(bool(transition["done"]))
-        self.rollout.log_probs.append(self._last_log_prob)
-        self.rollout.values.append(self._last_value)
+        obs_batch = self._as_batch_obs(transition["obs"])
+        batch_size = int(obs_batch.shape[0])
 
-    def _compute_gae(self) -> tuple[np.ndarray, np.ndarray]:
-        rewards = np.asarray(self.rollout.rewards, dtype=np.float32)
-        dones = np.asarray(self.rollout.dones, dtype=np.float32)
-        values = np.asarray(self.rollout.values, dtype=np.float32)
+        actions = self._broadcast_batch(transition["action"], batch_size, dtype=np.int64)
+        rewards = self._broadcast_batch(transition["reward"], batch_size, dtype=np.float32)
+        dones = self._broadcast_batch(transition["done"], batch_size, dtype=np.bool_)
+        log_probs = self._broadcast_batch(self._last_log_prob, batch_size, dtype=np.float32)
+        values = self._broadcast_batch(self._last_value, batch_size, dtype=np.float32)
 
-        advantages = np.zeros_like(rewards, dtype=np.float32)
-        returns = np.zeros_like(rewards, dtype=np.float32)
+        self.rollout.observations.append(obs_batch)
+        self.rollout.actions.append(actions)
+        self.rollout.rewards.append(rewards)
+        self.rollout.dones.append(dones)
+        self.rollout.log_probs.append(log_probs)
+        self.rollout.values.append(values)
 
-        last_advantage = 0.0
-        next_value = 0.0
-        for t in reversed(range(len(rewards))):
-            mask = 1.0 - dones[t]
-            delta = rewards[t] + float(self.config.gamma) * next_value * mask - values[t]
-            last_advantage = delta + float(self.config.gamma) * float(self.config.gae_lambda) * mask * last_advantage
-            advantages[t] = last_advantage
-            returns[t] = advantages[t] + values[t]
-            next_value = values[t]
+    def _compute_gae(self) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        rewards_seq = [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in self.rollout.rewards]
+        dones_seq = [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in self.rollout.dones]
+        values_seq = [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in self.rollout.values]
 
-        if len(advantages) > 1:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        advantages_rev: list[np.ndarray] = []
+        returns_rev: list[np.ndarray] = []
+        next_advantage = np.zeros((0,), dtype=np.float32)
+        next_value = np.zeros((0,), dtype=np.float32)
+
+        for rewards_t, dones_t, values_t in zip(reversed(rewards_seq), reversed(dones_seq), reversed(values_seq)):
+            if rewards_t.shape != dones_t.shape or rewards_t.shape != values_t.shape:
+                raise RuntimeError(
+                    "PPO rollout batch shapes are inconsistent: "
+                    f"rewards={rewards_t.shape}, dones={dones_t.shape}, values={values_t.shape}"
+                )
+
+            agent_count = int(rewards_t.shape[0])
+            if next_value.shape[0] != agent_count:
+                next_value = np.zeros((agent_count,), dtype=np.float32)
+                next_advantage = np.zeros((agent_count,), dtype=np.float32)
+
+            mask = 1.0 - dones_t
+            delta = rewards_t + float(self.config.gamma) * next_value * mask - values_t
+            advantage_t = delta + float(self.config.gamma) * float(self.config.gae_lambda) * mask * next_advantage
+            return_t = advantage_t + values_t
+
+            advantages_rev.append(advantage_t.astype(np.float32, copy=False))
+            returns_rev.append(return_t.astype(np.float32, copy=False))
+
+            next_value = values_t
+            next_advantage = advantage_t
+            if bool(np.any(dones_t > 0.5)):
+                next_value = np.zeros((agent_count,), dtype=np.float32)
+                next_advantage = np.zeros((agent_count,), dtype=np.float32)
+
+        advantages = list(reversed(advantages_rev))
+        returns = list(reversed(returns_rev))
+
+        if advantages:
+            flat_advantages = np.concatenate(advantages, axis=0)
+            if flat_advantages.size > 1:
+                mean = float(flat_advantages.mean())
+                std = float(flat_advantages.std())
+                advantages = [(adv - mean) / (std + 1e-8) for adv in advantages]
         return advantages, returns
 
     def update(self) -> dict[str, float]:
         if len(self.rollout) == 0:
             return {}
 
-        advantages, returns = self._compute_gae()
+        advantages_batches, returns_batches = self._compute_gae()
 
-        obs_tensor = torch.as_tensor(np.asarray(self.rollout.observations), dtype=torch.float32, device=self.device)
-        action_tensor = torch.as_tensor(np.asarray(self.rollout.actions), dtype=torch.long, device=self.device)
-        old_log_probs = torch.as_tensor(np.asarray(self.rollout.log_probs), dtype=torch.float32, device=self.device)
-        advantages_tensor = torch.as_tensor(advantages, dtype=torch.float32, device=self.device)
-        returns_tensor = torch.as_tensor(returns, dtype=torch.float32, device=self.device)
+        obs_flat = np.concatenate(
+            [np.asarray(batch, dtype=np.float32).reshape(-1, int(self.config.obs_dim)) for batch in self.rollout.observations],
+            axis=0,
+        )
+        actions_flat = np.concatenate(
+            [np.asarray(batch, dtype=np.int64).reshape(-1) for batch in self.rollout.actions],
+            axis=0,
+        )
+        old_log_probs_flat = np.concatenate(
+            [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in self.rollout.log_probs],
+            axis=0,
+        )
+        advantages_flat = np.concatenate(
+            [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in advantages_batches],
+            axis=0,
+        )
+        returns_flat = np.concatenate(
+            [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in returns_batches],
+            axis=0,
+        )
+
+        obs_tensor = torch.as_tensor(obs_flat, dtype=torch.float32, device=self.device)
+        action_tensor = torch.as_tensor(actions_flat, dtype=torch.long, device=self.device)
+        old_log_probs = torch.as_tensor(old_log_probs_flat, dtype=torch.float32, device=self.device)
+        advantages_tensor = torch.as_tensor(advantages_flat, dtype=torch.float32, device=self.device)
+        returns_tensor = torch.as_tensor(returns_flat, dtype=torch.float32, device=self.device)
 
         total_loss = 0.0
-        sample_count = len(self.rollout)
+        sample_count = int(obs_flat.shape[0])
 
         for _ in range(int(self.config.update_epochs)):
             permutation = torch.randperm(sample_count)

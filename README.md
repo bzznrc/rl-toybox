@@ -48,7 +48,7 @@ Training output is tab-separated and compact:
 
 - Header (once): `Train\tGame: ...\tAlgo: ...\tRun: ...\tResume: ...\tRender: off/on`
 - Off-policy episode line: `Episode: N\tLength: M\tReward: r\tAverage: ar\tBest: bar\tEpsilon: eee`
-- On-policy iteration line: `Iter: I\tSteps: s\tEpisodes: e\tAvg Reward: ar\tBest Avg: bar`
+- On-policy iteration line: `Iter: I\tSteps: s\tAR: ar\tBR<level>: bar`
 - Save line: `>>> Save: Best|Check\tPath: ...`
 
 CLI cadence flags:

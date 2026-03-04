@@ -40,5 +40,6 @@ SPEC = GameSpec(
         "rollout_steps": config.ROLLOUT_STEPS,
         "checkpoint_every_iterations": config.CHECKPOINT_EVERY_ITERATIONS,
         "reward_window": config.REWARD_ROLLING_WINDOW,
+        "min_episodes_for_stats": config.MIN_EPISODES_FOR_STATS,
     },
 )

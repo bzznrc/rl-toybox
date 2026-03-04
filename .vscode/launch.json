@@ -171,10 +171,7 @@
         "kick",
         "--resume",
         "${input:trainResumeMode}"
-      ],
-      "env": {
-        "KICK_SPEED_SCALE": "${input:kickSpeedScale}"
-      }
+      ]
     }
   ],
   "inputs": [
@@ -187,18 +184,6 @@
         "1",
         "2",
         "3"
-      ]
-    },
-    {
-      "id": "kickSpeedScale",
-      "type": "pickString",
-      "description": "Kick speed scale",
-      "default": "0.5",
-      "options": [
-        "0.35",
-        "0.5",
-        "0.75",
-        "1.0"
       ]
     },
     {

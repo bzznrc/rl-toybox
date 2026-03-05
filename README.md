@@ -31,14 +31,11 @@ python -m scripts.play_user --game bang
 
 Short mp4 clips make the repo much easier to browse.
 
-Snake demo:
-<video src="media/snake-demo.mp4" width="600" controls preload="metadata"></video>
+Snake demo: [video](https://github.com/bzznrc/rl-toybox/blob/main/media/snake-demo.mp4)
 
-Bang demo:
-<video src="media/bang-demo.mp4" width="600" controls preload="metadata"></video>
+Bang demo: [video](https://github.com/bzznrc/rl-toybox/blob/main/media/bang-demo.mp4)
 
-Vroom demo:
-<video src="media/vroom-demo.mp4" width="600" controls preload="metadata"></video>
+Vroom demo: [video](https://github.com/bzznrc/rl-toybox/blob/main/media/vroom-demo.mp4)
 
 ## Games
 

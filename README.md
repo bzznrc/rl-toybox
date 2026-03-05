@@ -31,9 +31,14 @@ python -m scripts.play_user --game bang
 
 Short mp4 clips make the repo much easier to browse.
 
-- Snake demo: `games/media/snake-demo.mp4`
-- Bang demo: `games/media/bang-demo.mp4`
-- Vroom demo: `games/media/vroom-demo.mp4`
+Snake demo:
+<video src="media/snake-demo.mp4" width="600" controls preload="metadata"></video>
+
+Bang demo:
+<video src="media/bang-demo.mp4" width="600" controls preload="metadata"></video>
+
+Vroom demo:
+<video src="media/vroom-demo.mp4" width="600" controls preload="metadata"></video>
 
 ## Games
 

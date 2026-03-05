@@ -4,7 +4,7 @@ Classic grid Snake with obstacle curriculum and lightweight shaping rewards.
 
 ## Quick Clip
 
-- Suggested demo file: `games/snake/media/snake-demo.mp4`
+<video src="../../media/snake-demo.mp4" width="600" controls preload="metadata"></video>
 - Good clip idea: one reset, a few food pickups, then a tight obstacle escape.
 
 ## Curriculum (Train)

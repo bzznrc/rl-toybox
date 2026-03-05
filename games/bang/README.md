@@ -4,7 +4,7 @@ Top-down arena shooter focused on movement, aiming, and timing shots under press
 
 ## Quick Clip
 
-- Suggested demo file: `games/bang/media/bang-demo.mp4`
+<video src="../../media/bang-demo.mp4" width="600" controls preload="metadata"></video>
 - Good clip idea: one clean duel that shows movement, aim correction, and a finish.
 
 ## Algorithm / Network

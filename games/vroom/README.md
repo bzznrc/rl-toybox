@@ -4,7 +4,7 @@ Top-down one-lap racing with procedural closed-loop tracks.
 
 ## Quick Clip
 
-- Suggested demo file: `games/vroom/media/vroom-demo.mp4`
+<video src="../../media/vroom-demo.mp4" width="600" controls preload="metadata"></video>
 - Good clip idea: race start, one pass/overtake, and finish.
 
 ## Algorithm / Network

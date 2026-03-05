@@ -1,36 +1,21 @@
 # rl-toybox
 
-Toy RL monorepo with shared `core/` infrastructure and multiple Arcade-style games under `games/`.
+A small RL playground with shared infrastructure and arcade-style environments.
 
 ## Overview
 
-- Shared runtime/env interfaces in `core/`.
-- Game-specific environments and specs in `games/`.
-- Unified CLI scripts in `scripts/` for train, AI play, and human play.
-
-## Setup
-
-```bash
-pip install -e .
-```
+- Shared runtime interfaces, trainers, and curriculum utilities live in `core/`.
+- Game implementations live in `games/<name>/`.
+- CLI entry points in `scripts/` cover training, AI play, and human play.
 
 ## Run
 
-Train:
+With package install (recommended):
 
 ```bash
+pip install -e .
 rl-toybox-train --game bang
-```
-
-Play with trained model:
-
-```bash
 rl-toybox-play-ai --game bang --model best --render
-```
-
-Play as human:
-
-```bash
 rl-toybox-play-user --game bang
 ```
 
@@ -42,20 +27,13 @@ python -m scripts.play_ai --game bang --model best --render
 python -m scripts.play_user --game bang
 ```
 
-### Training log lines
+## Quick Clips
 
-Training output is tab-separated and compact:
+Short mp4 clips make the repo much easier to browse.
 
-- Header (once): `Train\tGame: ...\tAlgo: ...\tRun: ...\tResume: ...\tRender: off/on`
-- Off-policy episode line: `Episode: N\tLength: M\tReward: r\tAverage: ar\tBest: bar\tEpsilon: eee`
-- On-policy iteration line: `Iter: I\tSteps: s\tAR: ar\tBR<level>: bar`
-- Save line: `>>> Save: Best|Check\tPath: ...`
-
-CLI cadence flags:
-
-- `--log-every-episodes` (default `1`, off-policy)
-- `--log-every-iterations` (default `1`, on-policy)
-- `--log-heartbeat-steps` (default `0`, disabled; only logs when no episode/iter line has been printed in that interval)
+- Snake demo: `games/media/snake-demo.mp4`
+- Bang demo: `games/media/bang-demo.mp4`
+- Vroom demo: `games/media/vroom-demo.mp4`
 
 ## Games
 
@@ -67,21 +45,10 @@ CLI cadence flags:
 | `kick` | `ppo` | 36-dim / Discrete(12) | Top-down football match with movement and kick actions | [games/kick/README.md](games/kick/README.md) |
 | `stomp` | `sac` | 6-dim / Box(2) | Continuous-control testbed environment | [games/stomp/README.md](games/stomp/README.md) |
 
-## Plans: Games / Algos / IO / Nets
+## Default Plans
 
-- `snake` -> Q-learning + `LinearQNet`
-  - IO: obs 12, actions 3 discrete
-  - Net size: `[32]`
-- `vroom` -> vanilla DQN
-  - IO: obs 20, actions 6 discrete
-  - Net size: `[48, 48]`
-- `bang` -> enhanced DQN (double + dueling + prioritized replay)
-  - IO: obs 24, actions 8 discrete
-  - Net size: `[64, 64]`
-- `kick` -> PPO, parameter-shared across 11 players (start discrete)
-  - IO: obs 36, actions 12 discrete
-  - Net size: `[96, 96]`
-- `walk` -> SAC (continuous), later
-  - Current placeholder in repo: `stomp`
-  - IO target: continuous control
-  - Placeholder net size: `[128, 128]`
+- `snake` -> Q-learning + `LinearQNet` (`obs=12`, `act=3`, hidden `[32]`)
+- `vroom` -> vanilla DQN (`obs=20`, `act=6`, hidden `[48, 48]`)
+- `bang` -> enhanced DQN (`obs=24`, `act=8`, hidden `[64, 64]`)
+- `kick` -> PPO parameter-sharing (`obs=36`, `act=12`, hidden `[96, 96]`) - Work In Progress
+- `stomp` -> SAC placeholder for future `walk` work (`hidden [128, 128]`) - Work In Progress

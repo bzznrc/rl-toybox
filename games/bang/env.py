@@ -33,11 +33,14 @@ from core.io_schema import (
     ordered_feature_vector,
     signed_potential_shaping,
 )
+from core.match_tracker import MatchTracker
 from core.primitives import (
     draw_control_marker,
     draw_facing_indicator,
+    draw_time_pie_indicator,
     draw_two_tone_tile,
     spawn_connected_random_walk_shapes,
+    status_icon_size,
 )
 from core.rewards import RewardBreakdown
 
@@ -350,67 +353,24 @@ class Renderer:
         self._draw_winner_history(winners_left, winners_right, center_y)
 
     def _remaining_time_ratio(self) -> float:
-        frames_left = max(0, MAX_EPISODE_STEPS - int(self.game.frame_count))
-        return frames_left / max(1, MAX_EPISODE_STEPS)
+        return float(self.game.match_tracker.remaining_time_ratio(int(self.game.frame_count)))
 
     def _draw_time_indicator(self, center_x: float, center_y: float, radius: float, border_width: float) -> None:
-        circle_segments = 96
-        arcade.draw_circle_filled(center_x, center_y, radius, COLOR_SLATE_GRAY, num_segments=circle_segments)
-        inner_radius = max(1.0, radius - border_width)
-
-        remaining_ratio = self._remaining_time_ratio()
-        if remaining_ratio <= 0.0:
-            arcade.draw_circle_outline(
-                center_x,
-                center_y,
-                radius,
-                COLOR_FOG_GRAY,
-                border_width,
-                num_segments=circle_segments,
-            )
-            return
-        if remaining_ratio >= 1.0:
-            arcade.draw_circle_filled(
-                center_x,
-                center_y,
-                inner_radius,
-                COLOR_FOG_GRAY,
-                num_segments=circle_segments,
-            )
-            arcade.draw_circle_outline(
-                center_x,
-                center_y,
-                radius,
-                COLOR_FOG_GRAY,
-                border_width,
-                num_segments=circle_segments,
-            )
-            return
-
-        start_angle = 90.0
-        end_angle = start_angle + 360.0 * remaining_ratio
-        arcade.draw_arc_filled(
-            center_x=center_x,
-            center_y=center_y,
-            width=inner_radius * 2.0,
-            height=inner_radius * 2.0,
-            color=COLOR_FOG_GRAY,
-            start_angle=start_angle,
-            end_angle=end_angle,
-            num_segments=circle_segments,
-        )
-        arcade.draw_circle_outline(
-            center_x,
-            center_y,
-            radius,
-            COLOR_FOG_GRAY,
-            border_width,
-            num_segments=circle_segments,
+        draw_time_pie_indicator(
+            center_x=float(center_x),
+            center_y=float(center_y),
+            radius=float(radius),
+            border_width=float(border_width),
+            remaining_ratio=float(self._remaining_time_ratio()),
+            base_color=COLOR_SLATE_GRAY,
+            fill_color=COLOR_FOG_GRAY,
+            outline_color=COLOR_FOG_GRAY,
+            num_segments=96,
         )
 
     @staticmethod
     def _status_icon_size() -> float:
-        return max(12.0, min(float(BB_HEIGHT - 8), float(TILE_SIZE)))
+        return status_icon_size(float(BB_HEIGHT), float(TILE_SIZE))
 
     def _draw_winner_history(self, left: float, right: float, center_y: float) -> None:
         available_width = max(0.0, float(right) - float(left))
@@ -526,8 +486,9 @@ class BaseGame:
             player_id: PLAYER_STYLES[player_id]["render_outline"]
             for player_id in PLAYER_STYLES
         }
-        self.scores: dict[str, int] = {}
-        self.win_history: list[str | None] = []
+        self.match_tracker = MatchTracker[str](clock_duration_steps=int(MAX_EPISODE_STEPS))
+        self.scores: dict[str, int] = self.match_tracker.scores
+        self.win_history: list[str | None] = self.match_tracker.history
         self.player_control_modes: dict[str, str] = {}
         self._set_player_count(initial_player_count)
 
@@ -582,7 +543,6 @@ class BaseGame:
         if player_order == self.player_order and self.scores:
             return
 
-        old_scores = dict(self.scores)
         self.player_order = player_order
         self.player_render_colors = {
             player_id: (
@@ -600,10 +560,9 @@ class BaseGame:
             )
             for player_id in self.player_order
         }
-        self.scores = {
-            player_id: int(old_scores.get(player_id, 0))
-            for player_id in self.player_order
-        }
+        self.match_tracker.set_competitors(self.player_order, preserve_existing=True)
+        self.scores = self.match_tracker.scores
+        self.win_history = self.match_tracker.history
         for player_id in self.player_order:
             setattr(self, f"{player_id}_score", self.scores[player_id])
 
@@ -1450,12 +1409,12 @@ class BaseGame:
     def _increment_score(self, player_id: str) -> None:
         if player_id not in self.scores:
             return
-        self.scores[player_id] += 1
-        self.win_history.append(player_id)
+        self.match_tracker.increment_score(player_id)
+        self.match_tracker.record_result(player_id)
         setattr(self, f"{player_id}_score", self.scores[player_id])
 
     def _record_round_draw(self) -> None:
-        self.win_history.append(None)
+        self.match_tracker.record_draw()
 
 
 class HumanGame(BaseGame):

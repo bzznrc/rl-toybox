@@ -27,6 +27,7 @@ from core.curriculum import (
 )
 from core.envs.base import Env
 from core.io_schema import clip_signed, clip_unit, normalize_last_action, ordered_feature_vector, signed_potential_shaping
+from core.match_tracker import compact_count_to_icons
 from core.primitives import draw_two_tone_tile, spawn_connected_random_walk_shapes
 from core.rewards import RewardBreakdown
 from games.snake.config import (
@@ -267,9 +268,7 @@ class BaseSnakeGame:
         return max(12.0, min(float(BB_HEIGHT - 8), float(TILE_SIZE)))
 
     def _score_icons(self) -> list[bool]:
-        compressed_icons = self.score // 5
-        single_icons = self.score % 5
-        return ([True] * compressed_icons) + ([False] * single_icons)
+        return compact_count_to_icons(int(self.score), pack_size=5)
 
     def _draw_score_icons(self, left: float, right: float, center_y: float) -> None:
         available_width = max(0.0, float(right) - float(left))

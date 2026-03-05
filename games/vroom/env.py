@@ -40,6 +40,7 @@ from core.io_schema import (
     ordered_feature_vector,
     signed_potential_shaping,
 )
+from core.match_tracker import MatchTracker
 from core.primitives import (
     draw_facing_indicator,
     draw_status_square_icon,
@@ -95,6 +96,9 @@ class RaceCar:
     in_contact: bool = False
     obstacle_avoid_frames: int = 0
     obstacle_avoid_steer: float = 0.0
+    obstacle_avoid_obs_idx: int = -1
+    obstacle_avoid_coast_until_past: bool = False
+    ai_lane_offset: float = 0.0
     track_index: int = 0
     lap_progress: float = 0.0
     finished: bool = False
@@ -116,6 +120,7 @@ class VroomEnv(Env):
     NUM_CARS = 4
     TRAINING_TOTAL_RACES = 1
     HUMAN_TOTAL_RACES = 10
+    WINNER_BAR_HISTORY_SIZE = 10
     REWARD_COMPONENT_ORDER = ("W", "L", "P", "C", "S")
     REWARD_COMPONENT_KEY_TO_CODE = {
         "outcome.reward_win": "W",
@@ -206,9 +211,10 @@ class VroomEnv(Env):
         self.obstacle_size = float(TILE_SIZE)
         self.obstacle_inset = 4.0
         self.ai_obstacle_avoid_chance = 0.75
-        self.ai_avoid_lookahead = self.obstacle_size * 2.7
-        self.ai_avoid_lateral = self.obstacle_size * 1.15
-        self.ai_avoid_frames = 12
+        self.ai_avoid_lookahead = self.obstacle_size * 4.6
+        self.ai_avoid_lateral = max(self.obstacle_size * 1.8, self.track_half_width * 0.95)
+        self.ai_avoid_close_distance = self.obstacle_size * 1.75
+        self.ai_avoid_frames = 14
         self.ai_obstacle_rolls: dict[tuple[int, int], bool] = {}
 
         self.track_seed = 0
@@ -233,8 +239,11 @@ class VroomEnv(Env):
         self.winner_index: int | None = None
         self.last_race_winner: int | None = None
         self.total_races = int(self._resolve_total_races())
+        self.match_tracker = MatchTracker[int](match_limit=int(self.total_races))
+        self.winner_bar_tracker = MatchTracker[int](history_limit=int(self.WINNER_BAR_HISTORY_SIZE))
         self.current_race = 1
-        self.win_history: list[int | None] = []
+        self.win_history: list[int | None] = self.match_tracker.history
+        self.winner_bar_history: list[int | None] = self.winner_bar_tracker.history
         self.num_cars = int(self.NUM_CARS)
         self.opponent_speed_cap = 1.0
         self.track_obstacle_clusters = int(self.track_config.obstacle_clusters)
@@ -473,26 +482,27 @@ class VroomEnv(Env):
         return idx, float(math.sqrt(float(sq_distances[idx]))), float(x - px), float(y - py)
 
     def _create_car_grid(self) -> list[RaceCar]:
-        lateral_spacing = min(self.track_half_width * 0.42, self.car_size * 1.15)
         index_gap = max(6, int(self.car_size * 0.30))
 
         cars: list[RaceCar] = []
-        lane_offsets_by_count: dict[int, tuple[float, ...]] = {
-            1: (0.0,),
-            2: (-0.5, 0.5),
-            3: (-1.0, 0.0, 1.0),
-            4: (-1.5, -0.5, 0.5, 1.5),
-        }
-        lane_offsets = lane_offsets_by_count.get(int(self.num_cars), lane_offsets_by_count[4])
+        car_count = max(1, int(self.num_cars))
+        if car_count == 1:
+            lane_offsets = [0.0]
+        else:
+            max_lane_span = max(0.0, self.track_half_width - self.car_half * 0.65)
+            lane_span = min(max_lane_span, max(self.car_size * 0.9, max_lane_span * 0.78))
+            lane_offsets = np.linspace(-lane_span, lane_span, num=car_count, dtype=np.float32).astype(float).tolist()
+            random.shuffle(lane_offsets)
+
         base_idx = (self.start_index - index_gap) % max(1, self.track_count)
         max_jump = max(1, min(self.track_count // 4, 70))
-        spacing_scales = (1.0, 0.9, 0.8, 0.7, 0.6)
+        spacing_scales = (1.0, 0.92, 0.84, 0.76, 0.68, 0.60, 0.52)
 
         spawn_idx = base_idx
-        resolved_offsets = [float(offset) * lateral_spacing for offset in lane_offsets]
+        resolved_offsets = [float(offset) for offset in lane_offsets]
         found_layout = False
         for scale in spacing_scales:
-            offsets = [float(offset) * lateral_spacing * float(scale) for offset in lane_offsets]
+            offsets = [float(offset) * float(scale) for offset in lane_offsets]
             for jump in range(max_jump + 1):
                 directions = (1,) if jump == 0 else (1, -1)
                 for direction in directions:
@@ -534,10 +544,12 @@ class VroomEnv(Env):
                 heading_degrees=float(heading),
                 outer_color=outer,
                 inner_color=inner,
+                ai_lane_offset=float(desired_lateral),
             )
             if not self._is_driveable_footprint(car.x, car.y):
                 car.x = float(cx)
                 car.y = float(cy)
+                car.ai_lane_offset = 0.0
             car.track_index = self._nearest_track_sample(car.x, car.y)[0]
             cars.append(car)
         return cars
@@ -803,12 +815,13 @@ class VroomEnv(Env):
 
     def _finalize_race(self, winner_idx: int | None) -> None:
         self.last_race_winner = None if winner_idx is None else int(winner_idx)
-        self.win_history.append(self.last_race_winner)
-        if len(self.win_history) >= self.total_races:
+        self.match_tracker.record_result(self.last_race_winner)
+        self.winner_bar_tracker.record_result(self.last_race_winner)
+        if self.match_tracker.match_limit_reached():
             self.done = True
             self.winner_index = self.last_race_winner
             return
-        self.current_race = len(self.win_history) + 1
+        self.current_race = int(self.match_tracker.matches_played()) + 1
         self._setup_race()
 
     def _resolve_human_action(self) -> int:
@@ -825,22 +838,13 @@ class VroomEnv(Env):
 
     def _reset_ai_obstacle_rolls(self) -> None:
         self.ai_obstacle_rolls = {}
-        obstacle_count = int(len(self.obstacles))
-        if obstacle_count <= 0:
-            return
-        for car_idx in range(int(self.num_cars)):
-            if car_idx == self.player_index:
-                continue
-            for obs_idx in range(obstacle_count):
-                self.ai_obstacle_rolls[(car_idx, obs_idx)] = bool(random.random() < self.ai_obstacle_avoid_chance)
 
     def _closest_obstacle_ahead(self, car: RaceCar) -> tuple[int, float, float] | None:
         if not self.obstacles:
             return None
 
-        heading_rad = math.radians(float(car.heading_degrees))
-        forward_x = math.cos(heading_rad)
-        forward_y = math.sin(heading_rad)
+        idx, _, _, _ = self._nearest_track_sample(float(car.x), float(car.y))
+        forward_x, forward_y = self.track_tangents[idx]
         left_x = -forward_y
         left_y = forward_x
 
@@ -860,17 +864,97 @@ class VroomEnv(Env):
                 best = (int(obs_idx), float(forward), float(lateral))
         return best
 
-    def _ai_control_for_car(self, car_index: int, car: RaceCar) -> tuple[float, float]:
-        idx, distance, _, _ = self._nearest_track_sample(car.x, car.y)
-        look_ahead = 10 + int(distance / max(1.0, self.track_half_width) * 8.0)
-        target_idx = (idx + look_ahead) % self.track_count
-        target_x, target_y = self.track_centerline[target_idx]
-        desired_heading = math.degrees(math.atan2(target_y - car.y, target_x - car.x))
-        delta = self._normalize_degrees(desired_heading - car.heading_degrees)
-        _, _, forward_speed, _ = self._project_to_car_frame(car)
+    def _obstacle_center(self, obs_idx: int) -> tuple[float, float]:
+        ox, oy = self.obstacles[int(obs_idx)]
+        return (
+            float(ox) + 0.5 * float(self.obstacle_size),
+            float(oy) + 0.5 * float(self.obstacle_size),
+        )
 
+    def _obstacle_clearance_distance(self) -> float:
+        return 0.5 * float(self.obstacle_size) + 1.05 * float(self.car_radius)
+
+    def _is_lane_danger_for_obstacle(self, obstacle_forward: float, obstacle_lateral: float) -> bool:
+        if float(obstacle_forward) <= 0.0:
+            return False
+        return abs(float(obstacle_lateral)) <= float(self._obstacle_clearance_distance())
+
+    def _is_obstacle_side_safe(self, obs_idx: int, side_sign: float) -> bool:
+        obstacle_center_x, obstacle_center_y = self._obstacle_center(int(obs_idx))
+        track_idx, _, _, _ = self._nearest_track_sample(float(obstacle_center_x), float(obstacle_center_y))
+        forward_x, forward_y = self.track_tangents[track_idx]
+        left_x = -forward_y
+        left_y = forward_x
+        pass_distance = float(self._obstacle_clearance_distance())
+        side_x = left_x * float(side_sign)
+        side_y = left_y * float(side_sign)
+        pass_x = float(obstacle_center_x) + side_x * pass_distance
+        pass_y = float(obstacle_center_y) + side_y * pass_distance
+        forward_probe = 0.70 * float(self.car_radius)
+        return (
+            self._is_driveable_footprint(pass_x, pass_y)
+            and self._is_driveable_footprint(pass_x + forward_x * forward_probe, pass_y + forward_y * forward_probe)
+            and self._is_driveable_footprint(pass_x - forward_x * forward_probe, pass_y - forward_y * forward_probe)
+        )
+
+    def _closest_safe_obstacle_avoid_steer(self, obs_idx: int, obstacle_lateral: float) -> float:
+        clearance = float(self._obstacle_clearance_distance())
+        preferred = -1.0 if float(obstacle_lateral) >= 0.0 else 1.0
+        candidates: list[tuple[float, float, int]] = []
+
+        if self._is_obstacle_side_safe(int(obs_idx), 1.0):
+            left_shift = abs(float(obstacle_lateral) + clearance)
+            left_tiebreak = 0 if preferred == 1.0 else 1
+            candidates.append((float(left_shift), 1.0, int(left_tiebreak)))
+        if self._is_obstacle_side_safe(int(obs_idx), -1.0):
+            right_shift = abs(float(obstacle_lateral) - clearance)
+            right_tiebreak = 0 if preferred == -1.0 else 1
+            candidates.append((float(right_shift), -1.0, int(right_tiebreak)))
+
+        if candidates:
+            candidates.sort(key=lambda item: (item[0], item[2]))
+            return float(candidates[0][1])
+        return float(preferred)
+
+    @staticmethod
+    def _should_keep_coasting_for_obstacle(
+        car: RaceCar,
+        ahead: tuple[int, float, float] | None,
+    ) -> bool:
+        if not bool(car.obstacle_avoid_coast_until_past):
+            return False
+        if int(car.obstacle_avoid_obs_idx) < 0:
+            return False
+        if ahead is None:
+            return False
+        obs_idx, obstacle_forward, _ = ahead
+        if int(obs_idx) != int(car.obstacle_avoid_obs_idx):
+            return False
+        return float(obstacle_forward) > 0.0
+
+    def _ai_control_for_car(self, car_index: int, car: RaceCar) -> tuple[float, float]:
+        idx, distance, dx, dy = self._nearest_track_sample(car.x, car.y)
+        _, _, forward_speed, _ = self._project_to_car_frame(car)
         max_forward_speed = float(self.max_speed) * float(self.opponent_speed_cap)
         min_forward_speed = 0.5 * max_forward_speed
+
+        tx, ty = self.track_tangents[idx]
+        nx, ny = -ty, tx
+        signed_lateral = dx * nx + dy * ny
+        lane_target = float(car.ai_lane_offset)
+        lane_error = signed_lateral - lane_target
+        correction_mag = self._clamp(lane_error * 0.65, -self.track_half_width * 0.65, self.track_half_width * 0.65)
+        speed_ratio = self._clamp(abs(float(forward_speed)) / max(1.0, max_forward_speed), 0.0, 1.0)
+        look_ahead = 8 + int(8.0 * speed_ratio + min(8.0, distance / max(1.0, self.track_half_width) * 6.0))
+        target_idx = (idx + look_ahead) % self.track_count
+        target_x, target_y = self.track_centerline[target_idx]
+        target_tx, target_ty = self.track_tangents[target_idx]
+        target_nx, target_ny = -target_ty, target_tx
+        target_lateral = lane_target - correction_mag
+        aim_x = float(target_x) + target_nx * float(target_lateral)
+        aim_y = float(target_y) + target_ny * float(target_lateral)
+        desired_heading = math.degrees(math.atan2(aim_y - car.y, aim_x - car.x))
+        delta = self._normalize_degrees(desired_heading - car.heading_degrees)
 
         if abs(delta) <= 2.0:
             steer = 0.0
@@ -884,6 +968,21 @@ class VroomEnv(Env):
         elif abs_delta > 35.0:
             throttle = 0.20
 
+        # Launch behavior: keep opponents from immediately dropping pace on opening straights.
+        if self.steps < 90 and abs_delta < 35.0:
+            launch_floor = float(max_forward_speed) * 0.78
+            if forward_speed < launch_floor:
+                throttle = 1.0
+
+        ahead = self._closest_obstacle_ahead(car)
+        keep_coasting = self._should_keep_coasting_for_obstacle(car, ahead)
+        if keep_coasting:
+            car.obstacle_avoid_frames = max(1, int(car.obstacle_avoid_frames) - 1)
+            return float(car.obstacle_avoid_steer), 0.0
+        if bool(car.obstacle_avoid_coast_until_past):
+            car.obstacle_avoid_coast_until_past = False
+            car.obstacle_avoid_obs_idx = -1
+
         if int(car.obstacle_avoid_frames) > 0:
             car.obstacle_avoid_frames = int(car.obstacle_avoid_frames) - 1
             steer = float(car.obstacle_avoid_steer)
@@ -892,18 +991,25 @@ class VroomEnv(Env):
                 throttle = 1.0
             return steer, throttle
 
-        ahead = self._closest_obstacle_ahead(car)
         if ahead is not None:
-            obs_idx, _, lateral = ahead
-            should_avoid = bool(self.ai_obstacle_rolls.get((int(car_index), int(obs_idx)), True))
-            if should_avoid:
-                steer = -1.0 if lateral >= 0.0 else 1.0
-                car.obstacle_avoid_steer = float(steer)
-                car.obstacle_avoid_frames = int(self.ai_avoid_frames)
-                throttle = min(throttle, 0.20)
-                if forward_speed < float(min_forward_speed):
-                    throttle = 1.0
-                return steer, throttle
+            obs_idx, forward_to_obstacle, lateral = ahead
+            if self._is_lane_danger_for_obstacle(float(forward_to_obstacle), float(lateral)):
+                roll_key = (int(car_index), int(obs_idx))
+                should_avoid = self.ai_obstacle_rolls.get(roll_key)
+                if should_avoid is None:
+                    should_avoid = bool(random.random() < float(self.ai_obstacle_avoid_chance))
+                    self.ai_obstacle_rolls[roll_key] = bool(should_avoid)
+                if should_avoid:
+                    steer = self._closest_safe_obstacle_avoid_steer(int(obs_idx), float(lateral))
+                    close_now = float(forward_to_obstacle) <= float(self.ai_avoid_close_distance)
+                    car.obstacle_avoid_coast_until_past = bool(close_now)
+                    car.obstacle_avoid_obs_idx = int(obs_idx)
+                    throttle = 0.0 if close_now else min(throttle, 0.20)
+                    if (not close_now) and forward_speed < float(min_forward_speed):
+                        throttle = 1.0
+                    car.obstacle_avoid_steer = float(steer)
+                    car.obstacle_avoid_frames = int(self.ai_avoid_frames)
+                    return steer, throttle
         if forward_speed < float(min_forward_speed):
             throttle = 1.0
         return steer, throttle
@@ -1043,8 +1149,9 @@ class VroomEnv(Env):
 
     def reset(self) -> np.ndarray:
         self._apply_level_settings(int(self._current_level))
+        self.match_tracker.set_match_limit(int(self.total_races))
         self.current_race = 1
-        self.win_history = []
+        self.match_tracker.clear_history()
         self.last_race_winner = None
         self.player_index = 0
         self.done = False
@@ -1232,7 +1339,8 @@ class VroomEnv(Env):
         if max_icons <= 0:
             return
 
-        winners = self.win_history[-max_icons:]
+        max_display = min(max_icons, int(self.WINNER_BAR_HISTORY_SIZE))
+        winners = self.winner_bar_history[-max_display:]
         if not winners:
             return
 

@@ -112,6 +112,39 @@ class PPOAlgorithm(Algorithm):
         self.rollout.dones.append(dones)
         self.rollout.log_probs.append(log_probs)
         self.rollout.values.append(values)
+        self.rollout.last_next_observation = self._as_batch_obs(transition["next_obs"])
+        self.rollout.last_done = np.asarray(dones, dtype=np.bool_).reshape(-1)
+
+    def _rollout_bootstrap_value(self, expected_batch_size: int) -> np.ndarray:
+        if expected_batch_size <= 0:
+            return np.zeros((0,), dtype=np.float32)
+
+        if self.rollout.last_done is None or self.rollout.last_next_observation is None:
+            return np.zeros((expected_batch_size,), dtype=np.float32)
+
+        done_last = np.asarray(self.rollout.last_done, dtype=np.float32).reshape(-1)
+        if int(done_last.size) != int(expected_batch_size):
+            if int(done_last.size) == 1:
+                done_last = np.full((expected_batch_size,), done_last.item(), dtype=np.float32)
+            else:
+                return np.zeros((expected_batch_size,), dtype=np.float32)
+
+        if bool(np.all(done_last > 0.5)):
+            return np.zeros((expected_batch_size,), dtype=np.float32)
+
+        next_obs_batch = np.asarray(self.rollout.last_next_observation, dtype=np.float32)
+        with torch.no_grad():
+            next_obs_tensor = torch.as_tensor(next_obs_batch, dtype=torch.float32, device=self.device)
+            _, next_values_tensor = self.model(next_obs_tensor)
+        next_values = next_values_tensor.detach().cpu().numpy().astype(np.float32).reshape(-1)
+
+        if int(next_values.size) != int(expected_batch_size):
+            if int(next_values.size) == 1:
+                next_values = np.full((expected_batch_size,), next_values.item(), dtype=np.float32)
+            else:
+                return np.zeros((expected_batch_size,), dtype=np.float32)
+
+        return next_values * (1.0 - done_last)
 
     def _compute_gae(self) -> tuple[list[np.ndarray], list[np.ndarray]]:
         rewards_seq = [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in self.rollout.rewards]
@@ -120,8 +153,12 @@ class PPOAlgorithm(Algorithm):
 
         advantages_rev: list[np.ndarray] = []
         returns_rev: list[np.ndarray] = []
-        next_advantage = np.zeros((0,), dtype=np.float32)
-        next_value = np.zeros((0,), dtype=np.float32)
+        if rewards_seq:
+            last_agent_count = int(rewards_seq[-1].shape[0])
+        else:
+            last_agent_count = 0
+        next_value = self._rollout_bootstrap_value(last_agent_count)
+        next_advantage = np.zeros_like(next_value, dtype=np.float32)
 
         for rewards_t, dones_t, values_t in zip(reversed(rewards_seq), reversed(dones_seq), reversed(values_seq)):
             if rewards_t.shape != dones_t.shape or rewards_t.shape != values_t.shape:
@@ -145,9 +182,6 @@ class PPOAlgorithm(Algorithm):
 
             next_value = values_t
             next_advantage = advantage_t
-            if bool(np.any(dones_t > 0.5)):
-                next_value = np.zeros((agent_count,), dtype=np.float32)
-                next_advantage = np.zeros((agent_count,), dtype=np.float32)
 
         advantages = list(reversed(advantages_rev))
         returns = list(reversed(returns_rev))

@@ -5,7 +5,6 @@ Top-down one-lap racing with procedural closed-loop tracks.
 ## Quick Clip
 
 Vroom demo: [video](https://github.com/bzznrc/rl-toybox/blob/main/media/vroom-demo.mp4)
-- Good clip idea: race start, one pass/overtake, and finish.
 
 ## Algorithm / Network
 

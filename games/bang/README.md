@@ -2,7 +2,7 @@
 
 Top-down arena shooter focused on movement, aiming, and timing shots under pressure.
 
-## Quick Clip
+## Clip
 
 [![Bang Demo](../../media/bang-demo.gif)](../../media/bang-demo.mp4)
 

@@ -2,7 +2,7 @@
 
 Classic grid Snake with obstacle curriculum and lightweight shaping rewards.
 
-## Quick Clip
+## Clip
 
 [![Snake Demo](../../media/snake-demo.gif)](../../media/snake-demo.mp4)
 

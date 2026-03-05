@@ -8,6 +8,14 @@ A small RL playground with shared infrastructure and arcade-style environments.
 - Game implementations live in `games/<name>/`.
 - CLI entry points in `scripts/` cover training, AI play, and human play.
 
+## Clips
+
+<p>
+  <img src="media/snake-demo.gif" width="32%">
+  <img src="media/bang-demo.gif" width="32%">
+  <img src="media/vroom-demo.gif" width="32%">
+</p>
+
 ## Run
 
 With package install (recommended):
@@ -26,16 +34,6 @@ python -m scripts.train --game bang
 python -m scripts.play_ai --game bang --model best --render
 python -m scripts.play_user --game bang
 ```
-
-## Quick Clips
-
-Short mp4 clips make the repo much easier to browse.
-
-[![Snake Demo](media/snake-demo.gif)](media/snake-demo.mp4)
-
-[![Bang Demo](media/bang-demo.gif)](media/bang-demo.mp4)
-
-[![Vroom Demo](media/vroom-demo.gif)](media/vroom-demo.mp4)
 
 ## Games
 

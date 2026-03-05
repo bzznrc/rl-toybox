@@ -2,7 +2,7 @@
 
 Top-down one-lap racing with procedural closed-loop tracks.
 
-## Quick Clip
+## Clip
 
 [![Vroom Demo](../../media/vroom-demo.gif)](../../media/vroom-demo.mp4)
 

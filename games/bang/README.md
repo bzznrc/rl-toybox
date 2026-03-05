@@ -4,7 +4,7 @@ Top-down arena shooter focused on movement, aiming, and timing shots under press
 
 ## Quick Clip
 
-Bang demo: [video](https://github.com/bzznrc/rl-toybox/blob/main/media/bang-demo.mp4)
+[![Bang Demo](../../media/bang-demo.gif)](../../media/bang-demo.mp4)
 
 ## Algorithm / Network
 

@@ -4,7 +4,7 @@ Classic grid Snake with obstacle curriculum and lightweight shaping rewards.
 
 ## Quick Clip
 
-Snake demo: [video](https://github.com/bzznrc/rl-toybox/blob/main/media/snake-demo.mp4)
+[![Snake Demo](../../media/snake-demo.gif)](../../media/snake-demo.mp4)
 
 ## Curriculum (Train)
 

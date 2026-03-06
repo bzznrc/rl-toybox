@@ -12,11 +12,10 @@ import numpy as np
 from core.arcade_style import (
     COLOR_AQUA,
     COLOR_BRICK_RED,
-    COLOR_CHARCOAL,
     COLOR_CORAL,
+    COLOR_DARK_NEUTRAL,
     COLOR_DEEP_TEAL,
     COLOR_FOG_GRAY,
-    COLOR_NEAR_BLACK,
     COLOR_SLATE_GRAY,
 )
 from core.curriculum import (
@@ -260,7 +259,7 @@ class BaseSnakeGame:
             self._draw_tile(tile, outer_color, inner_color)
 
     def _draw_status_bar(self) -> None:
-        arcade.draw_lbwh_rectangle_filled(0, 0, self.width, BB_HEIGHT, COLOR_NEAR_BLACK)
+        arcade.draw_lbwh_rectangle_filled(0, 0, self.width, BB_HEIGHT, COLOR_DARK_NEUTRAL)
         self._draw_score_icons(left=8.0, right=self.width - 8.0, center_y=BB_HEIGHT / 2.0)
 
     @staticmethod
@@ -324,7 +323,7 @@ class BaseSnakeGame:
         if self.window is None:
             return
 
-        self.window_controller.clear(COLOR_CHARCOAL)
+        self.window_controller.clear(COLOR_DARK_NEUTRAL)
         self._draw_tile_batch(self.snake, COLOR_AQUA, COLOR_DEEP_TEAL)
         self._draw_tile(self.food, COLOR_CORAL, COLOR_BRICK_RED)
         self._draw_tile_batch(self.obstacles, COLOR_FOG_GRAY, COLOR_SLATE_GRAY)

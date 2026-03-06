@@ -9,20 +9,19 @@ from dataclasses import dataclass
 import arcade
 import numpy as np
 from core.arcade_style import (
-    COLOR_AMBER,
     COLOR_AQUA,
+    COLOR_BLUE,
     COLOR_BRICK_RED,
-    COLOR_CHARCOAL,
     COLOR_CORAL,
+    COLOR_DARK_NEUTRAL,
+    COLOR_DEEP_PURPLE,
     COLOR_DEEP_TEAL,
     COLOR_FOG_GRAY,
-    COLOR_NEAR_BLACK,
-    COLOR_P3_BLUE,
-    COLOR_P3_NAVY,
-    COLOR_P4_DEEP_PURPLE,
-    COLOR_P4_PURPLE,
+    COLOR_LIGHT_NEUTRAL,
+    COLOR_NAVY,
+    COLOR_PURPLE,
+    COLOR_SAND,
     COLOR_SLATE_GRAY,
-    COLOR_SOFT_WHITE,
 )
 from core.curriculum import ThreeLevelCurriculum, advance_curriculum, build_curriculum_config
 from core.envs.base import Env
@@ -37,6 +36,7 @@ from core.match_tracker import MatchTracker
 from core.primitives import (
     draw_control_marker,
     draw_facing_indicator,
+    status_bar_layout,
     draw_time_pie_indicator,
     draw_two_tone_tile,
     spawn_connected_random_walk_shapes,
@@ -148,15 +148,15 @@ PLAYER_STYLES = {
         "scripted": True,
     },
     "P3": {
-        "render_fill": COLOR_P3_NAVY,
-        "render_outline": COLOR_P3_BLUE,
-        "status_color": COLOR_P3_BLUE,
+        "render_fill": COLOR_NAVY,
+        "render_outline": COLOR_BLUE,
+        "status_color": COLOR_BLUE,
         "scripted": True,
     },
     "P4": {
-        "render_fill": COLOR_P4_DEEP_PURPLE,
-        "render_outline": COLOR_P4_PURPLE,
-        "status_color": COLOR_P4_PURPLE,
+        "render_fill": COLOR_DEEP_PURPLE,
+        "render_outline": COLOR_PURPLE,
+        "status_color": COLOR_PURPLE,
         "scripted": True,
     },
 }
@@ -294,7 +294,7 @@ class Renderer:
         if self.window is None:
             return
 
-        self.window_controller.clear(COLOR_CHARCOAL)
+        self.window_controller.clear(COLOR_DARK_NEUTRAL)
 
         for obstacle in self.game.obstacles:
             self._draw_two_tone_tile(
@@ -321,7 +321,7 @@ class Renderer:
 
         for projectile in self.game.projectiles:
             owner_id = str(projectile.get("owner", ""))
-            projectile_color = self.game.player_projectile_colors.get(owner_id, COLOR_AMBER)
+            projectile_color = self.game.player_projectile_colors.get(owner_id, COLOR_SAND)
             arcade.draw_circle_filled(
                 projectile["pos"].x,
                 self.window_controller.to_arcade_y(projectile["pos"].y),
@@ -333,24 +333,26 @@ class Renderer:
         self.window_controller.flip()
 
     def _draw_status_bar(self) -> None:
-        arcade.draw_lbwh_rectangle_filled(0, 0, self.width, BB_HEIGHT, COLOR_NEAR_BLACK)
-        center_y = BB_HEIGHT / 2.0
-        icon_size = self._status_icon_size()
-        indicator_diameter = icon_size * math.sqrt(2.0) * 0.8
-        indicator_radius = indicator_diameter / 2.0
-        indicator_border = max(1.0, round(CELL_INSET * 0.5))
-        indicator_center_x = self.width - 10.0 - indicator_radius
-        self._draw_time_indicator(
-            center_x=indicator_center_x,
-            center_y=center_y,
-            radius=indicator_radius,
-            border_width=indicator_border,
+        arcade.draw_lbwh_rectangle_filled(0, 0, self.width, BB_HEIGHT, COLOR_DARK_NEUTRAL)
+        bar_layout = status_bar_layout(
+            width=float(self.width),
+            bottom_bar_height=float(BB_HEIGHT),
+            tile_size=float(TILE_SIZE),
+            cell_inset=float(CELL_INSET),
+            include_clock=True,
         )
-
-        right_reserved = indicator_diameter + 24.0
-        winners_left = 8.0
-        winners_right = max(winners_left, self.width - right_reserved)
-        self._draw_winner_history(winners_left, winners_right, center_y)
+        if bar_layout.clock_center_x is not None:
+            self._draw_time_indicator(
+                center_x=float(bar_layout.clock_center_x),
+                center_y=float(bar_layout.center_y),
+                radius=float(bar_layout.clock_radius),
+                border_width=float(bar_layout.clock_border_width),
+            )
+        self._draw_winner_history(
+            float(bar_layout.score_left),
+            float(bar_layout.score_right),
+            float(bar_layout.center_y),
+        )
 
     def _remaining_time_ratio(self) -> float:
         return float(self.game.match_tracker.remaining_time_ratio(int(self.game.frame_count)))
@@ -451,7 +453,7 @@ class Renderer:
             center_y_top_left=float(actor.position.y),
             angle_degrees=float(actor.angle),
             length=float(TILE_SIZE // 2),
-            color=COLOR_SOFT_WHITE,
+            color=COLOR_LIGHT_NEUTRAL,
             line_width=2.0,
         )
 

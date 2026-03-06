@@ -35,6 +35,9 @@ PHYSICS_DT = 1.0 / FPS
 BALL_RADIUS_SCALE = 1.8
 PLAYER_V_MAX_PX_PER_SEC = 3.8 * FPS * GAME_SPEED_SCALE
 PLAYER_A_MAX_PX_PER_SEC2 = PLAYER_V_MAX_PX_PER_SEC * 4.0
+SHOW_ZONE_TARGET_CLONES = True
+SHOW_BOTTOM_REWARD_BREAKDOWN = True
+ZONE_TARGET_CLONE_ALPHA = 128
 
 PITCH_LINE_WIDTH = 3
 PENALTY_AREA_DEPTH_RATIO = 16.5 / 105.0
@@ -55,6 +58,7 @@ INPUT_FEATURE_NAMES = [
     "self_theta_sin",
     "self_has_ball",
     "self_role",
+    "self_role_lane",
     "self_stamina",
     "self_stamina_delta",
     "tgt_dx",
@@ -63,7 +67,6 @@ INPUT_FEATURE_NAMES = [
     "tgt_rel_angle_cos",
     "tgt_dvx",
     "tgt_dvy",
-    "tgt_is_free",
     "tgt_owner_team",
     "goal_dx",
     "goal_dy",
@@ -113,37 +116,34 @@ MIN_EPISODES_FOR_STATS = REWARD_ROLLING_WINDOW
 CURRICULUM_PROMOTION = {
     "min_episodes_per_level": 250,
     "check_window": 25,
-    "success_threshold": 0.30,
+    "success_threshold": 0.60,
     "consecutive_checks_required": 2,
 }
 
 LEVEL_SETTINGS = {
     1: {
         "players_opponent": 3,
-        "opponent_roles": ["RM", "LM", "ST1"],
+        "opponent_roles": ["RM", "LM", "LCS"],
         "goals_size_scale": 2.0,
         "enemy_stamina_scale": 0.50,
         "enemy_shot_error_choices": [-30, 0, 30],
         "entropy_coef": 0.02,
-        "kickoff": "GK",
     },
     2: {
         "players_opponent": 7,
-        "opponent_roles": ["GK", "LB", "RB", "RM", "LM", "ST1", "ST2"],
+        "opponent_roles": ["GK", "LB", "RB", "RM", "LM", "LCS", "RCS"],
         "goals_size_scale": 1.5,
         "enemy_stamina_scale": 0.75,
         "enemy_shot_error_choices": [-20, 0, 20],
         "entropy_coef": 0.01,
-        "kickoff": "GK",
     },
     3: {
         "players_opponent": 11,
-        "opponent_roles": ["GK", "LB", "LCB", "RCB", "RB", "LM", "LCM", "RCM", "RM", "ST1", "ST2"],
+        "opponent_roles": ["GK", "LB", "LCB", "RCB", "RB", "LM", "LCM", "RCM", "RM", "LCS", "RCS"],
         "goals_size_scale": 1.0,
         "enemy_stamina_scale": 1.0,
         "enemy_shot_error_choices": [-10, 0, 10],
         "entropy_coef": 0.005,
-        "kickoff": "CC",
     },
 }
 
@@ -152,13 +152,16 @@ LEVEL_SETTINGS = {
 REWARD_SCORE = 10.0
 PENALTY_CONCEDE = -5.0
 PENALTY_TURNOVER = -0.25
-REWARD_PROGRESS = 5.0
-PENALTY_ZONE = -0.0005
+REWARD_PASS = 0.25
+REWARD_PROGRESS = 0.5
+PENALTY_ZONE = -0.1
+Z_TOL = 0.05
 
 REWARD_COMPONENTS = {
     "outcome.reward_score": REWARD_SCORE,
     "outcome.penalty_concede": PENALTY_CONCEDE,
     "event.penalty_turnover": PENALTY_TURNOVER,
+    "event.reward_pass": REWARD_PASS,
     "progress.reward_progress": REWARD_PROGRESS,
     "event.penalty_zone": PENALTY_ZONE,
 }
@@ -167,7 +170,7 @@ REWARD_COMPONENTS = {
 # TRAINING
 HIDDEN_DIMENSIONS = [96, 96]
 
-MAX_TRAINING_ITERATIONS = 4500
+MAX_TRAINING_ITERATIONS = 12000
 ROLLOUT_STEPS = 2048
 CHECKPOINT_EVERY_ITERATIONS = 10
 
@@ -177,6 +180,5 @@ GAE_LAMBDA = 0.95
 CLIP_RATIO = 0.2
 UPDATE_EPOCHS = 4
 MINIBATCH_SIZE = 512
-ENTROPY_COEF = 0.025
 VALUE_COEF = 0.5
 MAX_GRAD_NORM = 0.5

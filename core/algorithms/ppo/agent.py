@@ -48,14 +48,69 @@ class PPOAlgorithm(Algorithm):
         self._last_log_prob: float | np.ndarray = 0.0
         self._last_value: float | np.ndarray = 0.0
 
-    def act(self, obs: np.ndarray, explore: bool) -> int | np.ndarray:
+    def _normalize_action_mask(
+        self,
+        action_mask: object,
+        *,
+        batch_size: int,
+    ) -> np.ndarray:
+        mask_array = np.asarray(action_mask, dtype=np.bool_)
+        action_dim = int(self.config.action_dim)
+
+        if mask_array.ndim == 1:
+            if int(mask_array.size) == 1 and int(batch_size) > 1:
+                mask_array = np.full((int(batch_size), action_dim), bool(mask_array.item()), dtype=np.bool_)
+            else:
+                mask_array = mask_array.reshape(1, -1)
+        if mask_array.ndim != 2:
+            raise ValueError(f"PPO action mask expected ndim 1 or 2, got {mask_array.ndim}.")
+
+        if int(mask_array.shape[0]) == 1 and int(batch_size) > 1:
+            mask_array = np.repeat(mask_array, int(batch_size), axis=0)
+        if int(mask_array.shape[0]) != int(batch_size):
+            raise ValueError(
+                f"PPO action mask expected batch size {int(batch_size)}, got {int(mask_array.shape[0])}."
+            )
+        if int(mask_array.shape[1]) != int(action_dim):
+            raise ValueError(
+                f"PPO action mask expected action dim {int(action_dim)}, got {int(mask_array.shape[1])}."
+            )
+
+        # Guarantee a valid categorical distribution for every row.
+        valid_counts = mask_array.sum(axis=1)
+        if np.any(valid_counts <= 0):
+            mask_array = mask_array.copy()
+            mask_array[valid_counts <= 0, :] = True
+        return mask_array.astype(np.bool_, copy=False)
+
+    @staticmethod
+    def _masked_logits(logits: torch.Tensor, action_mask: np.ndarray | None) -> torch.Tensor:
+        if action_mask is None:
+            return logits
+        mask_tensor = torch.as_tensor(action_mask, dtype=torch.bool, device=logits.device)
+        if mask_tensor.dim() == 1:
+            mask_tensor = mask_tensor.unsqueeze(0)
+        return logits.masked_fill(~mask_tensor, float(-1e9))
+
+    def act(
+        self,
+        obs: np.ndarray,
+        explore: bool,
+        action_mask: np.ndarray | None = None,
+    ) -> int | np.ndarray:
         obs_array = np.asarray(obs, dtype=np.float32)
         if obs_array.ndim not in {1, 2}:
             raise ValueError(f"PPO expected obs ndim 1 or 2, got {obs_array.ndim}.")
 
+        batch_size = 1 if obs_array.ndim == 1 else int(obs_array.shape[0])
+        mask_array = None
+        if action_mask is not None:
+            mask_array = self._normalize_action_mask(action_mask, batch_size=batch_size)
+
         obs_tensor = torch.as_tensor(obs_array, dtype=torch.float32, device=self.device)
         logits, value = self.model(obs_tensor)
-        dist = Categorical(logits=logits)
+        masked_logits = self._masked_logits(logits, mask_array)
+        dist = Categorical(logits=masked_logits)
 
         if explore:
             action_tensor = dist.sample()
@@ -101,6 +156,11 @@ class PPOAlgorithm(Algorithm):
         batch_size = int(obs_batch.shape[0])
 
         actions = self._broadcast_batch(transition["action"], batch_size, dtype=np.int64)
+        action_mask_raw = transition.get("action_mask")
+        if action_mask_raw is None:
+            action_masks = np.ones((batch_size, int(self.config.action_dim)), dtype=np.bool_)
+        else:
+            action_masks = self._normalize_action_mask(action_mask_raw, batch_size=batch_size)
         rewards = self._broadcast_batch(transition["reward"], batch_size, dtype=np.float32)
         dones = self._broadcast_batch(transition["done"], batch_size, dtype=np.bool_)
         log_probs = self._broadcast_batch(self._last_log_prob, batch_size, dtype=np.float32)
@@ -108,6 +168,7 @@ class PPOAlgorithm(Algorithm):
 
         self.rollout.observations.append(obs_batch)
         self.rollout.actions.append(actions)
+        self.rollout.action_masks.append(action_masks)
         self.rollout.rewards.append(rewards)
         self.rollout.dones.append(dones)
         self.rollout.log_probs.append(log_probs)
@@ -208,6 +269,13 @@ class PPOAlgorithm(Algorithm):
             [np.asarray(batch, dtype=np.int64).reshape(-1) for batch in self.rollout.actions],
             axis=0,
         )
+        action_masks_flat = np.concatenate(
+            [
+                np.asarray(batch, dtype=np.bool_).reshape(-1, int(self.config.action_dim))
+                for batch in self.rollout.action_masks
+            ],
+            axis=0,
+        )
         old_log_probs_flat = np.concatenate(
             [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in self.rollout.log_probs],
             axis=0,
@@ -223,6 +291,7 @@ class PPOAlgorithm(Algorithm):
 
         obs_tensor = torch.as_tensor(obs_flat, dtype=torch.float32, device=self.device)
         action_tensor = torch.as_tensor(actions_flat, dtype=torch.long, device=self.device)
+        action_mask_tensor = torch.as_tensor(action_masks_flat, dtype=torch.bool, device=self.device)
         old_log_probs = torch.as_tensor(old_log_probs_flat, dtype=torch.float32, device=self.device)
         advantages_tensor = torch.as_tensor(advantages_flat, dtype=torch.float32, device=self.device)
         returns_tensor = torch.as_tensor(returns_flat, dtype=torch.float32, device=self.device)
@@ -238,12 +307,14 @@ class PPOAlgorithm(Algorithm):
 
                 batch_obs = obs_tensor[batch_idx]
                 batch_actions = action_tensor[batch_idx]
+                batch_action_masks = action_mask_tensor[batch_idx]
                 batch_old_log_probs = old_log_probs[batch_idx]
                 batch_advantages = advantages_tensor[batch_idx]
                 batch_returns = returns_tensor[batch_idx]
 
                 logits, values = self.model(batch_obs)
-                dist = Categorical(logits=logits)
+                masked_logits = logits.masked_fill(~batch_action_masks, float(-1e9))
+                dist = Categorical(logits=masked_logits)
                 log_probs = dist.log_prob(batch_actions)
                 entropy = dist.entropy().mean()
 

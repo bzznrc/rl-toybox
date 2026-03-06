@@ -30,7 +30,7 @@ SPEC = GameSpec(
         "clip_ratio": config.CLIP_RATIO,
         "update_epochs": config.UPDATE_EPOCHS,
         "minibatch_size": config.MINIBATCH_SIZE,
-        "entropy_coef": config.ENTROPY_COEF,
+        "entropy_coef": float(config.LEVEL_SETTINGS[int(config.MIN_LEVEL)]["entropy_coef"]),
         "value_coef": config.VALUE_COEF,
         "max_grad_norm": config.MAX_GRAD_NORM,
         "use_gpu": config.USE_GPU,

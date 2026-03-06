@@ -12,18 +12,19 @@ import numpy as np
 
 from core.arcade_style import (
     COLOR_AQUA,
+    COLOR_BLUE,
     COLOR_BRICK_RED,
-    COLOR_CHARCOAL,
     COLOR_CORAL,
+    COLOR_DARK_NEUTRAL,
+    COLOR_DEEP_PURPLE,
     COLOR_DEEP_TEAL,
     COLOR_FOG_GRAY,
-    COLOR_NEAR_BLACK,
-    COLOR_P3_BLUE,
-    COLOR_P3_NAVY,
-    COLOR_P4_DEEP_PURPLE,
-    COLOR_P4_PURPLE,
+    COLOR_LIGHT_NEUTRAL,
+    COLOR_NAVY,
+    COLOR_OCHRE,
+    COLOR_PURPLE,
+    COLOR_SAND,
     COLOR_SLATE_GRAY,
-    COLOR_SOFT_WHITE,
 )
 from core.curriculum import (
     ThreeLevelCurriculum,
@@ -42,6 +43,7 @@ from core.io_schema import (
 )
 from core.match_tracker import MatchTracker
 from core.primitives import (
+    build_staggered_square_pattern_texture,
     draw_facing_indicator,
     draw_status_square_icon,
     draw_two_tone_tile,
@@ -50,7 +52,7 @@ from core.primitives import (
 )
 from core.rewards import RewardBreakdown
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
-from core.utils import resolve_play_level
+from core.utils import env_flag, resolve_play_level
 from games.vroom.config import (
     ACTION_NAMES as VROOM_ACTION_NAMES,
     ACT_DIM as VROOM_ACT_DIM,
@@ -94,11 +96,9 @@ class RaceCar:
     outer_color: tuple[int, int, int]
     inner_color: tuple[int, int, int]
     in_contact: bool = False
-    obstacle_avoid_frames: int = 0
-    obstacle_avoid_steer: float = 0.0
-    obstacle_avoid_obs_idx: int = -1
-    obstacle_avoid_coast_until_past: bool = False
+    ai_lane_home: float = 0.0
     ai_lane_offset: float = 0.0
+    avoid_contacts_enabled: bool = False
     track_index: int = 0
     lap_progress: float = 0.0
     finished: bool = False
@@ -207,6 +207,8 @@ class VroomEnv(Env):
         self.track_texture: arcade.Texture | None = None
         self.wall_texture: arcade.Texture | None = None
         self.track_rect = arcade.LRBT(0.0, float(SCREEN_WIDTH), float(BB_HEIGHT), float(SCREEN_HEIGHT))
+        self.background_rect = arcade.LRBT(0.0, float(SCREEN_WIDTH), 0.0, float(SCREEN_HEIGHT))
+        self.background_pattern_texture: arcade.Texture | None = None
         self.obstacles: list[tuple[float, float]] = []
         self.obstacle_size = float(TILE_SIZE)
         self.obstacle_inset = 4.0
@@ -214,8 +216,9 @@ class VroomEnv(Env):
         self.ai_avoid_lookahead = self.obstacle_size * 4.6
         self.ai_avoid_lateral = max(self.obstacle_size * 1.8, self.track_half_width * 0.95)
         self.ai_avoid_close_distance = self.obstacle_size * 1.75
-        self.ai_avoid_frames = 14
         self.ai_obstacle_rolls: dict[tuple[int, int], bool] = {}
+        self.debug_ai_obstacle_contacts = env_flag("VROOM_DEBUG_AI_OBS_CONTACTS", False)
+        self._debug_ai_obstacle_contacts = 0
 
         self.track_seed = 0
         self.track_count = 0
@@ -232,8 +235,8 @@ class VroomEnv(Env):
         self.player_color_pairs: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = [
             (COLOR_AQUA, COLOR_DEEP_TEAL),
             (COLOR_CORAL, COLOR_BRICK_RED),
-            (COLOR_P3_BLUE, COLOR_P3_NAVY),
-            (COLOR_P4_PURPLE, COLOR_P4_DEEP_PURPLE),
+            (COLOR_BLUE, COLOR_NAVY),
+            (COLOR_PURPLE, COLOR_DEEP_PURPLE),
         ]
         self.player_index = 0
         self.winner_index: int | None = None
@@ -311,6 +314,17 @@ class VroomEnv(Env):
     @staticmethod
     def _distance(x1: float, y1: float, x2: float, y2: float) -> float:
         return math.hypot(x2 - x1, y2 - y1)
+
+    def _track_index_delta(self, start_idx: int, end_idx: int) -> int:
+        if self.track_count <= 0:
+            return 0
+        delta = int(end_idx) - int(start_idx)
+        half_track = self.track_count // 2
+        if delta > half_track:
+            delta -= self.track_count
+        elif delta < -half_track:
+            delta += self.track_count
+        return int(delta)
 
     def _generate_track(self, seed: int) -> None:
         track_config = replace(self.track_config, obstacle_clusters=int(self.track_obstacle_clusters))
@@ -544,11 +558,13 @@ class VroomEnv(Env):
                 heading_degrees=float(heading),
                 outer_color=outer,
                 inner_color=inner,
+                ai_lane_home=float(desired_lateral),
                 ai_lane_offset=float(desired_lateral),
             )
             if not self._is_driveable_footprint(car.x, car.y):
                 car.x = float(cx)
                 car.y = float(cy)
+                car.ai_lane_home = 0.0
                 car.ai_lane_offset = 0.0
             car.track_index = self._nearest_track_sample(car.x, car.y)[0]
             cars.append(car)
@@ -602,14 +618,15 @@ class VroomEnv(Env):
         car.vx *= self.drag
         car.vy *= self.drag
 
-    def _resolve_obstacle_contacts(self, car: RaceCar, prev_x: float, prev_y: float, *, car_index: int) -> None:
+    def _resolve_obstacle_contacts(self, car: RaceCar, prev_x: float, prev_y: float) -> bool:
         if not self.obstacles:
-            return
+            return False
 
         radius = max(1.0, float(self.obstacle_contact_radius))
         radius_sq = radius * radius
         push_margin = max(0.4, float(self.obstacle_push_extra))
         tile_size = float(self.obstacle_size)
+        encountered = False
 
         for _ in range(max(1, int(self.obstacle_resolve_iters))):
             hit_any = False
@@ -628,6 +645,7 @@ class VroomEnv(Env):
                     continue
 
                 hit_any = True
+                encountered = True
                 if dist_sq > 1e-8:
                     dist = math.sqrt(dist_sq)
                     nx, ny = dx / dist, dy / dist
@@ -668,20 +686,9 @@ class VroomEnv(Env):
                 car.vx = tx * vt + nx * vn
                 car.vy = ty * vt + ny * vn
                 car.in_contact = True
-
-                if int(car_index) != self.player_index:
-                    heading_rad = math.radians(float(car.heading_degrees))
-                    left_x = -math.sin(heading_rad)
-                    left_y = math.cos(heading_rad)
-                    obstacle_center_x = left + tile_size * 0.5
-                    obstacle_center_y = top + tile_size * 0.5
-                    rel_x = obstacle_center_x - float(car.x)
-                    rel_y = obstacle_center_y - float(car.y)
-                    lateral = rel_x * left_x + rel_y * left_y
-                    car.obstacle_avoid_steer = -1.0 if lateral >= 0.0 else 1.0
-                    car.obstacle_avoid_frames = max(int(car.obstacle_avoid_frames), int(self.ai_avoid_frames))
             if not hit_any:
                 break
+        return bool(encountered)
 
     def _resolve_track_contacts(self, car: RaceCar, prev_x: float, prev_y: float) -> None:
         curr_x, curr_y = float(car.x), float(car.y)
@@ -806,7 +813,16 @@ class VroomEnv(Env):
         self.track_seed = random.randint(0, 2_000_000_000)
         self._generate_track(self.track_seed)
         self._reset_ai_obstacle_rolls()
+        self._debug_ai_obstacle_contacts = 0
         self.cars = self._create_car_grid()
+        for idx, car in enumerate(self.cars):
+            car.ai_lane_offset = float(car.ai_lane_home)
+            if int(idx) == int(self.player_index):
+                car.avoid_contacts_enabled = False
+            elif float(self.ai_obstacle_avoid_chance) >= 1.0:
+                car.avoid_contacts_enabled = True
+            else:
+                car.avoid_contacts_enabled = bool(random.random() < float(self.ai_obstacle_avoid_chance))
         self.winner_index = None
         self.steps = 0
         self._force_zero_deltas = True
@@ -874,11 +890,6 @@ class VroomEnv(Env):
     def _obstacle_clearance_distance(self) -> float:
         return 0.5 * float(self.obstacle_size) + 1.05 * float(self.car_radius)
 
-    def _is_lane_danger_for_obstacle(self, obstacle_forward: float, obstacle_lateral: float) -> bool:
-        if float(obstacle_forward) <= 0.0:
-            return False
-        return abs(float(obstacle_lateral)) <= float(self._obstacle_clearance_distance())
-
     def _is_obstacle_side_safe(self, obs_idx: int, side_sign: float) -> bool:
         obstacle_center_x, obstacle_center_y = self._obstacle_center(int(obs_idx))
         track_idx, _, _, _ = self._nearest_track_sample(float(obstacle_center_x), float(obstacle_center_y))
@@ -897,40 +908,180 @@ class VroomEnv(Env):
             and self._is_driveable_footprint(pass_x - forward_x * forward_probe, pass_y - forward_y * forward_probe)
         )
 
-    def _closest_safe_obstacle_avoid_steer(self, obs_idx: int, obstacle_lateral: float) -> float:
-        clearance = float(self._obstacle_clearance_distance())
-        preferred = -1.0 if float(obstacle_lateral) >= 0.0 else 1.0
-        candidates: list[tuple[float, float, int]] = []
+    def _ai_lane_limit(self) -> float:
+        return max(4.0, float(self.track_half_width) - float(self.wall_probe_radius) - 1.0)
 
-        if self._is_obstacle_side_safe(int(obs_idx), 1.0):
-            left_shift = abs(float(obstacle_lateral) + clearance)
-            left_tiebreak = 0 if preferred == 1.0 else 1
-            candidates.append((float(left_shift), 1.0, int(left_tiebreak)))
-        if self._is_obstacle_side_safe(int(obs_idx), -1.0):
-            right_shift = abs(float(obstacle_lateral) - clearance)
-            right_tiebreak = 0 if preferred == -1.0 else 1
-            candidates.append((float(right_shift), -1.0, int(right_tiebreak)))
+    def _car_hits_obstacle_at(self, x: float, y: float, *, radius: float) -> bool:
+        if not self.obstacles:
+            return False
+        radius_sq = float(radius) * float(radius)
+        tile_size = float(self.obstacle_size)
+        for ox, oy in self.obstacles:
+            left = float(ox)
+            top = float(oy)
+            right = left + tile_size
+            bottom = top + tile_size
+            nearest_x = self._clamp(float(x), left, right)
+            nearest_y = self._clamp(float(y), top, bottom)
+            dx = float(x) - nearest_x
+            dy = float(y) - nearest_y
+            if dx * dx + dy * dy < radius_sq:
+                return True
+        return False
 
-        if candidates:
-            candidates.sort(key=lambda item: (item[0], item[2]))
-            return float(candidates[0][1])
-        return float(preferred)
+    def _ai_obstacle_roll(self, car_index: int, obs_idx: int) -> bool:
+        roll_key = (int(car_index), int(obs_idx))
+        cached = self.ai_obstacle_rolls.get(roll_key)
+        if cached is not None:
+            return bool(cached)
+        if float(self.ai_obstacle_avoid_chance) >= 1.0:
+            outcome = True
+        elif float(self.ai_obstacle_avoid_chance) <= 0.0:
+            outcome = False
+        else:
+            outcome = bool(random.random() < float(self.ai_obstacle_avoid_chance))
+        self.ai_obstacle_rolls[roll_key] = bool(outcome)
+        return bool(outcome)
 
-    @staticmethod
-    def _should_keep_coasting_for_obstacle(
-        car: RaceCar,
+    def _ai_failsafe_control(
+        self,
+        car_index: int,
+        signed_lateral: float,
         ahead: tuple[int, float, float] | None,
-    ) -> bool:
-        if not bool(car.obstacle_avoid_coast_until_past):
-            return False
-        if int(car.obstacle_avoid_obs_idx) < 0:
-            return False
-        if ahead is None:
-            return False
-        obs_idx, obstacle_forward, _ = ahead
-        if int(obs_idx) != int(car.obstacle_avoid_obs_idx):
-            return False
-        return float(obstacle_forward) > 0.0
+    ) -> tuple[float, float]:
+        if ahead is not None:
+            obs_idx, _, obstacle_lateral = ahead
+            left_safe = self._is_obstacle_side_safe(int(obs_idx), 1.0)
+            right_safe = self._is_obstacle_side_safe(int(obs_idx), -1.0)
+            if left_safe and (not right_safe):
+                return -1.0, 0.0
+            if right_safe and (not left_safe):
+                return 1.0, 0.0
+            if left_safe and right_safe:
+                return (-1.0, 0.0) if ((int(car_index) + int(self.track_seed)) % 2 == 0) else (1.0, 0.0)
+            return (-1.0, 0.0) if float(obstacle_lateral) < 0.0 else (1.0, 0.0)
+        steer_to_center = self._clamp(-float(signed_lateral) / max(1.0, float(self.track_half_width)), -1.0, 1.0)
+        return float(steer_to_center), 0.0
+
+    def _ai_candidate_controls(self, base_steer: float, base_throttle: float) -> list[tuple[float, float]]:
+        raw_controls = [
+            (float(base_steer), float(base_throttle)),
+            (float(base_steer), min(float(base_throttle), 0.20)),
+            (self._clamp(float(base_steer) - 0.55, -1.0, 1.0), min(float(base_throttle), 0.35)),
+            (self._clamp(float(base_steer) + 0.55, -1.0, 1.0), min(float(base_throttle), 0.35)),
+            (-1.0, 0.0),
+            (1.0, 0.0),
+            (-0.7, 0.0),
+            (0.7, 0.0),
+            (-0.85, 0.25),
+            (0.85, 0.25),
+            (0.0, -0.7),
+            (-0.8, -0.7),
+            (0.8, -0.7),
+            (0.0, 0.0),
+        ]
+        controls: list[tuple[float, float]] = []
+        seen: set[tuple[float, float]] = set()
+        for steer, throttle in raw_controls:
+            steer_v = float(self._clamp(float(steer), -1.0, 1.0))
+            throttle_v = float(self._clamp(float(throttle), -1.0, 1.0))
+            key = (round(steer_v, 3), round(throttle_v, 3))
+            if key in seen:
+                continue
+            seen.add(key)
+            controls.append((steer_v, throttle_v))
+        return controls
+
+    def _ai_rollout_candidate_score(
+        self,
+        car: RaceCar,
+        *,
+        steer: float,
+        throttle: float,
+        horizon: int,
+        max_forward_speed: float,
+        lane_target: float,
+        other_positions: list[tuple[float, float]],
+    ) -> tuple[bool, float]:
+        sim = replace(car)
+        sim.in_contact = False
+        start_idx = self._nearest_track_sample(float(sim.x), float(sim.y))[0]
+        obstacle_probe_radius = max(float(self.obstacle_contact_radius), float(self.car_radius) * 1.02) + 1.2
+
+        for _ in range(max(1, int(horizon))):
+            self._apply_car_controls(
+                sim,
+                float(steer),
+                float(throttle),
+                max_forward_speed=float(max_forward_speed),
+            )
+            sim.x += sim.vx
+            sim.y += sim.vy
+            if not self._is_driveable_footprint(float(sim.x), float(sim.y)):
+                return False, float("-inf")
+            if self._car_hits_obstacle_at(float(sim.x), float(sim.y), radius=obstacle_probe_radius):
+                return False, float("-inf")
+
+        end_idx, _, dx, dy = self._nearest_track_sample(float(sim.x), float(sim.y))
+        progress = float(self._track_index_delta(int(start_idx), int(end_idx)))
+        tx, ty = self.track_tangents[end_idx]
+        nx, ny = -ty, tx
+        signed_lateral = dx * nx + dy * ny
+        lane_penalty = abs(float(signed_lateral) - float(lane_target))
+        score = progress * 2.0 - lane_penalty * 0.08
+
+        if bool(car.avoid_contacts_enabled):
+            close_window = float(self.car_contact_radius) * 2.4
+            for other_x, other_y in other_positions:
+                dist = self._distance(float(sim.x), float(sim.y), float(other_x), float(other_y))
+                if dist < close_window:
+                    score -= (close_window - dist) / max(1e-6, close_window) * 0.85
+            lane_limit = float(self._ai_lane_limit())
+            edge_start = lane_limit * 0.75
+            if abs(float(signed_lateral)) > edge_start:
+                edge_ratio = (abs(float(signed_lateral)) - edge_start) / max(1.0, lane_limit - edge_start)
+                score -= 0.95 * self._clamp(edge_ratio, 0.0, 1.0)
+
+        return True, float(score)
+
+    def _ai_select_safe_control(
+        self,
+        car_index: int,
+        car: RaceCar,
+        *,
+        base_steer: float,
+        base_throttle: float,
+        lane_target: float,
+        max_forward_speed: float,
+        speed_ratio: float,
+    ) -> tuple[float, float] | None:
+        horizon = 10 + int(4.0 * self._clamp(float(speed_ratio), 0.0, 1.0))
+        candidates = self._ai_candidate_controls(base_steer=float(base_steer), base_throttle=float(base_throttle))
+        other_positions = [
+            (float(other.x), float(other.y))
+            for idx, other in enumerate(self.cars)
+            if int(idx) != int(car_index)
+        ]
+        best_control: tuple[float, float] | None = None
+        best_score: float | None = None
+        for steer, throttle in candidates:
+            is_safe, score = self._ai_rollout_candidate_score(
+                car,
+                steer=float(steer),
+                throttle=float(throttle),
+                horizon=int(horizon),
+                max_forward_speed=float(max_forward_speed),
+                lane_target=float(lane_target),
+                other_positions=other_positions,
+            )
+            if not is_safe:
+                continue
+            if abs(float(steer) - float(base_steer)) < 0.06 and abs(float(throttle) - float(base_throttle)) < 0.06:
+                score += 0.03
+            if best_score is None or float(score) > float(best_score):
+                best_score = float(score)
+                best_control = (float(steer), float(throttle))
+        return best_control
 
     def _ai_control_for_car(self, car_index: int, car: RaceCar) -> tuple[float, float]:
         idx, distance, dx, dy = self._nearest_track_sample(car.x, car.y)
@@ -941,7 +1092,8 @@ class VroomEnv(Env):
         tx, ty = self.track_tangents[idx]
         nx, ny = -ty, tx
         signed_lateral = dx * nx + dy * ny
-        lane_target = float(car.ai_lane_offset)
+        lane_target = float(self._clamp(float(car.ai_lane_home), -self._ai_lane_limit(), self._ai_lane_limit()))
+        car.ai_lane_offset = float(lane_target)
         lane_error = signed_lateral - lane_target
         correction_mag = self._clamp(lane_error * 0.65, -self.track_half_width * 0.65, self.track_half_width * 0.65)
         speed_ratio = self._clamp(abs(float(forward_speed)) / max(1.0, max_forward_speed), 0.0, 1.0)
@@ -974,45 +1126,32 @@ class VroomEnv(Env):
             if forward_speed < launch_floor:
                 throttle = 1.0
 
-        ahead = self._closest_obstacle_ahead(car)
-        keep_coasting = self._should_keep_coasting_for_obstacle(car, ahead)
-        if keep_coasting:
-            car.obstacle_avoid_frames = max(1, int(car.obstacle_avoid_frames) - 1)
-            return float(car.obstacle_avoid_steer), 0.0
-        if bool(car.obstacle_avoid_coast_until_past):
-            car.obstacle_avoid_coast_until_past = False
-            car.obstacle_avoid_obs_idx = -1
-
-        if int(car.obstacle_avoid_frames) > 0:
-            car.obstacle_avoid_frames = int(car.obstacle_avoid_frames) - 1
-            steer = float(car.obstacle_avoid_steer)
-            throttle = min(throttle, 0.20)
-            if forward_speed < float(min_forward_speed):
-                throttle = 1.0
-            return steer, throttle
-
-        if ahead is not None:
-            obs_idx, forward_to_obstacle, lateral = ahead
-            if self._is_lane_danger_for_obstacle(float(forward_to_obstacle), float(lateral)):
-                roll_key = (int(car_index), int(obs_idx))
-                should_avoid = self.ai_obstacle_rolls.get(roll_key)
-                if should_avoid is None:
-                    should_avoid = bool(random.random() < float(self.ai_obstacle_avoid_chance))
-                    self.ai_obstacle_rolls[roll_key] = bool(should_avoid)
-                if should_avoid:
-                    steer = self._closest_safe_obstacle_avoid_steer(int(obs_idx), float(lateral))
-                    close_now = float(forward_to_obstacle) <= float(self.ai_avoid_close_distance)
-                    car.obstacle_avoid_coast_until_past = bool(close_now)
-                    car.obstacle_avoid_obs_idx = int(obs_idx)
-                    throttle = 0.0 if close_now else min(throttle, 0.20)
-                    if (not close_now) and forward_speed < float(min_forward_speed):
-                        throttle = 1.0
-                    car.obstacle_avoid_steer = float(steer)
-                    car.obstacle_avoid_frames = int(self.ai_avoid_frames)
-                    return steer, throttle
         if forward_speed < float(min_forward_speed):
             throttle = 1.0
-        return steer, throttle
+
+        ahead = self._closest_obstacle_ahead(car)
+        use_safety_override = False
+        safety_base_throttle = float(throttle)
+        if ahead is not None:
+            obs_idx, forward_to_obstacle, _ = ahead
+            use_safety_override = bool(self._ai_obstacle_roll(int(car_index), int(obs_idx)))
+            if use_safety_override and float(forward_to_obstacle) < float(self.ai_avoid_close_distance) * 1.8:
+                safety_base_throttle = min(float(safety_base_throttle), 0.20)
+
+        if use_safety_override:
+            selected = self._ai_select_safe_control(
+                int(car_index),
+                car,
+                base_steer=float(steer),
+                base_throttle=float(safety_base_throttle),
+                lane_target=float(lane_target),
+                max_forward_speed=float(max_forward_speed),
+                speed_ratio=float(speed_ratio),
+            )
+            if selected is not None:
+                return float(selected[0]), float(selected[1])
+            return self._ai_failsafe_control(int(car_index), float(signed_lateral), ahead)
+        return float(steer), float(throttle)
 
     def _player_controls_from_action(self, action_idx: int) -> tuple[float, float]:
         if action_idx == self.ACTION_THROTTLE:
@@ -1045,7 +1184,9 @@ class VroomEnv(Env):
         self._resolve_car_contacts()
         for idx, car in enumerate(self.cars):
             prev_x, prev_y = previous_positions[idx]
-            self._resolve_obstacle_contacts(car, prev_x=float(prev_x), prev_y=float(prev_y), car_index=idx)
+            hit_obstacle = self._resolve_obstacle_contacts(car, prev_x=float(prev_x), prev_y=float(prev_y))
+            if bool(self.debug_ai_obstacle_contacts) and int(idx) != int(self.player_index) and bool(hit_obstacle):
+                self._debug_ai_obstacle_contacts += 1
             self._resolve_track_contacts(car, prev_x=float(prev_x), prev_y=float(prev_y))
             self._resolve_screen_bounds(car)
             self._enforce_track_containment(car)
@@ -1164,12 +1305,15 @@ class VroomEnv(Env):
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         if self.done:
-            return self._last_obs, 0.0, True, {
+            done_info: dict[str, object] = {
                 "win": self.last_race_winner == self.player_index,
                 "success": int(self._last_episode_success),
                 "level": int(self._last_episode_level),
                 "reward_components": self._episode_reward_components.totals(),
             }
+            if bool(self.debug_ai_obstacle_contacts):
+                done_info["debug_ai_obstacle_contacts"] = int(self._debug_ai_obstacle_contacts)
+            return self._last_obs, 0.0, True, done_info
 
         self.window_controller.poll_events_or_raise()
         if self.mode == "human":
@@ -1249,6 +1393,8 @@ class VroomEnv(Env):
             "level_changed": False,
             "reward_breakdown": reward_breakdown if self.mode != "human" else {},
         }
+        if bool(self.debug_ai_obstacle_contacts):
+            info["debug_ai_obstacle_contacts"] = int(self._debug_ai_obstacle_contacts)
         if self.done:
             info["reward_components"] = self._episode_reward_components.totals()
             self._last_episode_level = int(episode_level)
@@ -1270,8 +1416,8 @@ class VroomEnv(Env):
         (x1, y1), (x2, y2) = self.start_line
         ay1 = self.window_controller.to_arcade_y(y1)
         ay2 = self.window_controller.to_arcade_y(y2)
-        arcade.draw_line(x1, ay1, x2, ay2, COLOR_CHARCOAL, 6.0)
-        arcade.draw_line(x1, ay1, x2, ay2, COLOR_SOFT_WHITE, 3.0)
+        arcade.draw_line(x1, ay1, x2, ay2, COLOR_DARK_NEUTRAL, 6.0)
+        arcade.draw_line(x1, ay1, x2, ay2, COLOR_LIGHT_NEUTRAL, 3.0)
 
     def _draw_obstacles(self) -> None:
         if not self.obstacles:
@@ -1305,7 +1451,7 @@ class VroomEnv(Env):
                 center_y_top_left=car.y,
                 angle_degrees=car.heading_degrees,
                 length=self.car_half * 1.35,
-                color=COLOR_SOFT_WHITE if idx == self.player_index else COLOR_FOG_GRAY,
+                color=COLOR_LIGHT_NEUTRAL if idx == self.player_index else COLOR_FOG_GRAY,
                 line_width=2.0,
             )
 
@@ -1352,17 +1498,45 @@ class VroomEnv(Env):
             center_x = start_x + icon_size / 2.0 + idx * (icon_size + icon_gap)
             self._draw_player_icon(int(winner), center_x, center_y, icon_size)
 
+    def _background_pattern_spec(self) -> tuple[int, int]:
+        car_inset = max(2.0, self.car_size * 0.22)
+        car_inner = max(2.0, self.car_size - 2.0 * car_inset)
+        square_size = max(2, int(round(car_inner * 0.5)))
+        square_gap = max(2, int(round(square_size * 1.2)))
+        return square_size, square_gap
+
+    def _build_background_pattern_texture(self) -> None:
+        square_size, square_gap = self._background_pattern_spec()
+        self.background_pattern_texture = build_staggered_square_pattern_texture(
+            width=int(SCREEN_WIDTH),
+            height=int(SCREEN_HEIGHT),
+            square_size=float(square_size),
+            color=COLOR_OCHRE,
+            gap_x=float(square_gap),
+            gap_y=float(square_gap),
+            row_offset_ratio=0.5,
+            texture_name=f"vroom_bg_specks_{SCREEN_WIDTH}x{SCREEN_HEIGHT}_s{square_size}_g{square_gap}_o50",
+        )
+
+    def _draw_background_pattern(self) -> None:
+        if self.background_pattern_texture is None:
+            self._build_background_pattern_texture()
+        if self.background_pattern_texture is None:
+            return
+        arcade.draw_texture_rect(self.background_pattern_texture, self.background_rect, pixelated=True)
+
     def render(self) -> float:
         if self.window_controller.window is None:
             return 0.0
 
         draw_t0 = time.perf_counter()
-        self.window_controller.clear(COLOR_SLATE_GRAY)
+        self.window_controller.clear(COLOR_SAND)
+        self._draw_background_pattern()
         self._draw_track()
         self._draw_obstacles()
         self._draw_cars()
 
-        arcade.draw_lbwh_rectangle_filled(0, 0, SCREEN_WIDTH, BB_HEIGHT, COLOR_NEAR_BLACK)
+        arcade.draw_lbwh_rectangle_filled(0, 0, SCREEN_WIDTH, BB_HEIGHT, COLOR_DARK_NEUTRAL)
         center_y = BB_HEIGHT / 2.0
         winners_left = 8.0
         winners_right = float(SCREEN_WIDTH) - 8.0
@@ -1371,4 +1545,5 @@ class VroomEnv(Env):
         return time.perf_counter() - draw_t0
 
     def close(self) -> None:
+        self.background_pattern_texture = None
         self.window_controller.close()

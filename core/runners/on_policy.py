@@ -82,6 +82,75 @@ def _broadcast_team_signal(obs: object, value: float | bool, *, dtype: np.dtype)
     return value
 
 
+def _extract_action_mask(env: Env, obs: object) -> np.ndarray | None:
+    for method_name in ("get_action_mask", "action_mask"):
+        getter = getattr(env, method_name, None)
+        if not callable(getter):
+            continue
+        try:
+            mask = getter(obs)
+        except TypeError:
+            mask = getter()
+        if mask is None:
+            return None
+        return np.asarray(mask, dtype=np.bool_)
+    return None
+
+
+def _act_with_optional_mask(
+    algorithm: Algorithm,
+    obs: object,
+    *,
+    explore: bool,
+    action_mask: np.ndarray | None,
+):
+    if action_mask is None:
+        return algorithm.act(obs, explore=explore)
+    try:
+        return algorithm.act(obs, explore=explore, action_mask=action_mask)
+    except TypeError:
+        return algorithm.act(obs, explore=explore)
+
+
+def _reward_for_storage(obs: object, reward: object, info: object) -> np.ndarray | float:
+    obs_array = np.asarray(obs)
+    if isinstance(info, dict) and "reward_vec" in info:
+        reward_vec = np.asarray(info.get("reward_vec"), dtype=np.float32).reshape(-1)
+        if obs_array.ndim == 2:
+            batch_size = int(obs_array.shape[0])
+            if int(reward_vec.size) != int(batch_size):
+                raise ValueError(
+                    f"On-policy runner expected info['reward_vec'] batch size {int(batch_size)}, "
+                    f"got {int(reward_vec.size)}."
+                )
+            return reward_vec.astype(np.float32, copy=False)
+        if int(reward_vec.size) > 0:
+            return float(reward_vec[0])
+
+    if obs_array.ndim != 2:
+        reward_array = np.asarray(reward, dtype=np.float32).reshape(-1)
+        if int(reward_array.size) == 0:
+            return 0.0
+        return float(reward_array[0])
+
+    batch_size = int(obs_array.shape[0])
+    reward_array = np.asarray(reward, dtype=np.float32).reshape(-1)
+    if int(reward_array.size) == 1:
+        return np.full((batch_size,), float(reward_array.item()), dtype=np.float32)
+    if int(reward_array.size) != int(batch_size):
+        raise ValueError(
+            f"On-policy runner expected reward batch size {int(batch_size)}, got {int(reward_array.size)}."
+        )
+    return reward_array.astype(np.float32, copy=False)
+
+
+def _reward_scalar(reward: object) -> float:
+    reward_array = np.asarray(reward, dtype=np.float32).reshape(-1)
+    if int(reward_array.size) == 0:
+        return 0.0
+    return float(reward_array.sum())
+
+
 def run_on_policy_training(
     env: Env,
     algorithm: Algorithm,
@@ -106,14 +175,16 @@ def run_on_policy_training(
 
     for iteration in range(1, int(config.max_iterations) + 1):
         for _ in range(int(config.rollout_steps)):
-            action = algorithm.act(obs, explore=True)
+            action_mask = _extract_action_mask(env, obs)
+            action = _act_with_optional_mask(algorithm, obs, explore=True, action_mask=action_mask)
             next_obs, reward, done, info = env.step(action)
-            reward_for_storage = _broadcast_team_signal(obs, float(reward), dtype=np.float32)
+            reward_for_storage = _reward_for_storage(obs, reward, info)
             done_for_storage = _broadcast_team_signal(obs, bool(done), dtype=np.bool_)
             algorithm.observe(
                 {
                     "obs": obs,
                     "action": action,
+                    "action_mask": action_mask,
                     "reward": reward_for_storage,
                     "next_obs": next_obs,
                     "done": done_for_storage,
@@ -121,7 +192,7 @@ def run_on_policy_training(
                 }
             )
             total_steps += 1
-            episode_reward += float(reward)
+            episode_reward += _reward_scalar(reward)
             episode_steps += 1
             obs = next_obs
 

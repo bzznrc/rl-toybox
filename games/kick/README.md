@@ -25,6 +25,7 @@ Arcade-style top-down football with shared-policy PPO across the full left team.
   - `self_theta_sin`
   - `self_has_ball`
   - `self_role`
+  - `self_role_lane`
   - `self_stamina`
   - `self_stamina_delta`
   - `tgt_dx`
@@ -33,7 +34,6 @@ Arcade-style top-down football with shared-policy PPO across the full left team.
   - `tgt_rel_angle_cos`
   - `tgt_dvx`
   - `tgt_dvy`
-  - `tgt_is_free`
   - `tgt_owner_team`
   - `goal_dx`
   - `goal_dy`
@@ -73,25 +73,33 @@ Arcade-style top-down football with shared-policy PPO across the full left team.
 Notes:
 - `goal_dx/goal_dy` is the player-to-opponent-goal-center vector.
 - `goal_rel_angle_sin/cos` encodes the relative goal angle from player heading.
-- Kick actions only apply if that player owns the ball.
+- `self_role_lane` uses 4 tactical lanes: left=`-1.0`, center-left=`-0.25`, center-right=`+0.25`, right=`+1.0`; `GK=0.0`.
+- Kick tracks both physical owner (`ball_owner`) and effective possession (`ball_owner.team` if owned, else `last_touch_team` while free). `tgt_owner_team` reflects effective possession (`+1` left, `-1` right, `0` neutral reset state).
+- During PPO training, kicks are action-masked out for players without ball possession.
+- Eval/play uses the same action masking; turnover penalties exclude opponent GK catches in/near their penalty area.
+- `env.step()` returns a scalar team reward (sum of per-player rewards); PPO training reads per-player rewards from `info["reward_vec"]`.
 
 ## Rewards (Training)
 
-Kick uses five active components:
+Kick uses per-player rewards with a shared policy (one row per left player). Team logs still show summed components.
+
+Kick uses six active components:
 
 - `G` score: `REWARD_SCORE = +10` when left scores.
 - `C` concede: `PENALTY_CONCEDE = -5` when left concedes.
-- `T` turnover: `PENALTY_TURNOVER = -0.5` only on direct `left -> right` possession transfer in a step, and not on goal/reset transitions.
-- `P` progress: during left possession, reward only when the ball achieves a new best (minimum) distance to opponent goal center:
+- `T` turnover: `PENALTY_TURNOVER = -0.25`, credited only to the responsible left player (last left physical owner, or pending passer if intercepted in flight), excluding opponent GK catches in/near their penalty area.
+- `A` pass: `REWARD_PASS = +0.25`, credited only to the passer when the next owner is a different left player.
+- `P` progress: computed only under left physical ball control, credited only to the current left ball owner:
   `r_progress = REWARD_PROGRESS * (improvement / PROGRESS_NORM)`
-- `Z` zone: per-step positioning penalty
-  `r_zone = PENALTY_ZONE * zone_norm`
+- `Z` zone: per-step per-player positioning penalty (no team-average before assignment) with dead-zone and quadratic growth
+  `excess = max(0, zone_norm - Z_TOL)`
+  `r_zone = PENALTY_ZONE * (excess^2)`
 
-Zone anchors use a simplified tactical axis (0 = own goal, 100 = opponent goal):
-- Base anchors: `GK=5`, `DEF=25`, `MID=45`, `ATK=65`
-- Possession phase shift: `+10` for `DEF/MID/ATK` when left has possession, `-10` when not
-- Ball shift: `(ball_y - 50) * 0.1`
-- Final anchor clamped to `[5, 85]` for `DEF/MID/ATK`; `GK` stays at `5`
+Zone norm is depth-only on the tactical X axis (`x -> [0,100]`):
+- Base anchors by role-group: `GK=5`, `DEF=25`, `MID=45`, `ATK=65`
+- Phase shift: `+10` in possession, `-10` out of possession (using effective possession for formation phase)
+- Ball-depth shift: `clip((ball_depth_y - 50) * 0.1, -5, 5)`
+- Formation anchors are smoothed over 2.5s.
 
 ## Curriculum (Train)
 
@@ -99,12 +107,11 @@ Zone anchors use a simplified tactical axis (0 = own goal, 100 = opponent goal):
 - Promotion settings live in `games/kick/config.py` under `CURRICULUM_PROMOTION`.
 - Left team stays at 11 RL-controlled players.
 - Opponent scaling by level:
-  - Level 1: `11v3` (`RM, LM, ST1`)
-  - Level 2: `11v7` (`GK, LB, RB, RM, LM, ST1, ST2`)
-  - Level 3: `11v11`
+  - Level 1: `11v3` (`RM, LM, LCS`)
+  - Level 2: `11v7` (`GK, LB, RB, RM, LM, LCS, RCS`)
+  - Level 3: `11v11` (`GK, LB, LCB, RCB, RB, LM, LCM, RCM, RM, LCS, RCS`)
 - Kickoff behavior:
-  - Your team uses the level `kickoff` setting (`GK` or `CC`).
-  - Opponent restarts always begin from center circle (`CC`).
+  - Kickoffs always begin from center circle (`CC`) with no immediate owner.
 
 Success per episode is `1` when left scores more than it concedes, else `0`.
 

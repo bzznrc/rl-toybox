@@ -11,6 +11,7 @@ import numpy as np
 class RolloutBuffer:
     observations: list[np.ndarray] = field(default_factory=list)
     actions: list[np.ndarray] = field(default_factory=list)
+    action_masks: list[np.ndarray] = field(default_factory=list)
     rewards: list[np.ndarray] = field(default_factory=list)
     dones: list[np.ndarray] = field(default_factory=list)
     log_probs: list[np.ndarray] = field(default_factory=list)
@@ -21,6 +22,7 @@ class RolloutBuffer:
     def clear(self) -> None:
         self.observations.clear()
         self.actions.clear()
+        self.action_masks.clear()
         self.rewards.clear()
         self.dones.clear()
         self.log_probs.clear()

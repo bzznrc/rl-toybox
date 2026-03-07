@@ -15,6 +15,7 @@ from core.io.runs import RunPaths, write_metrics
 from core.logging_utils import (
     format_reward_components,
     log_episode_line,
+    log_ppo_metrics_line,
     log_iteration_line,
     log_key_values,
     log_save_line,
@@ -97,19 +98,51 @@ def _extract_action_mask(env: Env, obs: object) -> np.ndarray | None:
     return None
 
 
+def _extract_centralized_state(env: Env, obs: object) -> np.ndarray | None:
+    for method_name in ("get_centralized_state", "centralized_state", "get_central_state", "central_state"):
+        getter = getattr(env, method_name, None)
+        if not callable(getter):
+            continue
+        try:
+            state = getter(obs)
+        except TypeError:
+            state = getter()
+        if state is None:
+            return None
+        return np.asarray(state, dtype=np.float32)
+    return None
+
+
 def _act_with_optional_mask(
     algorithm: Algorithm,
     obs: object,
     *,
     explore: bool,
     action_mask: np.ndarray | None,
+    central_obs: np.ndarray | None,
 ):
+    if action_mask is None and central_obs is None:
+        return algorithm.act(obs, explore=explore)
     if action_mask is None:
-        return algorithm.act(obs, explore=explore)
+        try:
+            return algorithm.act(obs, explore=explore, central_obs=central_obs)
+        except TypeError:
+            return algorithm.act(obs, explore=explore)
+    if central_obs is None:
+        try:
+            return algorithm.act(obs, explore=explore, action_mask=action_mask)
+        except TypeError:
+            return algorithm.act(obs, explore=explore)
     try:
-        return algorithm.act(obs, explore=explore, action_mask=action_mask)
+        return algorithm.act(obs, explore=explore, action_mask=action_mask, central_obs=central_obs)
     except TypeError:
-        return algorithm.act(obs, explore=explore)
+        try:
+            return algorithm.act(obs, explore=explore, action_mask=action_mask)
+        except TypeError:
+            try:
+                return algorithm.act(obs, explore=explore, central_obs=central_obs)
+            except TypeError:
+                return algorithm.act(obs, explore=explore)
 
 
 def _reward_for_storage(obs: object, reward: object, info: object) -> np.ndarray | float:
@@ -169,6 +202,7 @@ def run_on_policy_training(
     total_steps = 0
     total_episodes = 0
     last_loss = 0.0
+    last_ppo_update_metrics: dict[str, float] | None = None
     last_logged_step = 0
     current_level = _infer_current_level(env, default=1)
     _apply_level_entropy_coef(algorithm, env, int(current_level))
@@ -176,17 +210,27 @@ def run_on_policy_training(
     for iteration in range(1, int(config.max_iterations) + 1):
         for _ in range(int(config.rollout_steps)):
             action_mask = _extract_action_mask(env, obs)
-            action = _act_with_optional_mask(algorithm, obs, explore=True, action_mask=action_mask)
+            central_obs = _extract_centralized_state(env, obs)
+            action = _act_with_optional_mask(
+                algorithm,
+                obs,
+                explore=True,
+                action_mask=action_mask,
+                central_obs=central_obs,
+            )
             next_obs, reward, done, info = env.step(action)
+            next_central_obs = _extract_centralized_state(env, next_obs)
             reward_for_storage = _reward_for_storage(obs, reward, info)
             done_for_storage = _broadcast_team_signal(obs, bool(done), dtype=np.bool_)
             algorithm.observe(
                 {
                     "obs": obs,
+                    "central_obs": central_obs,
                     "action": action,
                     "action_mask": action_mask,
                     "reward": reward_for_storage,
                     "next_obs": next_obs,
+                    "next_central_obs": next_central_obs,
                     "done": done_for_storage,
                     "info": dict(info),
                 }
@@ -259,6 +303,34 @@ def run_on_policy_training(
                     best_avg_label=f"BR{int(episode_level)}",
                     reward_components=components_text,
                 )
+                cached_metrics = last_ppo_update_metrics or {}
+                log_ppo_metrics_line(
+                    policy_loss=(
+                        float(cached_metrics["policy_loss"])
+                        if "policy_loss" in cached_metrics
+                        else None
+                    ),
+                    value_loss=(
+                        float(cached_metrics["value_loss"])
+                        if "value_loss" in cached_metrics
+                        else None
+                    ),
+                    entropy=(
+                        float(cached_metrics["entropy"])
+                        if "entropy" in cached_metrics
+                        else None
+                    ),
+                    approx_kl=(
+                        float(cached_metrics["approx_kl"])
+                        if "approx_kl" in cached_metrics
+                        else None
+                    ),
+                    clip_frac=(
+                        float(cached_metrics["clip_frac"])
+                        if "clip_frac" in cached_metrics
+                        else None
+                    ),
+                )
                 last_logged_step = int(total_steps)
                 obs = env.reset()
                 episode_reward = 0.0
@@ -267,6 +339,13 @@ def run_on_policy_training(
         metrics = algorithm.update()
         if "loss" in metrics:
             last_loss = float(metrics["loss"])
+        if metrics:
+            last_ppo_update_metrics = {
+                str(key): float(value)
+                for key, value in metrics.items()
+                if str(key) in {"policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac"}
+                and isinstance(value, (int, float, np.floating))
+            }
 
         avg_reward = float(mean(reward_window)) if reward_window else 0.0
 

@@ -12,7 +12,9 @@ def make_env(mode: str, render: bool, level: int | None = None):
     return KickEnv(mode=mode, render=render, level=level)
 
 
-RUN_NAME = "_".join(str(size) for size in config.HIDDEN_DIMENSIONS)
+RUN_NAME = "a" + "_".join(str(size) for size in config.HIDDEN_DIMENSIONS) + "_c" + "_".join(
+    str(size) for size in config.CRITIC_HIDDEN_DIMENSIONS
+)
 
 
 SPEC = GameSpec(
@@ -24,6 +26,10 @@ SPEC = GameSpec(
     run_name=RUN_NAME,
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
+        "critic_hidden_sizes": list(config.CRITIC_HIDDEN_DIMENSIONS),
+        "critic_obs_dim": int(config.CENTRAL_OBS_DIM),
+        "centralized_critic": True,
+        "critic_condition_on_agent_obs": True,
         "learning_rate": config.LEARNING_RATE,
         "gamma": config.GAMMA,
         "gae_lambda": config.GAE_LAMBDA,

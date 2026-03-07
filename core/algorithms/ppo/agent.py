@@ -1,4 +1,4 @@
-"""Minimal PPO implementation for toy environments."""
+"""Minimal PPO implementation with optional MAPPO-style centralized critic."""
 
 from __future__ import annotations
 
@@ -22,6 +22,10 @@ class PPOConfig:
     obs_dim: int
     action_dim: int
     hidden_sizes: list[int]
+    critic_hidden_sizes: list[int] | None = None
+    critic_obs_dim: int | None = None
+    centralized_critic: bool = False
+    critic_condition_on_agent_obs: bool = True
     learning_rate: float = 3e-4
     gamma: float = 0.99
     gae_lambda: float = 0.95
@@ -41,7 +45,33 @@ class PPOAlgorithm(Algorithm):
         self.config = config
         self.device = torch.device("cuda" if config.use_gpu and torch.cuda.is_available() else "cpu")
 
-        self.model = ActorCritic(config.obs_dim, config.action_dim, config.hidden_sizes).to(self.device)
+        self._use_centralized_critic = bool(config.centralized_critic)
+        if self._use_centralized_critic:
+            if config.critic_obs_dim is None:
+                raise ValueError("PPO centralized critic requires critic_obs_dim.")
+            self._central_obs_dim = int(config.critic_obs_dim)
+        else:
+            self._central_obs_dim = int(config.obs_dim)
+        self._critic_condition_on_agent_obs = bool(
+            self._use_centralized_critic and bool(config.critic_condition_on_agent_obs)
+        )
+        self._critic_obs_dim = int(self._central_obs_dim) + (
+            int(config.obs_dim) if self._critic_condition_on_agent_obs else 0
+        )
+
+        critic_hidden_sizes = (
+            list(config.hidden_sizes)
+            if config.critic_hidden_sizes is None
+            else list(config.critic_hidden_sizes)
+        )
+
+        self.model = ActorCritic(
+            config.obs_dim,
+            config.action_dim,
+            config.hidden_sizes,
+            critic_obs_dim=int(self._critic_obs_dim),
+            critic_hidden_sizes=critic_hidden_sizes,
+        ).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=float(config.learning_rate))
         self.rollout = RolloutBuffer()
 
@@ -92,45 +122,6 @@ class PPOAlgorithm(Algorithm):
             mask_tensor = mask_tensor.unsqueeze(0)
         return logits.masked_fill(~mask_tensor, float(-1e9))
 
-    def act(
-        self,
-        obs: np.ndarray,
-        explore: bool,
-        action_mask: np.ndarray | None = None,
-    ) -> int | np.ndarray:
-        obs_array = np.asarray(obs, dtype=np.float32)
-        if obs_array.ndim not in {1, 2}:
-            raise ValueError(f"PPO expected obs ndim 1 or 2, got {obs_array.ndim}.")
-
-        batch_size = 1 if obs_array.ndim == 1 else int(obs_array.shape[0])
-        mask_array = None
-        if action_mask is not None:
-            mask_array = self._normalize_action_mask(action_mask, batch_size=batch_size)
-
-        obs_tensor = torch.as_tensor(obs_array, dtype=torch.float32, device=self.device)
-        logits, value = self.model(obs_tensor)
-        masked_logits = self._masked_logits(logits, mask_array)
-        dist = Categorical(logits=masked_logits)
-
-        if explore:
-            action_tensor = dist.sample()
-        else:
-            action_tensor = torch.argmax(logits, dim=-1)
-
-        log_prob = dist.log_prob(action_tensor)
-        action_np = action_tensor.detach().cpu().numpy().astype(np.int64).reshape(-1)
-        log_prob_np = log_prob.detach().cpu().numpy().astype(np.float32).reshape(-1)
-        value_np = value.detach().cpu().numpy().astype(np.float32).reshape(-1)
-
-        if obs_array.ndim == 1:
-            self._last_log_prob = float(log_prob_np[0])
-            self._last_value = float(value_np[0])
-            return int(action_np[0])
-
-        self._last_log_prob = log_prob_np
-        self._last_value = value_np
-        return action_np
-
     @staticmethod
     def _as_batch_obs(obs: object) -> np.ndarray:
         obs_array = np.asarray(obs, dtype=np.float32)
@@ -138,7 +129,69 @@ class PPOAlgorithm(Algorithm):
             return obs_array.reshape(1, -1)
         if obs_array.ndim == 2:
             return obs_array
-        raise ValueError(f"PPO observe expected obs ndim 1 or 2, got {obs_array.ndim}.")
+        raise ValueError(f"PPO expected obs ndim 1 or 2, got {obs_array.ndim}.")
+
+    def _fallback_central_obs(self, obs_batch: np.ndarray) -> np.ndarray:
+        if not self._use_centralized_critic:
+            return np.asarray(obs_batch, dtype=np.float32).reshape(-1, int(self._central_obs_dim))
+
+        batch_size = int(obs_batch.shape[0])
+        state = np.zeros((int(self._central_obs_dim),), dtype=np.float32)
+        flat_obs = np.asarray(obs_batch, dtype=np.float32).reshape(-1)
+        copy_count = min(int(state.size), int(flat_obs.size))
+        if copy_count > 0:
+            state[:copy_count] = flat_obs[:copy_count]
+        return np.repeat(state.reshape(1, -1), batch_size, axis=0)
+
+    def _as_batch_central_obs(
+        self,
+        central_obs: object | None,
+        *,
+        batch_size: int,
+        fallback_obs_batch: np.ndarray,
+    ) -> np.ndarray:
+        if central_obs is None:
+            return self._fallback_central_obs(fallback_obs_batch)
+
+        central_array = np.asarray(central_obs, dtype=np.float32)
+        if central_array.ndim == 1:
+            central_batch = central_array.reshape(1, -1)
+        elif central_array.ndim == 2:
+            central_batch = central_array
+        else:
+            raise ValueError(f"PPO centralized obs expected ndim 1 or 2, got {central_array.ndim}.")
+
+        if int(central_batch.shape[0]) == 1 and int(batch_size) > 1:
+            central_batch = np.repeat(central_batch, int(batch_size), axis=0)
+        if int(central_batch.shape[0]) != int(batch_size):
+            raise ValueError(
+                f"PPO centralized obs expected batch size {int(batch_size)}, got {int(central_batch.shape[0])}."
+            )
+        if int(central_batch.shape[1]) != int(self._central_obs_dim):
+            raise ValueError(
+                f"PPO centralized obs expected dim {int(self._central_obs_dim)}, got {int(central_batch.shape[1])}."
+            )
+        return central_batch.astype(np.float32, copy=False)
+
+    def _build_critic_input(
+        self,
+        *,
+        obs_batch: np.ndarray,
+        central_obs_batch: np.ndarray,
+    ) -> np.ndarray:
+        if int(np.asarray(obs_batch).shape[0]) != int(np.asarray(central_obs_batch).shape[0]):
+            raise ValueError(
+                "PPO critic input build expected matching batch rows for obs and centralized obs."
+            )
+        if not self._critic_condition_on_agent_obs:
+            return np.asarray(central_obs_batch, dtype=np.float32)
+        return np.concatenate(
+            (
+                np.asarray(central_obs_batch, dtype=np.float32),
+                np.asarray(obs_batch, dtype=np.float32),
+            ),
+            axis=1,
+        ).astype(np.float32, copy=False)
 
     @staticmethod
     def _broadcast_batch(values: object, batch_size: int, *, dtype: np.dtype) -> np.ndarray:
@@ -147,12 +200,62 @@ class PPOAlgorithm(Algorithm):
             return np.full((int(batch_size),), value_array.item(), dtype=dtype)
         if int(value_array.size) != int(batch_size):
             raise ValueError(
-                f"PPO observe expected batch size {int(batch_size)}, got {int(value_array.size)}."
+                f"PPO expected batch size {int(batch_size)}, got {int(value_array.size)}."
             )
         return value_array.astype(dtype, copy=False)
 
+    def act(
+        self,
+        obs: np.ndarray,
+        explore: bool,
+        action_mask: np.ndarray | None = None,
+        central_obs: np.ndarray | None = None,
+    ) -> int | np.ndarray:
+        obs_batch = self._as_batch_obs(obs)
+        batch_size = int(obs_batch.shape[0])
+
+        mask_array = None
+        if action_mask is not None:
+            mask_array = self._normalize_action_mask(action_mask, batch_size=batch_size)
+
+        central_batch = self._as_batch_central_obs(
+            central_obs,
+            batch_size=batch_size,
+            fallback_obs_batch=obs_batch,
+        )
+        critic_input_batch = self._build_critic_input(
+            obs_batch=obs_batch,
+            central_obs_batch=central_batch,
+        )
+
+        obs_tensor = torch.as_tensor(obs_batch, dtype=torch.float32, device=self.device)
+        critic_obs_tensor = torch.as_tensor(critic_input_batch, dtype=torch.float32, device=self.device)
+        logits, value = self.model(obs_tensor, critic_obs=critic_obs_tensor)
+        masked_logits = self._masked_logits(logits, mask_array)
+        dist = Categorical(logits=masked_logits)
+
+        if explore:
+            action_tensor = dist.sample()
+        else:
+            action_tensor = torch.argmax(masked_logits, dim=-1)
+
+        log_prob = dist.log_prob(action_tensor)
+        action_np = action_tensor.detach().cpu().numpy().astype(np.int64).reshape(-1)
+        log_prob_np = log_prob.detach().cpu().numpy().astype(np.float32).reshape(-1)
+        value_np = value.detach().cpu().numpy().astype(np.float32).reshape(-1)
+
+        if np.asarray(obs, dtype=np.float32).ndim == 1:
+            self._last_log_prob = float(log_prob_np[0])
+            self._last_value = float(value_np[0])
+            return int(action_np[0])
+
+        self._last_log_prob = log_prob_np
+        self._last_value = value_np
+        return action_np
+
     def observe(self, transition: dict[str, Any]) -> None:
         obs_batch = self._as_batch_obs(transition["obs"])
+        next_obs_batch = self._as_batch_obs(transition["next_obs"])
         batch_size = int(obs_batch.shape[0])
 
         actions = self._broadcast_batch(transition["action"], batch_size, dtype=np.int64)
@@ -166,14 +269,27 @@ class PPOAlgorithm(Algorithm):
         log_probs = self._broadcast_batch(self._last_log_prob, batch_size, dtype=np.float32)
         values = self._broadcast_batch(self._last_value, batch_size, dtype=np.float32)
 
+        central_obs_batch = self._as_batch_central_obs(
+            transition.get("central_obs"),
+            batch_size=batch_size,
+            fallback_obs_batch=obs_batch,
+        )
+        next_central_obs_batch = self._as_batch_central_obs(
+            transition.get("next_central_obs"),
+            batch_size=batch_size,
+            fallback_obs_batch=next_obs_batch,
+        )
+
         self.rollout.observations.append(obs_batch)
+        self.rollout.centralized_observations.append(central_obs_batch)
         self.rollout.actions.append(actions)
         self.rollout.action_masks.append(action_masks)
         self.rollout.rewards.append(rewards)
         self.rollout.dones.append(dones)
         self.rollout.log_probs.append(log_probs)
         self.rollout.values.append(values)
-        self.rollout.last_next_observation = self._as_batch_obs(transition["next_obs"])
+        self.rollout.last_next_observation = next_obs_batch
+        self.rollout.last_next_centralized_observation = next_central_obs_batch
         self.rollout.last_done = np.asarray(dones, dtype=np.bool_).reshape(-1)
 
     def _rollout_bootstrap_value(self, expected_batch_size: int) -> np.ndarray:
@@ -194,9 +310,21 @@ class PPOAlgorithm(Algorithm):
             return np.zeros((expected_batch_size,), dtype=np.float32)
 
         next_obs_batch = np.asarray(self.rollout.last_next_observation, dtype=np.float32)
+        next_central_obs_raw = self.rollout.last_next_centralized_observation
+        next_central_obs_batch = self._as_batch_central_obs(
+            next_central_obs_raw,
+            batch_size=expected_batch_size,
+            fallback_obs_batch=next_obs_batch,
+        )
+        next_critic_input_batch = self._build_critic_input(
+            obs_batch=next_obs_batch,
+            central_obs_batch=next_central_obs_batch,
+        )
+
         with torch.no_grad():
             next_obs_tensor = torch.as_tensor(next_obs_batch, dtype=torch.float32, device=self.device)
-            _, next_values_tensor = self.model(next_obs_tensor)
+            next_critic_obs_tensor = torch.as_tensor(next_critic_input_batch, dtype=torch.float32, device=self.device)
+            _, next_values_tensor = self.model(next_obs_tensor, critic_obs=next_critic_obs_tensor)
         next_values = next_values_tensor.detach().cpu().numpy().astype(np.float32).reshape(-1)
 
         if int(next_values.size) != int(expected_batch_size):
@@ -262,7 +390,17 @@ class PPOAlgorithm(Algorithm):
         advantages_batches, returns_batches = self._compute_gae()
 
         obs_flat = np.concatenate(
-            [np.asarray(batch, dtype=np.float32).reshape(-1, int(self.config.obs_dim)) for batch in self.rollout.observations],
+            [
+                np.asarray(batch, dtype=np.float32).reshape(-1, int(self.config.obs_dim))
+                for batch in self.rollout.observations
+            ],
+            axis=0,
+        )
+        central_obs_flat = np.concatenate(
+            [
+                np.asarray(batch, dtype=np.float32).reshape(-1, int(self._central_obs_dim))
+                for batch in self.rollout.centralized_observations
+            ],
             axis=0,
         )
         actions_flat = np.concatenate(
@@ -289,7 +427,12 @@ class PPOAlgorithm(Algorithm):
             axis=0,
         )
 
+        critic_input_flat = self._build_critic_input(
+            obs_batch=obs_flat,
+            central_obs_batch=central_obs_flat,
+        )
         obs_tensor = torch.as_tensor(obs_flat, dtype=torch.float32, device=self.device)
+        critic_obs_tensor = torch.as_tensor(critic_input_flat, dtype=torch.float32, device=self.device)
         action_tensor = torch.as_tensor(actions_flat, dtype=torch.long, device=self.device)
         action_mask_tensor = torch.as_tensor(action_masks_flat, dtype=torch.bool, device=self.device)
         old_log_probs = torch.as_tensor(old_log_probs_flat, dtype=torch.float32, device=self.device)
@@ -297,6 +440,12 @@ class PPOAlgorithm(Algorithm):
         returns_tensor = torch.as_tensor(returns_flat, dtype=torch.float32, device=self.device)
 
         total_loss = 0.0
+        policy_loss_sum = 0.0
+        value_loss_sum = 0.0
+        entropy_sum = 0.0
+        approx_kl_sum = 0.0
+        clip_frac_sum = 0.0
+        update_steps = 0
         sample_count = int(obs_flat.shape[0])
 
         for _ in range(int(self.config.update_epochs)):
@@ -306,13 +455,14 @@ class PPOAlgorithm(Algorithm):
                 batch_idx = permutation[start:end]
 
                 batch_obs = obs_tensor[batch_idx]
+                batch_critic_obs = critic_obs_tensor[batch_idx]
                 batch_actions = action_tensor[batch_idx]
                 batch_action_masks = action_mask_tensor[batch_idx]
                 batch_old_log_probs = old_log_probs[batch_idx]
                 batch_advantages = advantages_tensor[batch_idx]
                 batch_returns = returns_tensor[batch_idx]
 
-                logits, values = self.model(batch_obs)
+                logits, values = self.model(batch_obs, critic_obs=batch_critic_obs)
                 masked_logits = logits.masked_fill(~batch_action_masks, float(-1e9))
                 dist = Categorical(logits=masked_logits)
                 log_probs = dist.log_prob(batch_actions)
@@ -333,6 +483,11 @@ class PPOAlgorithm(Algorithm):
                     + float(self.config.value_coef) * value_loss
                     - float(self.config.entropy_coef) * entropy
                 )
+                with torch.no_grad():
+                    approx_kl = torch.mean(batch_old_log_probs - log_probs)
+                    clip_frac = torch.mean(
+                        (torch.abs(ratio - 1.0) > float(self.config.clip_ratio)).float()
+                    )
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -340,10 +495,29 @@ class PPOAlgorithm(Algorithm):
                 self.optimizer.step()
 
                 total_loss += float(loss.item())
+                policy_loss_sum += float(policy_loss.item())
+                value_loss_sum += float(value_loss.item())
+                entropy_sum += float(entropy.item())
+                approx_kl_sum += float(approx_kl.item())
+                clip_frac_sum += float(clip_frac.item())
+                update_steps += 1
 
-        mean_loss = total_loss / max(1, int(self.config.update_epochs))
+        denom = max(1, int(update_steps))
+        mean_loss = total_loss / float(denom)
+        mean_policy_loss = policy_loss_sum / float(denom)
+        mean_value_loss = value_loss_sum / float(denom)
+        mean_entropy = entropy_sum / float(denom)
+        mean_approx_kl = approx_kl_sum / float(denom)
+        mean_clip_frac = clip_frac_sum / float(denom)
         self.rollout.clear()
-        return {"loss": mean_loss}
+        return {
+            "loss": mean_loss,
+            "policy_loss": mean_policy_loss,
+            "value_loss": mean_value_loss,
+            "entropy": mean_entropy,
+            "approx_kl": mean_approx_kl,
+            "clip_frac": mean_clip_frac,
+        }
 
     def save(self, path: str) -> None:
         save_torch_checkpoint(

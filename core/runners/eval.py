@@ -34,19 +34,51 @@ def _extract_action_mask(env: Env, obs: object) -> np.ndarray | None:
     return None
 
 
+def _extract_centralized_state(env: Env, obs: object) -> np.ndarray | None:
+    for method_name in ("get_centralized_state", "centralized_state", "get_central_state", "central_state"):
+        getter = getattr(env, method_name, None)
+        if not callable(getter):
+            continue
+        try:
+            state = getter(obs)
+        except TypeError:
+            state = getter()
+        if state is None:
+            return None
+        return np.asarray(state, dtype=np.float32)
+    return None
+
+
 def _act_with_optional_mask(
     algorithm: Algorithm,
     obs: object,
     *,
     explore: bool,
     action_mask: np.ndarray | None,
+    central_obs: np.ndarray | None,
 ):
+    if action_mask is None and central_obs is None:
+        return algorithm.act(obs, explore=explore)
     if action_mask is None:
-        return algorithm.act(obs, explore=explore)
+        try:
+            return algorithm.act(obs, explore=explore, central_obs=central_obs)
+        except TypeError:
+            return algorithm.act(obs, explore=explore)
+    if central_obs is None:
+        try:
+            return algorithm.act(obs, explore=explore, action_mask=action_mask)
+        except TypeError:
+            return algorithm.act(obs, explore=explore)
     try:
-        return algorithm.act(obs, explore=explore, action_mask=action_mask)
+        return algorithm.act(obs, explore=explore, action_mask=action_mask, central_obs=central_obs)
     except TypeError:
-        return algorithm.act(obs, explore=explore)
+        try:
+            return algorithm.act(obs, explore=explore, action_mask=action_mask)
+        except TypeError:
+            try:
+                return algorithm.act(obs, explore=explore, central_obs=central_obs)
+            except TypeError:
+                return algorithm.act(obs, explore=explore)
 
 
 def _reward_scalar(reward: object) -> float:
@@ -74,7 +106,14 @@ def run_eval(
 
         for _step in range(int(max_steps_per_episode)):
             action_mask = _extract_action_mask(env, obs)
-            action = _act_with_optional_mask(algorithm, obs, explore=False, action_mask=action_mask)
+            central_obs = _extract_centralized_state(env, obs)
+            action = _act_with_optional_mask(
+                algorithm,
+                obs,
+                explore=False,
+                action_mask=action_mask,
+                central_obs=central_obs,
+            )
             obs, reward, done, info = env.step(action)
             episode_reward += _reward_scalar(reward)
             length += 1

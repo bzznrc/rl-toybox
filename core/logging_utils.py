@@ -161,6 +161,33 @@ def log_episode_line(
     logging.getLogger("rl_toybox.train").info(line)
 
 
+def _format_ppo_metric(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.3f}"
+
+
+def log_ppo_metrics_line(
+    *,
+    policy_loss: float | None,
+    value_loss: float | None,
+    entropy: float | None,
+    approx_kl: float | None,
+    clip_frac: float | None,
+) -> None:
+    line = "\t".join(
+        [
+            "PPO",
+            f"PolicyLoss: {_format_ppo_metric(policy_loss)}",
+            f"ValueLoss: {_format_ppo_metric(value_loss)}",
+            f"Entropy: {_format_ppo_metric(entropy)}",
+            f"ApproxKl: {_format_ppo_metric(approx_kl)}",
+            f"ClipFrac: {_format_ppo_metric(clip_frac)}",
+        ]
+    )
+    logging.getLogger("rl_toybox.train").info(line)
+
+
 def log_iteration_line(
     *,
     iteration: int,

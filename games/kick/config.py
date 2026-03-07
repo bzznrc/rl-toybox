@@ -38,6 +38,7 @@ PLAYER_A_MAX_PX_PER_SEC2 = PLAYER_V_MAX_PX_PER_SEC * 4.0
 SHOW_ZONE_TARGET_CLONES = True
 SHOW_BOTTOM_REWARD_BREAKDOWN = True
 ZONE_TARGET_CLONE_ALPHA = 128
+DEBUG_SANITY_CHECKS = env_flag("KICK_DEBUG_SANITY", False)
 
 PITCH_LINE_WIDTH = 3
 PENALTY_AREA_DEPTH_RATIO = 16.5 / 105.0
@@ -72,6 +73,10 @@ INPUT_FEATURE_NAMES = [
     "goal_dy",
     "goal_rel_angle_sin",
     "goal_rel_angle_cos",
+    "own_goal_dx",
+    "own_goal_dy",
+    "own_goal_rel_angle_sin",
+    "own_goal_rel_angle_cos",
     "ally1_dx",
     "ally1_dy",
     "ally1_dvx",
@@ -80,6 +85,10 @@ INPUT_FEATURE_NAMES = [
     "ally2_dy",
     "ally2_dvx",
     "ally2_dvy",
+    "ally3_dx",
+    "ally3_dy",
+    "ally3_dvx",
+    "ally3_dvy",
     "foe1_dx",
     "foe1_dy",
     "foe1_dvx",
@@ -88,6 +97,10 @@ INPUT_FEATURE_NAMES = [
     "foe2_dy",
     "foe2_dvx",
     "foe2_dvy",
+    "foe3_dx",
+    "foe3_dy",
+    "foe3_dvx",
+    "foe3_dvy",
 ]
 ACTION_NAMES = [
     "stay",
@@ -153,8 +166,8 @@ REWARD_SCORE = 10.0
 PENALTY_CONCEDE = -5.0
 PENALTY_TURNOVER = -0.25
 REWARD_PASS = 0.25
-REWARD_PROGRESS = 0.5
-PENALTY_ZONE = -0.1
+REWARD_PROGRESS = 2.0
+PENALTY_ZONE = -0.01
 Z_TOL = 0.05
 
 REWARD_COMPONENTS = {
@@ -168,7 +181,12 @@ REWARD_COMPONENTS = {
 
 
 # TRAINING
-HIDDEN_DIMENSIONS = [96, 96]
+HIDDEN_DIMENSIONS = [128, 128]
+CRITIC_HIDDEN_DIMENSIONS = [256, 256]
+MAX_LEFT_PLAYERS = 11
+CENTRAL_OBS_MASK_DIM = MAX_LEFT_PLAYERS
+CENTRAL_OBS_BALL_FEATURES = 6
+CENTRAL_OBS_DIM = (MAX_LEFT_PLAYERS * OBS_DIM) + CENTRAL_OBS_MASK_DIM + CENTRAL_OBS_BALL_FEATURES
 
 MAX_TRAINING_ITERATIONS = 12000
 ROLLOUT_STEPS = 2048

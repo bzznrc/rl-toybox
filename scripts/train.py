@@ -16,7 +16,7 @@ def _normalize_choice(value: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an RL toybox game")
-    parser.add_argument("--game", required=True, help="Game id (bang, snake, vroom, kick, stomp)")
+    parser.add_argument("--game", required=True, help="Game id (bang, snake, vroom, walk, kick)")
     parser.add_argument("--algo", default=None, help="Override algorithm id")
     parser.add_argument("--render", action="store_true", help="Show Arcade window during training")
     parser.add_argument(
@@ -34,14 +34,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=None, help="Override off-policy max training steps")
     parser.add_argument("--max-iterations", type=int, default=None, help="Override on-policy iteration count")
     parser.add_argument("--checkpoint-every", type=int, default=None, help="Override checkpoint cadence")
-    parser.add_argument("--log-every-episodes", type=int, default=1, help="Episode log cadence for off-policy games")
-    parser.add_argument("--log-every-iterations", type=int, default=1, help="Iteration log cadence for on-policy games")
-    parser.add_argument(
-        "--log-heartbeat-steps",
-        type=int,
-        default=0,
-        help="Optional heartbeat cadence in env steps (0 disables heartbeat)",
-    )
     return parser.parse_args()
 
 
@@ -131,8 +123,6 @@ def main() -> None:
                 train_config["max_iterations"] = int(args.max_iterations)
             if args.checkpoint_every is not None:
                 train_config["checkpoint_every_iterations"] = int(args.checkpoint_every)
-            train_config["log_every_iterations"] = int(args.log_every_iterations)
-            train_config["log_heartbeat_steps"] = int(args.log_heartbeat_steps)
             metrics = run_on_policy_training(
                 env,
                 algorithm,
@@ -145,8 +135,6 @@ def main() -> None:
                 train_config["max_steps"] = int(args.max_steps)
             if args.checkpoint_every is not None:
                 train_config["checkpoint_every_steps"] = int(args.checkpoint_every)
-            train_config["log_every_episodes"] = int(args.log_every_episodes)
-            train_config["log_heartbeat_steps"] = int(args.log_heartbeat_steps)
             metrics = run_off_policy_training(
                 env,
                 algorithm,

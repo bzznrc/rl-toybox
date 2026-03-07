@@ -45,14 +45,29 @@ def build_algorithm(
         return QLearnAlgorithm(config)
 
     if algo_key == "ppo":
-        if not isinstance(action_space, Discrete):
-            raise TypeError("PPO in this scaffold expects Discrete action space.")
-        config = PPOConfig(
-            obs_dim=int(obs_dim),
-            action_dim=int(action_space.n),
-            **dict(algo_config),
-        )
-        return PPOAlgorithm(config)
+        config_data = dict(algo_config)
+        if isinstance(action_space, Discrete):
+            config = PPOConfig(
+                obs_dim=int(obs_dim),
+                action_dim=int(action_space.n),
+                action_type="discrete",
+                **config_data,
+            )
+            return PPOAlgorithm(config)
+        if isinstance(action_space, Box):
+            action_dim = 1
+            for axis in action_space.shape:
+                action_dim *= max(1, int(axis))
+            config = PPOConfig(
+                obs_dim=int(obs_dim),
+                action_dim=int(action_dim),
+                action_type="continuous",
+                action_low=float(action_space.low),
+                action_high=float(action_space.high),
+                **config_data,
+            )
+            return PPOAlgorithm(config)
+        raise TypeError("PPO requires Discrete or Box action space.")
 
     if algo_key == "sac":
         if not isinstance(action_space, Box):

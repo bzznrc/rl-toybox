@@ -111,7 +111,8 @@ Feature vectors must follow this block order (some blocks omitted per game):
 
 ### 4.3 Normalization rules
 - Positions are relative (`dx`, `dy`) and normalized to a consistent scale.
-- Angles are always **sin/cos pairs**.
+- Angles should usually be **sin/cos pairs**.
+  - Exception: `walk` intentionally uses compact normalized scalar angles to keep `OBS_DIM=18`.
 - Booleans are floats `0.0/1.0`.
 - Time/cooldowns are normalized to `[0,1]` where possible.
 
@@ -202,6 +203,11 @@ Avoid per-level knobs that add lots of branching logic unless the benefit is cle
 
 ## 8) Logging framework
 
+### 8.0 Shared cadence (global, fixed)
+- Train-progress logs are throttled centrally in `core/logging_utils.py`.
+- Cadence is fixed at **0.5 seconds** (`TRAIN_PROGRESS_LOG_INTERVAL_SECONDS = 0.5`).
+- This cadence is intentionally **not configurable per game or CLI**.
+
 ### 8.1 Training header line
 At training start, print a single descriptor line:
 - `Train   Game:<g>  Algo:<a>  Run:<path>  Level:<k>  Resume:<...>  Render:<on/off>`
@@ -217,7 +223,7 @@ All save logs are prefixed/indented:
 
 ### 8.4 On-policy extra PPO/MAPPO metrics line
 After the main episode line (Kick), print a second line:
-- `PPO  PolicyLoss:<...>  ValueLoss:<...>  Entropy:<...>  ApproxKl:<...>  ClipFrac:<...>`
+- `> PPO\tPolicyLoss:<...>\tValueLoss:<...>\tEntropy:<...>\tApproxKl:<...>\tClipFrac:<...>`
 
 ---
 
@@ -243,12 +249,13 @@ After the main episode line (Kick), print a second line:
   - bump logic (cap + patience + cooldown) shared across games
 - update cadence is centralized in the runner (avoid double-gating inside the agent)
 
-### 10.2 On-policy (Kick)
-- PPO baseline, upgraded to MAPPO-style CTDE:
+### 10.2 On-policy (Walk / Kick)
+- Walk uses single-agent PPO with continuous `Box` actions.
+- Kick uses MAPPO-style PPO (CTDE):
   - shared actor (decentralized execution)
   - centralized critic (training-only)
   - per-agent rewards/advantages to reduce credit leakage
-- outcome reward scaling should be stable across team sizes (normalize by n_left if necessary)
+- Outcome reward scaling should stay stable across environments and team sizes.
 
 ---
 
@@ -305,10 +312,18 @@ Use:
 - Key features: symmetric aim/target angles, rays, hazards, LOS
 - Rewards: win/lose (+10/-5), kill +2, shaping terms (engagement/hazard), small step penalty
 
+### Walk
+- Algo: PPO (continuous control)
+- Net: `[64,64]`
+- IO: `OBS_DIM=18`, `ACT_DIM=4` (`Box[-1,1]`)
+- Key features: side-view biped, compact scalar-angle SELF block, 4 forward/down terrain rays
+- Rewards: `P/L` only (`P = new best-x progress`, `L = fail penalty`)
+- Curriculum: 3 levels (flat -> gentle variation -> broader bumps/steps)
+
 ### Kick
 - Algo: MAPPO-style PPO (CTDE)
 - Actor: `[128,128]`, Critic: `[256,256]`
-- IO: `OBS_DIM=36` currently; planned upgrade path includes `OBS_DIM=48` (3 allies + 3 foes + own-goal block)
+- IO: `OBS_DIM=48`, `ACT_DIM=12` discrete
 - Actions: `ACT_DIM=12` discrete
 - Key systems: action masking, per-agent rewards, formation/zone shaping (Z), progress (P), pass (A), turnover (T)
 - Curriculum: 3 levels (easy → medium → full)

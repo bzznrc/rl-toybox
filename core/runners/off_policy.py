@@ -11,7 +11,12 @@ from core.algorithms.base import Algorithm
 from core.algorithms.exploration import bump_epsilon_to_cap
 from core.envs.base import Env
 from core.io.runs import RunPaths, write_metrics
-from core.logging_utils import format_reward_components, log_episode_line, log_key_values, log_save_line
+from core.logging_utils import (
+    format_reward_components,
+    log_episode_line,
+    log_save_line,
+    should_emit_train_progress_log,
+)
 
 
 @dataclass
@@ -24,8 +29,6 @@ class OffPolicyConfig:
     checkpoint_every_steps: int = 50_000
     reward_window: int = 100
     min_episodes_for_stats: int = 100
-    log_every_episodes: int = 1
-    log_heartbeat_steps: int = 0
 
 
 def _safe_level(value: object, default: int) -> int:
@@ -70,7 +73,6 @@ def run_off_policy_training(
     update_attempts = 0
     updates = 0
     last_loss = 0.0
-    last_logged_step = 0
     current_level = _infer_current_level(env, default=1)
 
     while total_steps < int(config.max_steps):
@@ -112,7 +114,6 @@ def run_off_policy_training(
                 at=f"step {int(total_steps)}",
                 path=checkpoint_path,
             )
-            last_logged_step = int(total_steps)
 
         if done:
             total_episodes += 1
@@ -159,7 +160,6 @@ def run_off_policy_training(
                         avg_reward=float(avg_reward),
                         path=best_path,
                     )
-                    last_logged_step = int(total_steps)
 
                 exploration_event = algorithm.on_episode_end(float(exploration_avg_reward))
             if exploration_event is not None and str(exploration_event.get("bump", "off")).lower() == "on":
@@ -169,9 +169,8 @@ def run_off_policy_training(
                 logging.getLogger("rl_toybox.train").info(
                     f"Explore\tBump: on\tEps: {epsilon:.2f}\tCooldown Steps: {cooldown_steps}\tReason: {reason}"
                 )
-                last_logged_step = int(total_steps)
 
-            if total_episodes % max(1, int(config.log_every_episodes)) == 0:
+            if should_emit_train_progress_log("off_policy_progress"):
                 episode_epsilon: float | None = None
                 algorithm_epsilon = getattr(algorithm, "epsilon", None)
                 if algorithm_epsilon is not None:
@@ -199,23 +198,10 @@ def run_off_policy_training(
                     best_avg_label=f"BR{int(episode_level)}",
                     reward_components=components_text,
                 )
-                last_logged_step = int(total_steps)
 
             obs = env.reset()
             episode_reward = 0.0
             episode_steps = 0
-
-        if int(config.log_heartbeat_steps) > 0 and (int(total_steps) - int(last_logged_step)) >= int(config.log_heartbeat_steps):
-            log_key_values(
-                "rl_toybox.train",
-                {
-                    "Heartbeat": "on",
-                    "Steps": int(total_steps),
-                    "Episodes": int(total_episodes),
-                },
-                key_value_separator=":",
-            )
-            last_logged_step = int(total_steps)
 
     if total_episodes >= min_episodes_for_stats:
         current_level = _infer_current_level(env, default=current_level)

@@ -5,9 +5,15 @@ from __future__ import annotations
 from collections import OrderedDict
 import logging
 from pathlib import Path
+from threading import Lock
+import time
 from typing import Any, Mapping
 
 from core.utils import PROJECT_ROOT
+
+TRAIN_PROGRESS_LOG_INTERVAL_SECONDS = 0.5
+_TRAIN_PROGRESS_LOG_LAST_TS: dict[str, float] = {}
+_TRAIN_PROGRESS_LOG_LOCK = Lock()
 
 
 def configure_logging(level: str = "INFO") -> None:
@@ -16,6 +22,25 @@ def configure_logging(level: str = "INFO") -> None:
         format="%(message)s",
         force=True,
     )
+    reset_train_progress_log_throttle()
+
+
+def reset_train_progress_log_throttle() -> None:
+    with _TRAIN_PROGRESS_LOG_LOCK:
+        _TRAIN_PROGRESS_LOG_LAST_TS.clear()
+
+
+def should_emit_train_progress_log(stream_key: str) -> bool:
+    key = str(stream_key).strip().lower() or "default"
+    now = time.perf_counter()
+    interval = float(TRAIN_PROGRESS_LOG_INTERVAL_SECONDS)
+
+    with _TRAIN_PROGRESS_LOG_LOCK:
+        previous = _TRAIN_PROGRESS_LOG_LAST_TS.get(key)
+        if previous is not None and (now - float(previous)) < interval:
+            return False
+        _TRAIN_PROGRESS_LOG_LAST_TS[key] = float(now)
+    return True
 
 
 def get_torch_device(prefer_gpu: bool = False):
@@ -177,7 +202,7 @@ def log_ppo_metrics_line(
 ) -> None:
     line = "\t".join(
         [
-            "PPO",
+            "> PPO",
             f"PolicyLoss: {_format_ppo_metric(policy_loss)}",
             f"ValueLoss: {_format_ppo_metric(value_loss)}",
             f"Entropy: {_format_ppo_metric(entropy)}",

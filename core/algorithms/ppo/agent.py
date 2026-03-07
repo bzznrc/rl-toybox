@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Normal
 
 from core.algorithms.base import Algorithm
 from core.algorithms.ppo.networks import ActorCritic
@@ -36,6 +36,12 @@ class PPOConfig:
     value_coef: float = 0.5
     max_grad_norm: float = 0.5
     use_gpu: bool = False
+    action_type: str = "discrete"
+    action_low: float = -1.0
+    action_high: float = 1.0
+    init_log_std: float = -0.5
+    min_log_std: float = -5.0
+    max_log_std: float = 2.0
 
 
 class PPOAlgorithm(Algorithm):
@@ -44,6 +50,15 @@ class PPOAlgorithm(Algorithm):
     def __init__(self, config: PPOConfig):
         self.config = config
         self.device = torch.device("cuda" if config.use_gpu and torch.cuda.is_available() else "cpu")
+
+        self._action_type = str(config.action_type).strip().lower()
+        if self._action_type not in {"discrete", "continuous"}:
+            raise ValueError("PPO action_type must be 'discrete' or 'continuous'.")
+        self._is_discrete = bool(self._action_type == "discrete")
+        self._action_low = float(config.action_low)
+        self._action_high = float(config.action_high)
+        if (not self._is_discrete) and self._action_low >= self._action_high:
+            raise ValueError("PPO continuous action bounds require action_low < action_high.")
 
         self._use_centralized_critic = bool(config.centralized_critic)
         if self._use_centralized_critic:
@@ -71,12 +86,17 @@ class PPOAlgorithm(Algorithm):
             config.hidden_sizes,
             critic_obs_dim=int(self._critic_obs_dim),
             critic_hidden_sizes=critic_hidden_sizes,
+            action_type=str(self._action_type),
+            init_log_std=float(config.init_log_std),
+            min_log_std=float(config.min_log_std),
+            max_log_std=float(config.max_log_std),
         ).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=float(config.learning_rate))
         self.rollout = RolloutBuffer()
 
         self._last_log_prob: float | np.ndarray = 0.0
         self._last_value: float | np.ndarray = 0.0
+        self._last_action_for_storage: int | np.ndarray | None = None
 
     def _normalize_action_mask(
         self,
@@ -84,6 +104,9 @@ class PPOAlgorithm(Algorithm):
         *,
         batch_size: int,
     ) -> np.ndarray:
+        if not self._is_discrete:
+            raise ValueError("PPO action masks are only supported for discrete action policies.")
+
         mask_array = np.asarray(action_mask, dtype=np.bool_)
         action_dim = int(self.config.action_dim)
 
@@ -204,6 +227,49 @@ class PPOAlgorithm(Algorithm):
             )
         return value_array.astype(dtype, copy=False)
 
+    def _normalize_actions_for_storage(self, values: object, *, batch_size: int) -> np.ndarray:
+        if self._is_discrete:
+            return self._broadcast_batch(values, batch_size, dtype=np.int64)
+
+        action_dim = int(self.config.action_dim)
+        action_array = np.asarray(values, dtype=np.float32)
+        if action_array.ndim == 0:
+            action_array = action_array.reshape(1, 1)
+        elif action_array.ndim == 1:
+            if int(action_array.size) == int(action_dim):
+                action_array = action_array.reshape(1, action_dim)
+            elif int(action_dim) == 1 and int(action_array.size) == int(batch_size):
+                action_array = action_array.reshape(batch_size, 1)
+            else:
+                raise ValueError(
+                    "PPO continuous action batch expected shape (action_dim,) or (batch, action_dim)."
+                )
+        elif action_array.ndim != 2:
+            raise ValueError(
+                f"PPO continuous action batch expected ndim 1 or 2, got {action_array.ndim}."
+            )
+
+        if int(action_array.shape[0]) == 1 and int(batch_size) > 1:
+            action_array = np.repeat(action_array, int(batch_size), axis=0)
+        if int(action_array.shape[0]) != int(batch_size):
+            raise ValueError(
+                f"PPO expected action batch size {int(batch_size)}, got {int(action_array.shape[0])}."
+            )
+        if int(action_array.shape[1]) != int(action_dim):
+            raise ValueError(
+                f"PPO expected action dim {int(action_dim)}, got {int(action_array.shape[1])}."
+            )
+        return action_array.astype(np.float32, copy=False)
+
+    def _clip_continuous_actions(self, action_batch: np.ndarray) -> np.ndarray:
+        clipped = np.clip(np.asarray(action_batch, dtype=np.float32), self._action_low, self._action_high)
+        return clipped.astype(np.float32, copy=False)
+
+    def _continuous_distribution(self, means: torch.Tensor) -> Normal:
+        log_std = self.model.policy_log_std()
+        std = torch.exp(log_std).unsqueeze(0).expand_as(means)
+        return Normal(means, std)
+
     def act(
         self,
         obs: np.ndarray,
@@ -215,7 +281,7 @@ class PPOAlgorithm(Algorithm):
         batch_size = int(obs_batch.shape[0])
 
         mask_array = None
-        if action_mask is not None:
+        if action_mask is not None and self._is_discrete:
             mask_array = self._normalize_action_mask(action_mask, batch_size=batch_size)
 
         central_batch = self._as_batch_central_obs(
@@ -230,40 +296,70 @@ class PPOAlgorithm(Algorithm):
 
         obs_tensor = torch.as_tensor(obs_batch, dtype=torch.float32, device=self.device)
         critic_obs_tensor = torch.as_tensor(critic_input_batch, dtype=torch.float32, device=self.device)
-        logits, value = self.model(obs_tensor, critic_obs=critic_obs_tensor)
-        masked_logits = self._masked_logits(logits, mask_array)
-        dist = Categorical(logits=masked_logits)
+        policy_output, value = self.model(obs_tensor, critic_obs=critic_obs_tensor)
 
-        if explore:
-            action_tensor = dist.sample()
+        if self._is_discrete:
+            masked_logits = self._masked_logits(policy_output, mask_array)
+            dist = Categorical(logits=masked_logits)
+            if explore:
+                action_tensor = dist.sample()
+            else:
+                action_tensor = torch.argmax(masked_logits, dim=-1)
+            log_prob = dist.log_prob(action_tensor)
+            action_np = action_tensor.detach().cpu().numpy().astype(np.int64).reshape(-1)
+            env_action_np: np.ndarray | int = action_np
+            storage_action_np: np.ndarray | int = action_np
         else:
-            action_tensor = torch.argmax(masked_logits, dim=-1)
+            dist = self._continuous_distribution(policy_output)
+            if explore:
+                raw_action_tensor = dist.sample()
+            else:
+                raw_action_tensor = policy_output
+            log_prob = dist.log_prob(raw_action_tensor).sum(dim=-1)
+            raw_action_np = raw_action_tensor.detach().cpu().numpy().astype(np.float32)
+            env_action_np = self._clip_continuous_actions(raw_action_np)
+            storage_action_np = raw_action_np
 
-        log_prob = dist.log_prob(action_tensor)
-        action_np = action_tensor.detach().cpu().numpy().astype(np.int64).reshape(-1)
         log_prob_np = log_prob.detach().cpu().numpy().astype(np.float32).reshape(-1)
         value_np = value.detach().cpu().numpy().astype(np.float32).reshape(-1)
 
         if np.asarray(obs, dtype=np.float32).ndim == 1:
             self._last_log_prob = float(log_prob_np[0])
             self._last_value = float(value_np[0])
-            return int(action_np[0])
+            if self._is_discrete:
+                action_scalar = int(np.asarray(env_action_np, dtype=np.int64).reshape(-1)[0])
+                self._last_action_for_storage = int(np.asarray(storage_action_np, dtype=np.int64).reshape(-1)[0])
+                return action_scalar
+            action_vec = np.asarray(env_action_np, dtype=np.float32).reshape(-1, int(self.config.action_dim))[0]
+            storage_vec = np.asarray(storage_action_np, dtype=np.float32).reshape(-1, int(self.config.action_dim))[0]
+            self._last_action_for_storage = storage_vec.astype(np.float32, copy=False)
+            return action_vec.astype(np.float32, copy=False)
 
         self._last_log_prob = log_prob_np
         self._last_value = value_np
-        return action_np
+        if self._is_discrete:
+            self._last_action_for_storage = np.asarray(storage_action_np, dtype=np.int64).reshape(-1)
+            return np.asarray(env_action_np, dtype=np.int64).reshape(-1)
+
+        self._last_action_for_storage = np.asarray(storage_action_np, dtype=np.float32).reshape(-1, int(self.config.action_dim))
+        return np.asarray(env_action_np, dtype=np.float32).reshape(-1, int(self.config.action_dim))
 
     def observe(self, transition: dict[str, Any]) -> None:
         obs_batch = self._as_batch_obs(transition["obs"])
         next_obs_batch = self._as_batch_obs(transition["next_obs"])
         batch_size = int(obs_batch.shape[0])
 
-        actions = self._broadcast_batch(transition["action"], batch_size, dtype=np.int64)
+        action_source = self._last_action_for_storage
+        if action_source is None:
+            action_source = transition["action"]
+        actions = self._normalize_actions_for_storage(action_source, batch_size=batch_size)
+
         action_mask_raw = transition.get("action_mask")
-        if action_mask_raw is None:
-            action_masks = np.ones((batch_size, int(self.config.action_dim)), dtype=np.bool_)
-        else:
+        if self._is_discrete and action_mask_raw is not None:
             action_masks = self._normalize_action_mask(action_mask_raw, batch_size=batch_size)
+        else:
+            action_masks = np.ones((batch_size, int(self.config.action_dim)), dtype=np.bool_)
+
         rewards = self._broadcast_batch(transition["reward"], batch_size, dtype=np.float32)
         dones = self._broadcast_batch(transition["done"], batch_size, dtype=np.bool_)
         log_probs = self._broadcast_batch(self._last_log_prob, batch_size, dtype=np.float32)
@@ -291,6 +387,7 @@ class PPOAlgorithm(Algorithm):
         self.rollout.last_next_observation = next_obs_batch
         self.rollout.last_next_centralized_observation = next_central_obs_batch
         self.rollout.last_done = np.asarray(dones, dtype=np.bool_).reshape(-1)
+        self._last_action_for_storage = None
 
     def _rollout_bootstrap_value(self, expected_batch_size: int) -> np.ndarray:
         if expected_batch_size <= 0:
@@ -403,17 +500,28 @@ class PPOAlgorithm(Algorithm):
             ],
             axis=0,
         )
-        actions_flat = np.concatenate(
-            [np.asarray(batch, dtype=np.int64).reshape(-1) for batch in self.rollout.actions],
-            axis=0,
-        )
-        action_masks_flat = np.concatenate(
-            [
-                np.asarray(batch, dtype=np.bool_).reshape(-1, int(self.config.action_dim))
-                for batch in self.rollout.action_masks
-            ],
-            axis=0,
-        )
+        if self._is_discrete:
+            actions_flat = np.concatenate(
+                [np.asarray(batch, dtype=np.int64).reshape(-1) for batch in self.rollout.actions],
+                axis=0,
+            )
+            action_masks_flat = np.concatenate(
+                [
+                    np.asarray(batch, dtype=np.bool_).reshape(-1, int(self.config.action_dim))
+                    for batch in self.rollout.action_masks
+                ],
+                axis=0,
+            )
+        else:
+            actions_flat = np.concatenate(
+                [
+                    np.asarray(batch, dtype=np.float32).reshape(-1, int(self.config.action_dim))
+                    for batch in self.rollout.actions
+                ],
+                axis=0,
+            )
+            action_masks_flat = None
+
         old_log_probs_flat = np.concatenate(
             [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in self.rollout.log_probs],
             axis=0,
@@ -433,8 +541,12 @@ class PPOAlgorithm(Algorithm):
         )
         obs_tensor = torch.as_tensor(obs_flat, dtype=torch.float32, device=self.device)
         critic_obs_tensor = torch.as_tensor(critic_input_flat, dtype=torch.float32, device=self.device)
-        action_tensor = torch.as_tensor(actions_flat, dtype=torch.long, device=self.device)
-        action_mask_tensor = torch.as_tensor(action_masks_flat, dtype=torch.bool, device=self.device)
+        if self._is_discrete:
+            action_tensor = torch.as_tensor(actions_flat, dtype=torch.long, device=self.device)
+            action_mask_tensor = torch.as_tensor(action_masks_flat, dtype=torch.bool, device=self.device)
+        else:
+            action_tensor = torch.as_tensor(actions_flat, dtype=torch.float32, device=self.device)
+            action_mask_tensor = None
         old_log_probs = torch.as_tensor(old_log_probs_flat, dtype=torch.float32, device=self.device)
         advantages_tensor = torch.as_tensor(advantages_flat, dtype=torch.float32, device=self.device)
         returns_tensor = torch.as_tensor(returns_flat, dtype=torch.float32, device=self.device)
@@ -457,16 +569,23 @@ class PPOAlgorithm(Algorithm):
                 batch_obs = obs_tensor[batch_idx]
                 batch_critic_obs = critic_obs_tensor[batch_idx]
                 batch_actions = action_tensor[batch_idx]
-                batch_action_masks = action_mask_tensor[batch_idx]
                 batch_old_log_probs = old_log_probs[batch_idx]
                 batch_advantages = advantages_tensor[batch_idx]
                 batch_returns = returns_tensor[batch_idx]
 
-                logits, values = self.model(batch_obs, critic_obs=batch_critic_obs)
-                masked_logits = logits.masked_fill(~batch_action_masks, float(-1e9))
-                dist = Categorical(logits=masked_logits)
-                log_probs = dist.log_prob(batch_actions)
-                entropy = dist.entropy().mean()
+                policy_output, values = self.model(batch_obs, critic_obs=batch_critic_obs)
+                if self._is_discrete:
+                    if action_mask_tensor is None:
+                        raise RuntimeError("PPO discrete update requires action masks tensor.")
+                    batch_action_masks = action_mask_tensor[batch_idx]
+                    masked_logits = policy_output.masked_fill(~batch_action_masks, float(-1e9))
+                    dist = Categorical(logits=masked_logits)
+                    log_probs = dist.log_prob(batch_actions)
+                    entropy = dist.entropy().mean()
+                else:
+                    dist = self._continuous_distribution(policy_output)
+                    log_probs = dist.log_prob(batch_actions).sum(dim=-1)
+                    entropy = dist.entropy().sum(dim=-1).mean()
 
                 ratio = torch.exp(log_probs - batch_old_log_probs)
                 unclipped = ratio * batch_advantages

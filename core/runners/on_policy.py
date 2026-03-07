@@ -16,9 +16,8 @@ from core.logging_utils import (
     format_reward_components,
     log_episode_line,
     log_ppo_metrics_line,
-    log_iteration_line,
-    log_key_values,
     log_save_line,
+    should_emit_train_progress_log,
 )
 
 
@@ -29,8 +28,6 @@ class OnPolicyConfig:
     checkpoint_every_iterations: int = 10
     reward_window: int = 100
     min_episodes_for_stats: int = 100
-    log_every_iterations: int = 1
-    log_heartbeat_steps: int = 0
 
 
 def _safe_level(value: object, default: int) -> int:
@@ -203,7 +200,6 @@ def run_on_policy_training(
     total_episodes = 0
     last_loss = 0.0
     last_ppo_update_metrics: dict[str, float] | None = None
-    last_logged_step = 0
     current_level = _infer_current_level(env, default=1)
     _apply_level_entropy_coef(algorithm, env, int(current_level))
 
@@ -282,56 +278,55 @@ def run_on_policy_training(
                             avg_reward=float(avg_reward_level),
                             path=best_path,
                         )
-                        last_logged_step = int(total_steps)
 
                 components_text = format_reward_components(info.get("reward_components"))
                 best_avg_for_level = best_avg_reward_by_level.get(int(episode_level))
-                log_episode_line(
-                    episode=int(total_episodes),
-                    level=int(episode_level),
-                    ep_len=int(episode_steps),
-                    reward=float(episode_reward),
-                    avg_reward=avg_reward_ep,
-                    best_avg=(
-                        float(best_avg_for_level)
-                        if stats_ready_level and best_avg_for_level is not None
-                        else None
-                    ),
-                    epsilon=None,
-                    success=int(episode_success),
-                    avg_success=avg_success_ep,
-                    best_avg_label=f"BR{int(episode_level)}",
-                    reward_components=components_text,
-                )
-                cached_metrics = last_ppo_update_metrics or {}
-                log_ppo_metrics_line(
-                    policy_loss=(
-                        float(cached_metrics["policy_loss"])
-                        if "policy_loss" in cached_metrics
-                        else None
-                    ),
-                    value_loss=(
-                        float(cached_metrics["value_loss"])
-                        if "value_loss" in cached_metrics
-                        else None
-                    ),
-                    entropy=(
-                        float(cached_metrics["entropy"])
-                        if "entropy" in cached_metrics
-                        else None
-                    ),
-                    approx_kl=(
-                        float(cached_metrics["approx_kl"])
-                        if "approx_kl" in cached_metrics
-                        else None
-                    ),
-                    clip_frac=(
-                        float(cached_metrics["clip_frac"])
-                        if "clip_frac" in cached_metrics
-                        else None
-                    ),
-                )
-                last_logged_step = int(total_steps)
+                if should_emit_train_progress_log("on_policy_progress"):
+                    log_episode_line(
+                        episode=int(total_episodes),
+                        level=int(episode_level),
+                        ep_len=int(episode_steps),
+                        reward=float(episode_reward),
+                        avg_reward=avg_reward_ep,
+                        best_avg=(
+                            float(best_avg_for_level)
+                            if stats_ready_level and best_avg_for_level is not None
+                            else None
+                        ),
+                        epsilon=None,
+                        success=int(episode_success),
+                        avg_success=avg_success_ep,
+                        best_avg_label=f"BR{int(episode_level)}",
+                        reward_components=components_text,
+                    )
+                    cached_metrics = last_ppo_update_metrics or {}
+                    log_ppo_metrics_line(
+                        policy_loss=(
+                            float(cached_metrics["policy_loss"])
+                            if "policy_loss" in cached_metrics
+                            else None
+                        ),
+                        value_loss=(
+                            float(cached_metrics["value_loss"])
+                            if "value_loss" in cached_metrics
+                            else None
+                        ),
+                        entropy=(
+                            float(cached_metrics["entropy"])
+                            if "entropy" in cached_metrics
+                            else None
+                        ),
+                        approx_kl=(
+                            float(cached_metrics["approx_kl"])
+                            if "approx_kl" in cached_metrics
+                            else None
+                        ),
+                        clip_frac=(
+                            float(cached_metrics["clip_frac"])
+                            if "clip_frac" in cached_metrics
+                            else None
+                        ),
+                    )
                 obs = env.reset()
                 episode_reward = 0.0
                 episode_steps = 0
@@ -347,8 +342,6 @@ def run_on_policy_training(
                 and isinstance(value, (int, float, np.floating))
             }
 
-        avg_reward = float(mean(reward_window)) if reward_window else 0.0
-
         if iteration % int(config.checkpoint_every_iterations) == 0:
             checkpoint_path = run_paths.model_path(level=int(current_level), kind="check")
             algorithm.save(str(checkpoint_path))
@@ -358,38 +351,6 @@ def run_on_policy_training(
                 at=f"iter {int(iteration)}",
                 path=checkpoint_path,
             )
-            last_logged_step = int(total_steps)
-
-        if iteration % max(1, int(config.log_every_iterations)) == 0:
-            # Iter-line logging disabled by request.
-            # level_reward_window = reward_window_by_level.get(int(current_level))
-            # if level_reward_window:
-            #     avg_reward_level = float(mean(level_reward_window))
-            # else:
-            #     avg_reward_level = float(avg_reward)
-            # best_avg_level = float(best_avg_reward_by_level.get(int(current_level), avg_reward_level))
-            # log_iteration_line(
-            #     iteration=int(iteration),
-            #     steps=int(total_steps),
-            #     avg_reward=float(avg_reward_level),
-            #     best_avg=float(best_avg_level),
-            #     best_avg_label=f"BR{int(current_level)}",
-            # )
-            # last_logged_step = int(total_steps)
-            pass
-
-        if int(config.log_heartbeat_steps) > 0 and (int(total_steps) - int(last_logged_step)) >= int(config.log_heartbeat_steps):
-            log_key_values(
-                "rl_toybox.train",
-                {
-                    "Heartbeat": "on",
-                    "Steps": int(total_steps),
-                    "Episodes": int(total_episodes),
-                },
-                key_value_separator=":",
-            )
-            last_logged_step = int(total_steps)
-
     checkpoint_path = run_paths.model_path(level=int(current_level), kind="check")
     algorithm.save(str(checkpoint_path))
     log_save_line(

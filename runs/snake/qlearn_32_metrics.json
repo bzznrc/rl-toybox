@@ -3,7 +3,6 @@
   "config": {
     "checkpoint_every_steps": 100000,
     "log_every_episodes": 1,
-    "log_heartbeat_steps": 0,
     "max_episodes": null,
     "max_steps": 3000000,
     "min_episodes_for_stats": 100,

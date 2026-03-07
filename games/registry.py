@@ -6,16 +6,16 @@ from games.bang.spec import SPEC as BANG_SPEC
 from games.kick.spec import SPEC as KICK_SPEC
 from games.snake.spec import SPEC as SNAKE_SPEC
 from games.spec_types import GameSpec
-from games.stomp.spec import SPEC as STOMP_SPEC
 from games.vroom.spec import SPEC as VROOM_SPEC
+from games.walk.spec import SPEC as WALK_SPEC
 
 
 GAME_SPECS: dict[str, GameSpec] = {
     BANG_SPEC.game_id: BANG_SPEC,
+    WALK_SPEC.game_id: WALK_SPEC,
     SNAKE_SPEC.game_id: SNAKE_SPEC,
     VROOM_SPEC.game_id: VROOM_SPEC,
     KICK_SPEC.game_id: KICK_SPEC,
-    STOMP_SPEC.game_id: STOMP_SPEC,
 }
 
 

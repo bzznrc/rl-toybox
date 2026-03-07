@@ -92,7 +92,7 @@ Realized components logged as `G C T A P Z`:
 ## PPO Debug Line
 
 - After each episode line, training prints one extra tab-separated PPO line:
-  - `PPO	PolicyLoss: ...	ValueLoss: ...	Entropy: ...	ApproxKl: ...	ClipFrac: ...`
+  - `> PPO	PolicyLoss: ...	ValueLoss: ...	Entropy: ...	ApproxKl: ...	ClipFrac: ...`
 - Before the first PPO update, these fields print as `n/a`.
 
 ## Curriculum (Train)

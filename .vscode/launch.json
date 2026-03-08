@@ -1,0 +1,259 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Snake - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "snake",
+        "--level",
+        "${input:playLevel}"
+      ]
+    },
+    {
+      "name": "Snake - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "snake",
+        "--level",
+        "${input:playLevel}",
+        "--render"
+      ]
+    },
+    {
+      "name": "Snake - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "snake",
+        "--resume",
+        "${input:trainResumeMode}"
+      ]
+    },
+    {
+      "name": "Vroom - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "vroom",
+        "--level",
+        "${input:playLevel}"
+      ]
+    },
+    {
+      "name": "Vroom - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "vroom",
+        "--level",
+        "${input:playLevel}",
+        "--render"
+      ]
+    },
+    {
+      "name": "Vroom - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "vroom",
+        "--resume",
+        "${input:trainResumeMode}"
+      ]
+    },
+    {
+      "name": "Bang - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "bang",
+        "--level",
+        "${input:playLevel}"
+      ]
+    },
+    {
+      "name": "Bang - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "bang",
+        "--level",
+        "${input:playLevel}",
+        "--render"
+      ]
+    },
+    {
+      "name": "Bang - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "bang",
+        "--resume",
+        "${input:trainResumeMode}"
+      ]
+    },
+    {
+      "name": "Walk - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "walk",
+        "--level",
+        "${input:playLevel}"
+      ]
+    },
+    {
+      "name": "Walk - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "walk",
+        "--level",
+        "${input:playLevel}",
+        "--render"
+      ]
+    },
+    {
+      "name": "Walk - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "walk",
+        "--resume",
+        "${input:trainResumeMode}"
+      ]
+    },
+    {
+      "name": "Kick - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick",
+        "--level",
+        "${input:playLevel}"
+      ]
+    },
+    {
+      "name": "Kick - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick",
+        "--level",
+        "${input:playLevel}",
+        "--render"
+      ]
+    },
+    {
+      "name": "Kick - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick",
+        "--resume",
+        "${input:trainResumeMode}"
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "playLevel",
+      "type": "pickString",
+      "description": "Play level",
+      "default": "3",
+      "options": [
+        "1",
+        "2",
+        "3"
+      ]
+    },
+    {
+      "id": "trainResumeMode",
+      "type": "pickString",
+      "description": "Train start mode",
+      "default": "New",
+      "options": [
+        "New",
+        "Best"
+      ]
+    }
+  ]
+}
+

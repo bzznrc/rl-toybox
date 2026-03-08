@@ -65,8 +65,8 @@ Ray notes:
 - Outcome `REWARD_WIN`: `+10` on match win.
 - Outcome `PENALTY_LOSE`: `-5` on match loss.
 - Event `REWARD_KILL`: `+2` per enemy elimination.
-- Engagement shaping: `r_eng = clip(0.2 * (Phi_eng_next - Phi_eng_prev), -0.1, +0.1)`, `Phi_eng = (1 if tgt_in_los else 0) - tgt_dist_norm`.
-- Hazard shaping: `r_haz = clip(0.2 * (Phi_haz_next - Phi_haz_prev), -0.1, +0.1)`, `Phi_haz = haz_dist_norm - 1.5 * haz_in_trajectory`.
+- Engagement shaping: `r_eng = clip(0.5 * (Phi_eng_next - Phi_eng_prev), -0.25, +0.25)`, `Phi_eng = (1 if tgt_in_los else 0) - tgt_dist_norm`.
+- Hazard shaping: `r_haz = clip(0.5 * (Phi_haz_next - Phi_haz_prev), -0.25, +0.25)`, `Phi_haz = haz_dist_norm - 1.5 * haz_in_trajectory`.
 - Step `PENALTY_STEP`: `-0.005` every training step.
 
 ## Curriculum (Train)
@@ -74,9 +74,9 @@ Ray notes:
 - Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
 - Promotion settings live in `games/bang/config.py` under `CURRICULUM_PROMOTION`.
 - Levels:
-  - Level 1: `2` players, low obstacles, easy enemy behavior
-  - Level 2: `2` players, medium obstacles, medium enemy behavior
-  - Level 3: `4` players, high obstacles, hard enemy behavior
+  - Level 1: `2` players, `4` obstacles, enemy move probability `0.00`, enemy shoot probability `0.02`
+  - Level 2: `2` players, `8` obstacles, enemy move probability `0.10`, enemy shoot probability `0.06`
+  - Level 3: `4` players, `12` obstacles, enemy move probability `0.20`, enemy shoot probability `0.10`
 
 Success per episode is `1` on win, else `0`.
 

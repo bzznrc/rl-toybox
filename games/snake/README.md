@@ -6,15 +6,20 @@ Classic grid Snake with obstacle curriculum and lightweight shaping rewards.
 
 [![Snake Demo](../../media/snake-demo.gif)](../../media/snake-demo.mp4)
 
+## Algorithm / Network
+
+- Algo: Q-learning (`qlearn`)
+- Hidden sizes: `[32]`
+
 ## Curriculum (Train)
 
 - Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
 - Promotion settings live in `games/snake/config.py` under `CURRICULUM_PROMOTION`.
 - `WRAP_AROUND` is global in `games/snake/config.py`.
 - Levels:
-  - Level 1: `0` obstacles, timeout `160 * snake_length`
-  - Level 2: `4` obstacles, timeout `130 * snake_length`
-  - Level 3: `8` obstacles, timeout `100 * snake_length`
+  - Level 1: `0` obstacles, timeout `120 * snake_length`
+  - Level 2: `6` obstacles, timeout `100 * snake_length`
+  - Level 3: `12` obstacles, timeout `80 * snake_length`
 
 Success per episode is `1` if at least `5` foods are eaten (`SUCCESS_FOODS_REQUIRED`), else `0`.
 
@@ -48,9 +53,9 @@ Ray notes:
 
 ## Rewards (Training)
 
-- Event `REWARD_FOOD`: `+10` when food is eaten.
+- Event `REWARD_FOOD`: `+1.0` when food is eaten.
 - Outcome `PENALTY_LOSE`: `-5` on death or timeout.
-- Progress shaping: `r_progress = clip(1.0 * (Phi_next - Phi_prev), -0.2, +0.2)` with `Phi = -dist_food_norm - 0.5*hunger_norm`.
+- Progress shaping: `r_progress = clip(1.0 * (Phi_next - Phi_prev), -0.05, +0.05)` with `Phi = -dist_food_norm - 0.5*hunger_norm`.
 - Step `PENALTY_STEP`: `-0.005` every training step.
 
 `dist_food_norm` is normalized Manhattan head-to-food distance (shortest wrapped path when wrap-around is enabled).

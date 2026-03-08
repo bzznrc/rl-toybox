@@ -44,7 +44,9 @@
         "--game",
         "snake",
         "--resume",
-        "${input:trainResumeMode}"
+        "${input:trainResumeMode}",
+        "--resume-level",
+        "${input:trainResumeLevel}"
       ]
     },
     {
@@ -90,7 +92,9 @@
         "--game",
         "vroom",
         "--resume",
-        "${input:trainResumeMode}"
+        "${input:trainResumeMode}",
+        "--resume-level",
+        "${input:trainResumeLevel}"
       ]
     },
     {
@@ -136,7 +140,9 @@
         "--game",
         "bang",
         "--resume",
-        "${input:trainResumeMode}"
+        "${input:trainResumeMode}",
+        "--resume-level",
+        "${input:trainResumeLevel}"
       ]
     },
     {
@@ -182,7 +188,9 @@
         "--game",
         "walk",
         "--resume",
-        "${input:trainResumeMode}"
+        "${input:trainResumeMode}",
+        "--resume-level",
+        "${input:trainResumeLevel}"
       ]
     },
     {
@@ -228,7 +236,9 @@
         "--game",
         "kick",
         "--resume",
-        "${input:trainResumeMode}"
+        "${input:trainResumeMode}",
+        "--resume-level",
+        "${input:trainResumeLevel}"
       ]
     }
   ],
@@ -252,6 +262,17 @@
       "options": [
         "New",
         "Best"
+      ]
+    },
+    {
+      "id": "trainResumeLevel",
+      "type": "pickString",
+      "description": "Resume level (used for Best)",
+      "default": "1",
+      "options": [
+        "1",
+        "2",
+        "3"
       ]
     }
   ]

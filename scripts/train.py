@@ -7,11 +7,14 @@ import argparse
 from core.logging_utils import configure_logging, log_key_values, log_run_context
 from core.runners.off_policy import OffPolicyConfig, run_off_policy_training
 from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
-from scripts.common import prepare_run, resolve_current_level, resolve_resume_path
-
-
-def _normalize_choice(value: str) -> str:
-    return str(value).strip().lower()
+from scripts.common import (
+    apply_training_start_level,
+    normalize_resume_mode,
+    prepare_run,
+    resolve_best_resume_level,
+    resolve_current_level,
+    resolve_resume_path,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,13 +25,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--resume",
         default="new",
-        type=_normalize_choice,
-        choices=["auto", "none", "new", "check", "checkpoint", "best"],
+        type=normalize_resume_mode,
+        choices=["auto", "none", "check", "best"],
         help=(
             "Resume source for model weights. "
             "Default is 'new' (start from scratch). "
             "Accepted values: New, Best, Check, Checkpoint, None, Auto. "
             "When best is loaded, epsilon resets to eps_bump_cap for epsilon-based algos."
+        ),
+    )
+    parser.add_argument(
+        "--resume-level",
+        type=int,
+        default=None,
+        help=(
+            "Curriculum level to resume from when --resume best is selected. "
+            "Loads L<level>_best and starts training from that level."
         ),
     )
     parser.add_argument("--max-steps", type=int, default=None, help="Override off-policy max training steps")
@@ -64,15 +76,17 @@ def main() -> None:
     run_paths = prepared.run_paths
     algorithm = prepared.algorithm
 
-    resume_mode = str(args.resume)
-    if resume_mode == "new":
-        resume_mode = "none"
-    if resume_mode == "checkpoint":
-        resume_mode = "check"
+    resume_mode = args.resume
 
     env = spec.make_env(mode="train", render=bool(args.render))
     try:
-        current_level = resolve_current_level(env, default=1)
+        if resume_mode == "best":
+            target_level = int(
+                resolve_best_resume_level(env, explicit_level=args.resume_level, allow_prompt=True)
+            )
+            current_level = apply_training_start_level(env, target_level)
+        else:
+            current_level = resolve_current_level(env, default=1)
         best_path_for_level = run_paths.model_path(current_level, "best")
         resume_path = resolve_resume_path(resume_mode, run_paths, current_level)
         if resume_mode == "best" and resume_path is None:
@@ -82,7 +96,7 @@ def main() -> None:
                 prefix="Train",
                 key_value_separator=":",
             )
-        if resume_mode in {"check", "checkpoint"} and resume_path is None:
+        if resume_mode == "check" and resume_path is None:
             log_key_values(
                 "rl_toybox.train",
                 {"Resume": "check_missing", "Level": current_level, "Fallback": "scratch"},

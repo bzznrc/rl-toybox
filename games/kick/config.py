@@ -19,6 +19,7 @@ WINDOW_TITLE = "Kick"
 FPS = 60
 TRAINING_FPS = 0
 USE_GPU = env_flag("KICK_USE_GPU", False)
+PPO_METRICS_LOG_ENABLED = False
 
 
 # ENV
@@ -129,7 +130,7 @@ MIN_EPISODES_FOR_STATS = REWARD_ROLLING_WINDOW
 CURRICULUM_PROMOTION = {
     "min_episodes_per_level": 250,
     "check_window": 25,
-    "success_threshold": 0.60,
+    "success_threshold": 0.40,
     "consecutive_checks_required": 2,
 }
 
@@ -147,7 +148,7 @@ LEVEL_SETTINGS = {
         "opponent_roles": ["GK", "LB", "RB", "RM", "LM", "LCS", "RCS"],
         "goals_size_scale": 1.5,
         "enemy_stamina_scale": 0.75,
-        "enemy_shot_error_choices": [-20, 0, 20],
+        "enemy_shot_error_choices": [-30, 0, 30],
         "entropy_coef": 0.01,
     },
     3: {
@@ -155,7 +156,7 @@ LEVEL_SETTINGS = {
         "opponent_roles": ["GK", "LB", "LCB", "RCB", "RB", "LM", "LCM", "RCM", "RM", "LCS", "RCS"],
         "goals_size_scale": 1.0,
         "enemy_stamina_scale": 1.0,
-        "enemy_shot_error_choices": [-10, 0, 10],
+        "enemy_shot_error_choices": [-15, 0, 15],
         "entropy_coef": 0.005,
     },
 }

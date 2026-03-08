@@ -79,6 +79,16 @@ class ThreeLevelCurriculum:
     def get_level(self) -> int:
         return int(self._level)
 
+    def set_level(self, level: int, *, reset_progress: bool = True) -> int:
+        clamped_level = max(int(self.config.min_level), min(int(level), int(self.config.max_level)))
+        if bool(reset_progress):
+            for level_key in self._episodes_per_level:
+                self._episodes_per_level[level_key] = 0
+                self._success_buffers[level_key].clear()
+        self._level = int(clamped_level)
+        self._consecutive_passes = 0
+        return int(self._level)
+
     def level_settings_for(self, level: int | None = None) -> dict[str, object]:
         target_level = int(self._level if level is None else level)
         return dict(self._level_settings.get(target_level, {}))

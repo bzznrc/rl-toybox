@@ -70,6 +70,7 @@ from games.kick.config import (
     PENALTY_ZONE,
     PLAYER_A_MAX_PX_PER_SEC2,
     PLAYER_V_MAX_PX_PER_SEC,
+    PPO_METRICS_LOG_ENABLED,
     PITCH_LINE_WIDTH,
     REWARD_PROGRESS,
     REWARD_PASS,
@@ -218,6 +219,7 @@ class KickEnv(Env):
     def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
         self.mode = str(mode)
         self.show_game = bool(render)
+        self.log_ppo_metrics_line = bool(PPO_METRICS_LOG_ENABLED)
         curriculum_config = build_curriculum_config(
             min_level=int(MIN_LEVEL),
             max_level=int(MAX_LEVEL),

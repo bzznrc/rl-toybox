@@ -73,6 +73,13 @@ def _apply_level_entropy_coef(algorithm: Algorithm, env: Env, level: int) -> flo
     return entropy_value
 
 
+def _should_log_ppo_metrics_line(env: Env) -> bool:
+    flag = getattr(env, "log_ppo_metrics_line", None)
+    if flag is None:
+        return True
+    return bool(flag)
+
+
 def _broadcast_team_signal(obs: object, value: float | bool, *, dtype: np.dtype):
     obs_array = np.asarray(obs)
     if obs_array.ndim == 2:
@@ -300,33 +307,34 @@ def run_on_policy_training(
                         reward_components=components_text,
                     )
                     cached_metrics = last_ppo_update_metrics or {}
-                    log_ppo_metrics_line(
-                        policy_loss=(
-                            float(cached_metrics["policy_loss"])
-                            if "policy_loss" in cached_metrics
-                            else None
-                        ),
-                        value_loss=(
-                            float(cached_metrics["value_loss"])
-                            if "value_loss" in cached_metrics
-                            else None
-                        ),
-                        entropy=(
-                            float(cached_metrics["entropy"])
-                            if "entropy" in cached_metrics
-                            else None
-                        ),
-                        approx_kl=(
-                            float(cached_metrics["approx_kl"])
-                            if "approx_kl" in cached_metrics
-                            else None
-                        ),
-                        clip_frac=(
-                            float(cached_metrics["clip_frac"])
-                            if "clip_frac" in cached_metrics
-                            else None
-                        ),
-                    )
+                    if _should_log_ppo_metrics_line(env):
+                        log_ppo_metrics_line(
+                            policy_loss=(
+                                float(cached_metrics["policy_loss"])
+                                if "policy_loss" in cached_metrics
+                                else None
+                            ),
+                            value_loss=(
+                                float(cached_metrics["value_loss"])
+                                if "value_loss" in cached_metrics
+                                else None
+                            ),
+                            entropy=(
+                                float(cached_metrics["entropy"])
+                                if "entropy" in cached_metrics
+                                else None
+                            ),
+                            approx_kl=(
+                                float(cached_metrics["approx_kl"])
+                                if "approx_kl" in cached_metrics
+                                else None
+                            ),
+                            clip_frac=(
+                                float(cached_metrics["clip_frac"])
+                                if "clip_frac" in cached_metrics
+                                else None
+                            ),
+                        )
                 obs = env.reset()
                 episode_reward = 0.0
                 episode_steps = 0

@@ -8,6 +8,12 @@ A small RL playground with shared infrastructure and arcade-style environments.
 - Game implementations live in `games/<name>/`.
 - CLI entry points in `scripts/` cover training, AI play, and human play.
 
+## Framework Docs
+
+- Repo/codebase architecture: [docs/repo-architecture.md](docs/repo-architecture.md)
+- Cross-game RL/environment design guide: [docs/rl-design-guide.md](docs/rl-design-guide.md)
+- Docs index: [docs/README.md](docs/README.md)
+
 ## Clips
 
 <p>

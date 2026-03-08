@@ -4,4 +4,4 @@ This file has been replaced by:
 - [repo-architecture.md](./repo-architecture.md)
 - [rl-design-guide.md](./rl-design-guide.md)
 
-Use those files as the current source of truth.
+Current per-game snapshots live only in `games/<game>/README.md`.

@@ -71,6 +71,7 @@ class WalkEnv(Env):
     def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
         self.mode = str(mode)
         self.show_game = bool(render)
+        self.log_ppo_metrics_line = bool(getattr(config, "PPO_METRICS_LOG_ENABLED", True))
 
         curriculum_config = build_curriculum_config(
             min_level=int(config.MIN_LEVEL),
@@ -104,20 +105,30 @@ class WalkEnv(Env):
             queue_input_events=False,
             vsync=False,
         )
+        self._hud_text = arcade.Text(
+            text="",
+            x=8,
+            y=max(2.0, float(config.BB_HEIGHT) * 0.5 - 6.0),
+            color=COLOR_LIGHT_NEUTRAL,
+            font_size=int(max(10.0, float(config.BB_HEIGHT) * 0.42)),
+            font_name=("Roboto", "Arial", "sans-serif"),
+            anchor_x="left",
+            anchor_y="center",
+        )
 
         self._terrain_x = np.zeros((0,), dtype=np.float32)
         self._terrain_h = np.zeros((0,), dtype=np.float32)
+        self._terrain_stair_mask = np.zeros((0,), dtype=np.bool_)
         self._terrain_length = 0.0
-        self._terrain_bump_amp_primary = 0.0
-        self._terrain_bump_amp_secondary = 0.0
-        self._terrain_freq_primary = 0.0
-        self._terrain_freq_secondary = 0.0
-        self._terrain_step_every = 24
-        self._terrain_step_chance = 0.0
-        self._terrain_step_height = 0.0
-        self._terrain_step_clip = 0.0
-        self._terrain_noise_scale = 0.0
         self._terrain_goal_distance = 0.0
+        self._terrain_variant_choices: tuple[str, ...] = (str(config.TERRAIN_VARIANT_FLAT),)
+        self._terrain_feature_start = float(config.START_X + float(config.TERRAIN_FEATURE_START_OFFSET))
+        self._terrain_feature_spacing = float(config.TERRAIN_FEATURE_SPACING)
+        self._terrain_scale = 0.0
+        self._terrain_stair_step_height = 0.0
+        self._terrain_stairs_cutoff = False
+        self._terrain_roller_amplitude = 0.0
+        self._terrain_roller_half_width = 0.0
         self.max_steps = 1
         self._level_entropy_coef = 0.0
 
@@ -150,6 +161,15 @@ class WalkEnv(Env):
         self._last_ray_dirs = [(0.0, -1.0)] * 4
         self._last_x_distance = 0.0
         self._best_x = float(config.START_X)
+        self._distance_lock_active = False
+        self._distance_lock_x = float(config.START_X)
+        self._distance_lock_value = 0.0
+        self._fall_fail_pending = False
+        self._fall_fail_frames_left = 0
+        self._fall_fail_hold_frames = max(
+            0,
+            int(round(float(config.FALL_FAIL_ANIMATION_SECONDS) * float(config.FPS))),
+        )
 
         self._episode_reward_components = RewardBreakdown()
 
@@ -175,7 +195,6 @@ class WalkEnv(Env):
         if settings is None:
             raise ValueError(f"Unsupported level '{level}' for Walk.")
 
-        difficulty = float(np.clip(float(settings["terrain_difficulty"]), 0.0, 1.0))
         goal_distance = max(0.0, float(settings["goal_distance"]))
         view_world_width = float(config.SCREEN_WIDTH) / max(1e-6, float(config.WORLD_PIXELS_PER_METER))
         terrain_buffer = (
@@ -187,57 +206,31 @@ class WalkEnv(Env):
         )
         self._current_level = int(level)
         self._terrain_length = max(16.0, float(goal_distance + terrain_buffer))
-        self._terrain_bump_amp_primary = self._lerp(
-            config.TERRAIN_BUMP_AMP_PRIMARY_FLAT,
-            config.TERRAIN_BUMP_AMP_PRIMARY_RUGGED,
-            difficulty,
-        )
-        self._terrain_bump_amp_secondary = self._lerp(
-            config.TERRAIN_BUMP_AMP_SECONDARY_FLAT,
-            config.TERRAIN_BUMP_AMP_SECONDARY_RUGGED,
-            difficulty,
-        )
-        self._terrain_freq_primary = self._lerp(
-            config.TERRAIN_FREQ_PRIMARY_FLAT,
-            config.TERRAIN_FREQ_PRIMARY_RUGGED,
-            difficulty,
-        )
-        self._terrain_freq_secondary = self._lerp(
-            config.TERRAIN_FREQ_SECONDARY_FLAT,
-            config.TERRAIN_FREQ_SECONDARY_RUGGED,
-            difficulty,
-        )
-        self._terrain_step_every = max(
-            1,
-            int(
-                round(
-                    self._lerp(
-                        float(config.TERRAIN_STEP_EVERY_FLAT),
-                        float(config.TERRAIN_STEP_EVERY_RUGGED),
-                        difficulty,
-                    )
-                )
-            ),
-        )
-        self._terrain_step_chance = float(
-            np.clip(
-                self._lerp(config.TERRAIN_STEP_CHANCE_FLAT, config.TERRAIN_STEP_CHANCE_RUGGED, difficulty),
-                0.0,
-                1.0,
+        variants_raw = settings.get("terrain_variants", (str(config.TERRAIN_VARIANT_FLAT),))
+        if isinstance(variants_raw, str):
+            variants = (str(variants_raw).strip().lower(),)
+        else:
+            variants = tuple(str(item).strip().lower() for item in variants_raw)
+        valid_variants = {
+            str(config.TERRAIN_VARIANT_FLAT),
+            str(config.TERRAIN_VARIANT_STAIRS),
+            str(config.TERRAIN_VARIANT_ROLLERS),
+        }
+        if len(variants) <= 0 or any(item not in valid_variants for item in variants):
+            raise ValueError(
+                f"Walk level {level} terrain_variants must be non-empty and chosen from {sorted(valid_variants)}."
             )
+        self._terrain_variant_choices = tuple(variants)
+        self._terrain_feature_start = float(config.START_X + float(config.TERRAIN_FEATURE_START_OFFSET))
+        self._terrain_feature_spacing = max(
+            float(config.TERRAIN_SAMPLE_DX) * 2.0,
+            float(config.TERRAIN_FEATURE_SPACING),
         )
-        self._terrain_step_height = max(
-            0.0,
-            self._lerp(config.TERRAIN_STEP_HEIGHT_FLAT, config.TERRAIN_STEP_HEIGHT_RUGGED, difficulty),
-        )
-        self._terrain_step_clip = max(
-            0.0,
-            self._lerp(config.TERRAIN_STEP_CLIP_FLAT, config.TERRAIN_STEP_CLIP_RUGGED, difficulty),
-        )
-        self._terrain_noise_scale = max(
-            0.0,
-            self._lerp(config.TERRAIN_NOISE_FLAT, config.TERRAIN_NOISE_RUGGED, difficulty),
-        )
+        self._terrain_scale = max(0.0, float(settings.get("terrain_scale", 0.0)))
+        self._terrain_stair_step_height = float(config.TERRAIN_STAIR_STEP_HEIGHT_BASE) * float(self._terrain_scale)
+        self._terrain_stairs_cutoff = bool(settings.get("stairs_cutoff", False))
+        self._terrain_roller_amplitude = float(config.TERRAIN_ROLLER_AMPLITUDE_BASE) * float(self._terrain_scale)
+        self._terrain_roller_half_width = float(config.TERRAIN_ROLLER_HALF_WIDTH_BASE) * float(self._terrain_scale)
         self._terrain_goal_distance = float(goal_distance)
         self.max_steps = max(
             1,
@@ -253,38 +246,138 @@ class WalkEnv(Env):
     def _episode_seed(self) -> int:
         return int(config.BASE_SEED + self._episode_counter * 9_973 + self._current_level * 131)
 
+    def _sample_terrain_variant(self, rng: np.random.Generator) -> str:
+        variants = self._terrain_variant_choices
+        if len(variants) <= 1:
+            return str(variants[0]) if len(variants) == 1 else str(config.TERRAIN_VARIANT_FLAT)
+        idx = int(rng.integers(0, len(variants)))
+        return str(variants[idx])
+
+    def _terrain_feature_span(self) -> tuple[float, float]:
+        start = float(np.clip(float(self._terrain_feature_start), 0.0, float(self._terrain_length)))
+        end = float(max(start, float(self._terrain_length) - 1.0))
+        return float(start), float(end)
+
+    @staticmethod
+    def _write_terrain_segment(
+        xs: np.ndarray,
+        heights: np.ndarray,
+        *,
+        x_start: float,
+        x_end: float,
+        height_value: float,
+    ) -> None:
+        if float(x_end) <= float(x_start):
+            return
+        mask = (xs >= float(x_start)) & (xs < float(x_end))
+        heights[mask] = float(height_value)
+
+    def _apply_stair_terrain(
+        self,
+        xs: np.ndarray,
+        heights: np.ndarray,
+        stair_mask: np.ndarray,
+        *,
+        x_start: float,
+        x_end: float,
+        rng: np.random.Generator,
+    ) -> float:
+        if self._terrain_stair_step_height <= 0.0:
+            return float(min(float(x_end), float(x_start)))
+        stair_patterns = (
+            tuple(config.TERRAIN_STAIR_PATTERNS_CUTOFF)
+            if self._terrain_stairs_cutoff
+            else tuple(config.TERRAIN_STAIR_PATTERNS_SYMMETRIC)
+        )
+        if len(stair_patterns) <= 0:
+            return float(min(float(x_end), float(x_start)))
+        tread_length = max(float(config.TERRAIN_SAMPLE_DX) * 2.0, float(config.TERRAIN_STAIR_TREAD_LENGTH))
+
+        x_cursor = float(x_start)
+        pattern = stair_patterns[int(rng.integers(0, len(stair_patterns)))]
+        for step_units in pattern:
+            height_units = max(0, int(step_units))
+            x_next = float(x_cursor + tread_length)
+            self._write_terrain_segment(
+                xs,
+                heights,
+                x_start=float(x_cursor),
+                x_end=float(x_next),
+                height_value=float(height_units) * float(self._terrain_stair_step_height),
+            )
+            mask = (xs >= float(x_cursor)) & (xs < float(x_next))
+            stair_mask[mask] = True
+            x_cursor = float(x_next)
+            if x_cursor >= float(x_end):
+                break
+        return float(min(float(x_cursor), float(x_end)))
+
+    def _apply_roller_terrain(
+        self,
+        xs: np.ndarray,
+        heights: np.ndarray,
+        stair_mask: np.ndarray,
+        *,
+        x_start: float,
+        x_end: float,
+        rng: np.random.Generator,
+    ) -> float:
+        if self._terrain_roller_amplitude <= 0.0:
+            return float(min(float(x_end), float(x_start)))
+
+        half_width = max(float(config.TERRAIN_SAMPLE_DX) * 2.0, float(self._terrain_roller_half_width))
+        center_x = float(x_start + half_width)
+        left = float(center_x - half_width)
+        right = float(center_x + half_width)
+        left = float(max(float(x_start), left))
+        right = float(min(float(x_end), right))
+        if right <= left:
+            return float(min(float(x_end), float(x_start)))
+        sign = 1.0 if float(rng.random()) < 0.5 else -1.0
+        mask = (xs >= left) & (xs <= right)
+        if np.any(mask):
+            normalized = (xs[mask] - float(center_x)) / max(1e-6, half_width)
+            profile = np.cos(0.5 * math.pi * np.clip(normalized, -1.0, 1.0))
+            heights[mask] = float(sign * float(self._terrain_roller_amplitude)) * profile.astype(np.float32)
+            stair_mask[mask] = False
+        return float(min(float(right), float(x_end)))
+
     def _generate_terrain(self, seed: int) -> None:
         rng = np.random.default_rng(int(seed))
         dx = float(config.TERRAIN_SAMPLE_DX)
         point_count = max(16, int(self._terrain_length / dx) + 3)
         xs = (np.arange(point_count, dtype=np.float32) * dx).astype(np.float32)
-
-        phase_primary = float(rng.uniform(0.0, 2.0 * math.pi))
-        phase_secondary = float(rng.uniform(0.0, 2.0 * math.pi))
-        step_offset = 0.0
         heights = np.zeros((point_count,), dtype=np.float32)
-
-        for idx, x in enumerate(xs):
-            if idx > 0 and (idx % int(self._terrain_step_every) == 0):
-                if float(rng.random()) < float(self._terrain_step_chance):
-                    step_offset += float(rng.uniform(-self._terrain_step_height, self._terrain_step_height))
-                    step_offset = float(np.clip(step_offset, -self._terrain_step_clip, self._terrain_step_clip))
-
-            bump_primary = self._terrain_bump_amp_primary * math.sin(self._terrain_freq_primary * float(x) + phase_primary)
-            bump_secondary = self._terrain_bump_amp_secondary * math.sin(
-                self._terrain_freq_secondary * float(x) + phase_secondary
-            )
-            noise = float(rng.normal(loc=0.0, scale=self._terrain_noise_scale))
-            heights[idx] = float(step_offset + bump_primary + bump_secondary + noise)
-
-        kernel = np.asarray([1.0, 2.0, 3.0, 2.0, 1.0], dtype=np.float32)
-        kernel /= float(kernel.sum())
-        heights = np.convolve(heights, kernel, mode="same").astype(np.float32)
+        stair_mask = np.zeros((point_count,), dtype=np.bool_)
+        start_x, end_x = self._terrain_feature_span()
+        x_cursor = float(start_x)
+        while x_cursor < float(end_x):
+            variant = self._sample_terrain_variant(rng)
+            if variant == str(config.TERRAIN_VARIANT_STAIRS):
+                x_cursor = self._apply_stair_terrain(
+                    xs,
+                    heights,
+                    stair_mask,
+                    x_start=float(x_cursor),
+                    x_end=float(end_x),
+                    rng=rng,
+                )
+            elif variant == str(config.TERRAIN_VARIANT_ROLLERS):
+                x_cursor = self._apply_roller_terrain(
+                    xs,
+                    heights,
+                    stair_mask,
+                    x_start=float(x_cursor),
+                    x_end=float(end_x),
+                    rng=rng,
+                )
+            x_cursor = float(x_cursor + float(self._terrain_feature_spacing))
         if heights.size > 0:
             heights -= float(heights[0])
 
         self._terrain_x = xs
         self._terrain_h = heights
+        self._terrain_stair_mask = stair_mask
 
     def _terrain_height(self, x_world: float) -> float:
         if self._terrain_x.size <= 0:
@@ -305,6 +398,10 @@ class WalkEnv(Env):
         x1 = float(xs[idx + 1])
         h0 = float(hs[idx])
         h1 = float(hs[idx + 1])
+        stair_mask = self._terrain_stair_mask
+        has_stair_mask = int(stair_mask.size) == int(hs.size)
+        if has_stair_mask and bool(stair_mask[idx]):
+            return float(h0)
         t = (x_value - x0) / max(1e-6, x1 - x0)
         return float(h0 + (h1 - h0) * t)
 
@@ -312,7 +409,28 @@ class WalkEnv(Env):
         # Terrain surface line is the physical contact surface.
         return float(self._terrain_height(float(x_world)))
 
+    def _is_stair_surface_at(self, x_world: float) -> bool:
+        if self._terrain_x.size <= 1:
+            return False
+        xs = self._terrain_x
+        stair_mask = self._terrain_stair_mask
+        if int(stair_mask.size) != int(xs.size):
+            return False
+        x_value = float(x_world)
+        dx = max(1e-6, float(config.TERRAIN_SAMPLE_DX))
+        if x_value <= float(xs[0]):
+            idx = 0
+        elif x_value >= float(xs[-1]):
+            idx = int(xs.size) - 1
+        else:
+            idx = int((x_value - float(xs[0])) / dx)
+            idx = max(0, min(idx, int(xs.size) - 2))
+        idx_next = min(int(xs.size) - 1, int(idx) + 1)
+        return bool(stair_mask[idx] or stair_mask[idx_next])
+
     def _terrain_surface_slope(self, x_world: float) -> float:
+        if self._is_stair_surface_at(float(x_world)):
+            return 0.0
         dx = max(1e-4, float(config.TERRAIN_SAMPLE_DX))
         h_left = self._terrain_surface_height(float(x_world) - dx)
         h_right = self._terrain_surface_height(float(x_world) + dx)
@@ -344,6 +462,27 @@ class WalkEnv(Env):
                 if penetration > max_penetration:
                     max_penetration = float(penetration)
         return float(max_penetration)
+
+    def _torso_surface_clearance(
+        self,
+        *,
+        torso_x: float,
+        torso_y: float,
+        torso_tilt: float,
+    ) -> float:
+        half_side = float(self._torso_render_half_side_world())
+        min_clearance = float("inf")
+        for local_x in (-half_side, half_side):
+            for local_y in (-half_side, half_side):
+                off_x, off_y = self._rotate_local(local_x, local_y, torso_tilt)
+                px = float(torso_x) + float(off_x)
+                py = float(torso_y) + float(off_y)
+                clearance = float(py - self._terrain_surface_height(px))
+                if clearance < min_clearance:
+                    min_clearance = float(clearance)
+        if not math.isfinite(min_clearance):
+            return 0.0
+        return float(min_clearance)
 
     def _clamp_world_point_above_surface(
         self,
@@ -466,10 +605,6 @@ class WalkEnv(Env):
         return float(max(float(low), min(float(high), float(value))))
 
     @staticmethod
-    def _lerp(low: float, high: float, t: float) -> float:
-        return float(float(low) + (float(high) - float(low)) * float(t))
-
-    @staticmethod
     def _normalize_interval(value: float, low: float, high: float) -> float:
         mid = 0.5 * (float(low) + float(high))
         half = max(1e-6, 0.5 * (float(high) - float(low)))
@@ -556,7 +691,7 @@ class WalkEnv(Env):
 
         return bool(in_contact), float(normal_force), float(friction_force), float(penetration)
 
-    def _simulate_step(self, action_vec: np.ndarray) -> None:
+    def _simulate_step(self, action_vec: np.ndarray) -> bool:
         self._apply_joint_dynamics(action_vec)
 
         left_pose = self._leg_kinematics("left")
@@ -650,10 +785,28 @@ class WalkEnv(Env):
                 torso_tilt=float(self.torso_tilt),
             )
         )
-        if body_penetration > 0.0:
+        body_touched_surface = bool(body_penetration > 0.0)
+        if body_touched_surface:
             self.torso_y += float(body_penetration)
             if self.torso_vy < 0.0:
                 self.torso_vy = 0.0
+
+        torso_clearance = float(
+            self._torso_surface_clearance(
+                torso_x=float(self.torso_x),
+                torso_y=float(self.torso_y),
+                torso_tilt=float(self.torso_tilt),
+            )
+        )
+        high_tilt_near_ground = bool(
+            abs(float(self.torso_tilt)) >= float(config.TERMINAL_TILT_RAD)
+            and torso_clearance <= float(config.FALL_TILT_GROUND_CLEARANCE)
+        )
+        if high_tilt_near_ground:
+            self.torso_vx *= 0.9
+            if self.torso_vy > 0.0:
+                self.torso_vy = 0.0
+        return bool(body_touched_surface or high_tilt_near_ground)
 
     def _ray_origin_world(self) -> tuple[float, float]:
         off_x, off_y = self._rotate_local(
@@ -806,6 +959,11 @@ class WalkEnv(Env):
 
         self.steps = 0
         self.done = False
+        self._distance_lock_active = False
+        self._distance_lock_x = float(config.START_X)
+        self._distance_lock_value = 0.0
+        self._fall_fail_pending = False
+        self._fall_fail_frames_left = 0
         self._episode_reward_components.reset()
         self._reset_robot_state()
         self._best_x = float(self.torso_x)
@@ -813,12 +971,6 @@ class WalkEnv(Env):
         self._last_obs = self._obs()
         self._last_x_distance = float(self.torso_x - float(config.START_X))
         return np.asarray(self._last_obs, dtype=np.float32)
-
-    def _is_fallen(self) -> bool:
-        if abs(float(self.torso_tilt)) > float(config.TERMINAL_TILT_RAD):
-            return True
-        ground_here = self._terrain_surface_height(float(self.torso_x))
-        return bool(float(self.torso_y) <= float(ground_here + float(config.TERMINAL_TORSO_CLEARANCE)))
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         if self.done:
@@ -841,18 +993,50 @@ class WalkEnv(Env):
         action_vec = self._parse_action(action)
         best_x_prev = float(self._best_x)
 
-        self._simulate_step(action_vec)
+        body_touched_ground = bool(self._simulate_step(action_vec))
         self.steps += 1
+
+        if body_touched_ground and (not self._distance_lock_active):
+            self._distance_lock_active = True
+            self._distance_lock_x = float(self.torso_x)
+            self._distance_lock_value = float(self._distance_lock_x - float(config.START_X))
+
+        if self._distance_lock_active:
+            self.torso_x = float(self._distance_lock_x)
+            self.torso_vx = 0.0
 
         best_x_now = max(float(self._best_x), float(self.torso_x))
         progress_reward = max(0.0, float(best_x_now - best_x_prev))
         self._best_x = float(best_x_now)
-        x_distance = float(self.torso_x - float(config.START_X))
-        fell = bool(self._is_fallen())
+        x_distance = (
+            float(self._distance_lock_value)
+            if self._distance_lock_active
+            else float(self.torso_x - float(config.START_X))
+        )
+        fell = bool(self._distance_lock_active)
         reached_goal = bool(x_distance >= float(self._terrain_goal_distance))
         timed_out = bool(self.steps >= int(self.max_steps))
-        done = bool(fell or reached_goal or timed_out)
-        success = int(done and (not fell) and reached_goal)
+        done = False
+        success = 0
+
+        if self._fall_fail_pending:
+            if self._fall_fail_frames_left > 0:
+                self._fall_fail_frames_left -= 1
+            done = bool(self._fall_fail_frames_left <= 0)
+        elif reached_goal:
+            done = True
+            success = 1
+        elif timed_out:
+            done = True
+        elif fell:
+            if self.show_game and self._fall_fail_hold_frames > 0:
+                self._fall_fail_pending = True
+                self._fall_fail_frames_left = int(self._fall_fail_hold_frames)
+                if self._fall_fail_frames_left > 0:
+                    self._fall_fail_frames_left -= 1
+                done = bool(self._fall_fail_frames_left <= 0)
+            else:
+                done = True
 
         reward = 0.0
         reward_breakdown: dict[str, float] = {}
@@ -874,6 +1058,8 @@ class WalkEnv(Env):
 
         level_changed = False
         if self.done:
+            self._fall_fail_pending = False
+            self._fall_fail_frames_left = 0
             self._last_episode_level = int(episode_level)
             self._last_episode_success = int(success)
             self._current_level, level_changed = advance_curriculum(
@@ -892,7 +1078,7 @@ class WalkEnv(Env):
             "level": int(episode_level),
             "level_changed": bool(level_changed),
             "x_distance": float(x_distance),
-            "fell": bool(fell),
+            "fell": bool(fell or self._fall_fail_pending),
             "reward_breakdown": reward_breakdown if self.mode != "human" else {},
         }
         if self.done:
@@ -935,26 +1121,59 @@ class WalkEnv(Env):
         arcade.draw_polygon_filled(points, color)
 
     def _draw_terrain(self) -> None:
-        camera_left = self._camera_left_world() - float(config.TERRAIN_RENDER_MARGIN_METERS)
+        camera_left = self._camera_left_world()
         world_width = float(config.SCREEN_WIDTH) / float(config.WORLD_PIXELS_PER_METER)
-        camera_right = camera_left + world_width + (2.0 * float(config.TERRAIN_RENDER_MARGIN_METERS))
-        x_cursor = camera_left
-        points: list[tuple[float, float]] = []
-        while x_cursor <= camera_right:
-            sx = self._world_to_screen_x(x_cursor)
-            sy = self._world_to_screen_y(self._terrain_surface_height(x_cursor))
-            points.append((sx, sy))
-            x_cursor += float(config.TERRAIN_SAMPLE_DX)
-        if not points:
+        camera_right = camera_left + world_width
+        line_points: list[tuple[float, float]] = []
+        line_points.append(
+            (
+                self._world_to_screen_x(float(camera_left)),
+                self._world_to_screen_y(self._terrain_surface_height(float(camera_left))),
+            )
+        )
+        xs = self._terrain_x
+        hs = self._terrain_h
+        stair_mask = self._terrain_stair_mask
+        if xs.size > 1:
+            dx = max(1e-6, float(config.TERRAIN_SAMPLE_DX))
+            idx_start = int(math.floor((float(camera_left) - float(xs[0])) / dx))
+            idx_end = int(math.ceil((float(camera_right) - float(xs[0])) / dx))
+            idx_start = max(0, min(idx_start, int(xs.size) - 2))
+            idx_end = max(idx_start, min(idx_end, int(xs.size) - 2))
+            has_stair_mask = int(stair_mask.size) == int(xs.size)
+            for idx in range(idx_start, idx_end + 1):
+                x_edge = float(xs[idx + 1])
+                if x_edge <= float(camera_left) or x_edge >= float(camera_right):
+                    continue
+                h_before = float(hs[idx])
+                h_after = float(hs[idx + 1])
+                is_stair_edge = bool(has_stair_mask and (stair_mask[idx] or (abs(h_after - h_before) > 1e-6 and stair_mask[idx + 1])))
+                if is_stair_edge:
+                    line_points.append((self._world_to_screen_x(x_edge), self._world_to_screen_y(h_before)))
+                    if abs(h_after - h_before) > 1e-6:
+                        line_points.append((self._world_to_screen_x(x_edge), self._world_to_screen_y(h_after)))
+                else:
+                    line_points.append((self._world_to_screen_x(x_edge), self._world_to_screen_y(h_after)))
+        line_points.append(
+            (
+                self._world_to_screen_x(float(camera_right)),
+                self._world_to_screen_y(self._terrain_surface_height(float(camera_right))),
+            )
+        )
+
+        fill_points = line_points
+        if fill_points:
+            terrain_poly = [
+                (0.0, float(config.BB_HEIGHT)),
+                *fill_points,
+                (float(config.SCREEN_WIDTH), float(config.BB_HEIGHT)),
+            ]
+            arcade.draw_polygon_filled(terrain_poly, COLOR_DARK_NEUTRAL)
+
+        if len(line_points) < 2:
             return
 
-        terrain_poly = [(0.0, float(config.BB_HEIGHT)), *points, (float(config.SCREEN_WIDTH), float(config.BB_HEIGHT))]
-        arcade.draw_polygon_filled(terrain_poly, COLOR_DARK_NEUTRAL)
-
-        for idx in range(len(points) - 1):
-            x1, y1 = points[idx]
-            x2, y2 = points[idx + 1]
-            arcade.draw_line(x1, y1, x2, y2, COLOR_LIGHT_NEUTRAL, 3.0)
+        arcade.draw_line_strip(line_points, COLOR_LIGHT_NEUTRAL, 3.0)
 
     def _draw_distance_markers(self) -> None:
         spacing = max(1e-6, float(config.DISTANCE_MARKER_SPACING_METERS))
@@ -963,6 +1182,9 @@ class WalkEnv(Env):
         inner_size = float(config.DISTANCE_MARKER_INNER_SIZE_PX)
         inset = max(0.0, float(config.DISTANCE_MARKER_OUTLINE_INSET_PX))
         outer_size = float(inner_size + 2.0 * inset)
+        marker_band_fraction = float(np.clip(float(config.DISTANCE_MARKER_HEIGHT_FRACTION), 0.0, 1.0))
+        marker_ground_height = max(1.0, float(config.GROUND_BASE_Y_PX) - float(config.BB_HEIGHT))
+        marker_center_y = float(config.BB_HEIGHT) + (marker_ground_height * marker_band_fraction)
 
         visible_left = self._camera_left_world()
         visible_right = visible_left + (float(config.SCREEN_WIDTH) / max(1e-6, float(config.WORLD_PIXELS_PER_METER)))
@@ -973,9 +1195,8 @@ class WalkEnv(Env):
 
         for marker_index in range(marker_index_start, marker_index_end + 1):
             marker_x = float(start_x + marker_index * spacing)
-            surface_sy = self._world_to_screen_y(self._terrain_surface_height(marker_x))
-            center_y = 0.5 * (float(config.BB_HEIGHT) + float(surface_sy))
             center_x = self._world_to_screen_x(marker_x)
+            center_y = float(marker_center_y)
 
             if marker_index % major_every == 0:
                 arcade.draw_lbwh_rectangle_filled(
@@ -1139,15 +1360,8 @@ class WalkEnv(Env):
             f"Contact:{int(self.left_foot_contact)}|{int(self.right_foot_contact)}  "
             f"{status}"
         )
-        arcade.draw_text(
-            text_main,
-            8,
-            max(2.0, float(config.BB_HEIGHT) * 0.5 - 6.0),
-            COLOR_LIGHT_NEUTRAL,
-            font_size=max(10.0, float(config.BB_HEIGHT) * 0.42),
-            anchor_x="left",
-            anchor_y="center",
-        )
+        self._hud_text.text = text_main
+        self._hud_text.draw()
 
     def render(self) -> None:
         if self.window_controller.window is None:

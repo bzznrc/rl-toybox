@@ -66,18 +66,18 @@ Ray notes:
 
 - Outcome `REWARD_WIN`: `+10` when the player wins.
 - Outcome `PENALTY_LOSE`: `-5` when another car wins or timeout resolves against player.
-- Progress shaping: `r_progress = clip(1.0 * (Phi_next - Phi_prev), -0.2, +0.2)` with `Phi = track_progress_norm`.
-- Event `PENALTY_COLLISION`: `-1.0` on collision-start events.
-- Step `PENALTY_STEP`: `-0.01` every training step.
+- Progress shaping: `r_progress = clip(5.0 * (Phi_next - Phi_prev), -0.25, +0.25)` with `Phi = track_progress_norm`.
+- Event `PENALTY_COLLISION`: `-0.5` on collision-start events.
+- Step `PENALTY_STEP`: `-0.005` every training step.
 
 ## Curriculum (Train)
 
 - Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
 - Promotion settings live in `games/vroom/config.py` under `CURRICULUM_PROMOTION`.
 - Levels:
-  - Level 1: `1` car (player only), no obstacles
-  - Level 2: `2` cars, opponent speed cap `0.75x`, no obstacles
-  - Level 3: `4` cars, full opponent speed, obstacle clusters enabled
+  - Level 1: `1` car, opponent speed cap `0.0`, `2` obstacle clusters, opponent obstacle avoid chance `0.00`
+  - Level 2: `2` cars, opponent speed cap `0.75`, `4` obstacle clusters, opponent obstacle avoid chance `0.70`
+  - Level 3: `4` cars, opponent speed cap `1.0`, `4` obstacle clusters, opponent obstacle avoid chance `0.90`
 
 Success per episode is `1` if player wins, else `0`.
 

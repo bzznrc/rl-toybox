@@ -7,7 +7,7 @@ Arcade-style side-view continuous-control biped walker demo for PPO.
 ## Algorithm / Network
 
 - Algo: PPO (shared on-policy runner)
-- Actor/Critic MLP: `[64, 64]`
+- Actor/Critic MLP: `[32, 32]`
 - Action space: `Box(shape=(4,), low=-1.0, high=1.0)`
 - Continuous policy: diagonal Gaussian (`mean + learned log_std`)
 
@@ -61,6 +61,8 @@ Important walk-specific exception:
 - State includes torso pose/velocity and per-joint angles/velocities.
 - Legs use forward kinematics (thigh + shin + rigid foot).
 - Foot-ground interaction uses simple spring-damper normal force + capped friction.
+- Torso-ground contact latches horizontal distance and locks torso `x` in place (no post-fall sliding).
+- Extreme torso tilt very near the ground is treated as a fall trigger to avoid unrealistic near-ground hovering.
 - Poor control falls; stable control can learn walk-like forward gait.
 
 ## Rewards
@@ -72,6 +74,7 @@ Realized reward components are logged as `P L`:
   - Per step: `progress_reward = max(0, best_x_now - best_x_prev)`.
   - This is unscaled meters walked (`1m = 1 reward`).
 - `L`: lose penalty (`-5`) when the episode ends without success.
+  - In rendered play, fall failures keep the scene alive briefly (~2s) before final terminal commit.
 
 No win bonus, no per-step penalty, and no signed-`dx`/velocity shaping are used.
 
@@ -80,14 +83,18 @@ No win bonus, no per-step penalty, and no signed-`dx`/velocity shaping are used.
 Three levels, success-based promotion:
 
 - Level 1: perfectly flat terrain.
-- Level 2: gentler but more varied bumps/steps.
-- Level 3: broader variation with more awkward transitions.
+- Level 2: obstacle-by-obstacle random mix of substantial right-angle stairs (`1-2-1`, `1-2-3-2-1`) and substantial rollers (bumps/depressions).
+- Level 3: same random mix, but larger/wider terrain features and cutoff stairs (`1-2` or `1-2-3` followed by a straight drop).
 
-`LEVEL_SETTINGS` stays intentionally compact (3 keys per level):
+`LEVEL_SETTINGS` keeps only a small set of per-level terrain controls:
 
-- `terrain_difficulty` (0..1, drives bumps/steps/noise from shared global ranges)
+- `terrain_variants` (flat / stairs / rollers)
+- `terrain_scale`
+- `stairs_cutoff`
 - `goal_distance` (single success/termination distance)
 - `entropy_coef`
+
+Terrain spacing and base geometry are fixed in shared constants (feature spacing/start offset, stair tread/patterns/base step height, roller base width/amplitude), keeping generation intentionally simple and consistent.
 
 Terrain length and episode step budget are derived globally from `goal_distance` and shared viewport/runtime constants.
 

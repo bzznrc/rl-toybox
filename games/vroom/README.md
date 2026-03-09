@@ -57,8 +57,8 @@ Opponent slot notes:
 - A new random smooth closed-loop track is created at every reset.
 - If any car completes a lap, the race ends.
 - Race count per episode:
-  - `train` / `eval`: `1` race
-  - `human` (`rl-toybox-play-user`): `10` races per set
+  - `train`: `1` race
+  - `eval` / `human`: `10` races per set
 
 ## Rewards (Training)
 

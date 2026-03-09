@@ -22,6 +22,7 @@ from core.arcade_style import (
     COLOR_LIGHT_NEUTRAL,
     COLOR_NAVY,
     COLOR_PURPLE,
+    COLOR_SLATE_GRAY,
 )
 from core.curriculum import (
     ThreeLevelCurriculum,
@@ -39,9 +40,11 @@ from core.io_schema import (
 from core.match_tracker import MatchTracker
 from core.primitives import (
     draw_facing_indicator,
+    draw_time_pie_indicator,
     draw_status_square_icon,
     draw_two_tone_tile,
     resolve_circle_collisions,
+    status_bar_layout,
     status_icon_size,
 )
 from core.ray_viz import draw_player_rays
@@ -60,6 +63,7 @@ from games.vroom.config import (
     LATERAL_DAMPING_OFF_TRACK,
     LATERAL_DAMPING_ON_TRACK,
     MAX_LEVEL,
+    MAX_EPISODE_STEPS,
     MIN_LEVEL,
     OBS_DIM as VROOM_OBS_DIM,
     OFF_TRACK_SURFACE_GRIP,
@@ -150,8 +154,7 @@ class VroomEnv(Env):
 
     NUM_CARS = 4
     TRAINING_TOTAL_RACES = 1
-    HUMAN_TOTAL_RACES = 10
-    WINNER_BAR_HISTORY_SIZE = 10
+    PLAY_TOTAL_RACES = 10
     REWARD_COMPONENT_ORDER = ("W", "L", "P", "C", "S")
     REWARD_COMPONENT_KEY_TO_CODE = {
         "outcome.reward_win": "W",
@@ -187,7 +190,7 @@ class VroomEnv(Env):
         self.brake_force = 0.23
         self.turn_rate = 4.1
         self.drag = 0.985
-        self.max_steps = 2_000
+        self.max_steps = int(MAX_EPISODE_STEPS)
         self.yaw_rate_norm = max(1e-6, self.turn_rate)
 
         self.car_contact_radius = self.car_radius
@@ -302,11 +305,12 @@ class VroomEnv(Env):
         self.winner_index: int | None = None
         self.last_race_winner: int | None = None
         self.total_races = int(self._resolve_total_races())
-        self.match_tracker = MatchTracker[int](match_limit=int(self.total_races))
-        self.winner_bar_tracker = MatchTracker[int](history_limit=int(self.WINNER_BAR_HISTORY_SIZE))
+        self.match_tracker = MatchTracker[int](
+            match_limit=int(self.total_races),
+            clock_duration_steps=(int(self.max_steps) if int(self.max_steps) > 0 else None),
+        )
         self.current_race = 1
         self.win_history: list[int | None] = self.match_tracker.history
-        self.winner_bar_history: list[int | None] = self.winner_bar_tracker.history
         self.num_cars = int(self.NUM_CARS)
         self.opponent_speed_cap = 1.0
         curriculum_config = build_curriculum_config(
@@ -342,9 +346,9 @@ class VroomEnv(Env):
         self.reset()
 
     def _resolve_total_races(self) -> int:
-        if self.mode == "human":
-            return int(self.HUMAN_TOTAL_RACES)
-        return int(self.TRAINING_TOTAL_RACES)
+        if self.mode == "train":
+            return int(self.TRAINING_TOTAL_RACES)
+        return int(self.PLAY_TOTAL_RACES)
 
     def _apply_level_settings(self, level: int) -> None:
         settings = LEVEL_SETTINGS.get(int(level), LEVEL_SETTINGS[int(MIN_LEVEL)])
@@ -404,7 +408,8 @@ class VroomEnv(Env):
             width=int(SCREEN_WIDTH),
             height=int(self.track_bottom),
             config=self.track_config,
-            build_texture=False,
+            build_texture=bool(self.show_game),
+            track_color=COLOR_SLATE_GRAY,
         )
         geometry = track.get("geometry")
         if not isinstance(geometry, TrackGeometry):
@@ -767,7 +772,6 @@ class VroomEnv(Env):
     def _finalize_race(self, winner_idx: int | None) -> None:
         self.last_race_winner = None if winner_idx is None else int(winner_idx)
         self.match_tracker.record_result(self.last_race_winner)
-        self.winner_bar_tracker.record_result(self.last_race_winner)
         if self.match_tracker.match_limit_reached():
             self.done = True
             self.winner_index = self.last_race_winner
@@ -999,6 +1003,7 @@ class VroomEnv(Env):
     def reset(self) -> np.ndarray:
         self._apply_level_settings(int(self._current_level))
         self.match_tracker.set_match_limit(int(self.total_races))
+        self.match_tracker.set_clock_duration(int(self.max_steps) if int(self.max_steps) > 0 else None)
         self.current_race = 1
         self.match_tracker.clear_history()
         self.last_race_winner = None
@@ -1111,17 +1116,19 @@ class VroomEnv(Env):
         return self._compute_obs(), float(reward), bool(self.done), info
 
     def _draw_track(self) -> None:
+        if self.track_texture is not None:
+            arcade.draw_texture_rect(self.track_texture, self.track_rect)
+
+        edge_color = COLOR_FOG_GRAY
+        edge_width = 3.0
         if len(self._track_left_outline_screen) > 2:
-            arcade.draw_line_strip(self._track_left_outline_screen, COLOR_DARK_NEUTRAL, 3.0)
-            arcade.draw_line_strip(self._track_left_outline_screen, COLOR_FOG_GRAY, 1.5)
+            arcade.draw_line_strip(self._track_left_outline_screen, edge_color, edge_width)
         if len(self._track_right_outline_screen) > 2:
-            arcade.draw_line_strip(self._track_right_outline_screen, COLOR_DARK_NEUTRAL, 3.0)
-            arcade.draw_line_strip(self._track_right_outline_screen, COLOR_FOG_GRAY, 1.5)
+            arcade.draw_line_strip(self._track_right_outline_screen, edge_color, edge_width)
         (x1, y1), (x2, y2) = self.start_line
         ay1 = self.window_controller.to_arcade_y(y1)
         ay2 = self.window_controller.to_arcade_y(y2)
-        arcade.draw_line(x1, ay1, x2, ay2, COLOR_DARK_NEUTRAL, 6.0)
-        arcade.draw_line(x1, ay1, x2, ay2, COLOR_LIGHT_NEUTRAL, 3.0)
+        arcade.draw_line(x1, ay1, x2, ay2, edge_color, edge_width)
 
     def _draw_rays(self) -> None:
         if not bool(DRAW_RAYS):
@@ -1189,8 +1196,7 @@ class VroomEnv(Env):
         if max_icons <= 0:
             return
 
-        max_display = min(max_icons, int(self.WINNER_BAR_HISTORY_SIZE))
-        winners = self.winner_bar_history[-max_display:]
+        winners = self.win_history[-max_icons:]
         if not winners:
             return
 
@@ -1202,6 +1208,45 @@ class VroomEnv(Env):
             center_x = start_x + icon_size / 2.0 + idx * (icon_size + icon_gap)
             self._draw_player_icon(int(winner), center_x, center_y, icon_size)
 
+    def _remaining_time_ratio(self) -> float:
+        return float(self.match_tracker.remaining_time_ratio(int(self.steps)))
+
+    def _draw_time_indicator(self, center_x: float, center_y: float, radius: float, border_width: float) -> None:
+        draw_time_pie_indicator(
+            center_x=float(center_x),
+            center_y=float(center_y),
+            radius=float(radius),
+            border_width=float(border_width),
+            remaining_ratio=float(self._remaining_time_ratio()),
+            base_color=COLOR_SLATE_GRAY,
+            fill_color=COLOR_FOG_GRAY,
+            outline_color=COLOR_FOG_GRAY,
+            num_segments=96,
+        )
+
+    def _draw_status_bar(self) -> None:
+        arcade.draw_lbwh_rectangle_filled(0, 0, float(SCREEN_WIDTH), float(BB_HEIGHT), COLOR_DARK_NEUTRAL)
+        include_clock = self.match_tracker.clock_duration_steps is not None
+        bar_layout = status_bar_layout(
+            width=float(SCREEN_WIDTH),
+            bottom_bar_height=float(BB_HEIGHT),
+            tile_size=float(TILE_SIZE),
+            cell_inset=4.0,
+            include_clock=bool(include_clock),
+        )
+        if include_clock and bar_layout.clock_center_x is not None:
+            self._draw_time_indicator(
+                center_x=float(bar_layout.clock_center_x),
+                center_y=float(bar_layout.center_y),
+                radius=float(bar_layout.clock_radius),
+                border_width=float(bar_layout.clock_border_width),
+            )
+        self._draw_winner_history(
+            float(bar_layout.score_left),
+            float(bar_layout.score_right),
+            float(bar_layout.center_y),
+        )
+
     def render(self) -> float:
         if self.window_controller.window is None:
             return 0.0
@@ -1211,6 +1256,7 @@ class VroomEnv(Env):
         self._draw_track()
         self._draw_cars()
         self._draw_rays()
+        self._draw_status_bar()
         self.window_controller.flip()
         return time.perf_counter() - draw_t0
 

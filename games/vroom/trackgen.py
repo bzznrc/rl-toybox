@@ -9,7 +9,12 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from core.arcade_style import COLOR_DARK_NEUTRAL
-from games.vroom.track_geometry import TrackGeometry, build_track_geometry
+from games.vroom.track_geometry import (
+    TrackGeometry,
+    build_boundary_loops,
+    build_track_geometry,
+    clean_polygon_vertices,
+)
 
 
 @dataclass(frozen=True)
@@ -31,10 +36,10 @@ class TrackGenConfig:
 
 
 def _road_polygon(track: TrackGeometry) -> list[tuple[float, float]]:
-    polygon = np.asarray(track.road_polygon, dtype=np.float64)
-    if polygon.shape[0] <= 2:
+    left_pts, right_pts = build_boundary_loops(track, seam_index=int(track.start_index))
+    if len(left_pts) <= 2 or len(right_pts) <= 2:
         return []
-    return [(float(row[0]), float(row[1])) for row in polygon]
+    return clean_polygon_vertices(left_pts + list(reversed(right_pts)), eps=1e-4)
 
 
 def build_track_mask(track: TrackGeometry, width: int, height: int) -> np.ndarray:
@@ -46,7 +51,7 @@ def build_track_mask(track: TrackGeometry, width: int, height: int) -> np.ndarra
         # Seal raster edge seams so tiny one-pixel cracks cannot appear in the fill.
         ring = list(polygon)
         ring.append(polygon[0])
-        drawer.line(ring, fill=255, width=2)
+        drawer.line(ring, fill=255, width=3)
     return np.asarray(mask_img, dtype=np.uint8)
 
 
@@ -62,7 +67,7 @@ def mask_to_texture(
     rgba[..., 1] = int(track_color[1])
     rgba[..., 2] = int(track_color[2])
     rgba[..., 3] = mask
-    image = Image.fromarray(np.flipud(rgba), mode="RGBA")
+    image = Image.fromarray(rgba, mode="RGBA")
     return arcade.Texture(image=image, hash=str(texture_name))
 
 
@@ -73,6 +78,7 @@ def generate_track(
     config: TrackGenConfig | None = None,
     *,
     build_texture: bool = True,
+    track_color: tuple[int, int, int] = COLOR_DARK_NEUTRAL,
 ) -> dict[str, object]:
     cfg = config or TrackGenConfig()
     geometry = build_track_geometry(
@@ -98,10 +104,11 @@ def generate_track(
     collision_mask = np.asarray(road_mask, dtype=np.uint8)
 
     if bool(build_texture):
+        mask_signature = hash(road_mask.tobytes())
         road_texture = mask_to_texture(
             road_mask,
-            texture_name=f"vroom_track_{seed}",
-            track_color=COLOR_DARK_NEUTRAL,
+            texture_name=f"vroom_track_{seed}_{width}x{height}_{mask_signature}",
+            track_color=track_color,
         )
     else:
         road_texture = None

@@ -9,7 +9,7 @@ Top-down one-lap racing with procedural closed-loop tracks.
 ## Algorithm / Network
 
 - Algo: vanilla DQN
-- Hidden sizes: `[48, 48]`
+- Hidden sizes: `[32, 32]`
 
 ## Controls (Human)
 
@@ -19,27 +19,25 @@ Top-down one-lap racing with procedural closed-loop tracks.
 
 ## Observation / Actions
 
-- Observation: `20` floats (`INPUT_FEATURE_NAMES`, ordered)
-  - `self_lat_offset`
-  - `self_lat_offset_delta`
-  - `self_fwd_speed`
-  - `self_fwd_speed_delta`
-  - `self_heading_sin`
-  - `self_heading_cos`
-  - `self_in_contact`
-  - `self_last_action`
-  - `ray_fwd_near`
-  - `ray_fwd_far`
-  - `ray_fwd_left`
-  - `ray_fwd_right`
-  - `tgt_dx`
-  - `tgt_dy`
-  - `tgt_dvx`
-  - `tgt_dvy`
-  - `trk_lookahead_sin`
-  - `trk_lookahead_cos`
-  - `trk_lookahead_dist`
-  - `trk_curvature_ahead`
+- Observation: `18` floats (`INPUT_FEATURE_NAMES`, ordered)
+  - `spd_fwd`
+  - `spd_lat`
+  - `yaw_rt`
+  - `surf`
+  - `trk_off`
+  - `trk_ang`
+  - `trk_ang_n`
+  - `trk_ang_f`
+  - `edg_fl`
+  - `edg_fr`
+  - `edg_l`
+  - `edg_r`
+  - `opp1_dx`
+  - `opp1_dy`
+  - `opp2_dx`
+  - `opp2_dy`
+  - `opp3_dx`
+  - `opp3_dy`
 - Actions: `Discrete(6)` (`ACTION_NAMES`, ordered)
   - `0 coast`
   - `1 throttle`
@@ -48,10 +46,10 @@ Top-down one-lap racing with procedural closed-loop tracks.
   - `4 left_throttle`
   - `5 right_throttle`
 
-Ray notes:
-- `ray_*` are normalized distance-to-first-hit values in `[0,1]`.
-- `1.0` means no hit within ray range.
-- Hits include walls and obstacles.
+Opponent slot notes:
+- `opp{1..3}_{dx,dy}` are ego-frame relative coordinates.
+- Opponents are ordered deterministically each frame: ahead first by nearest longitudinal `dx`, then behind by nearest `|dx|`, with `dy` tie-break.
+- Missing opponent slots are zero-filled.
 
 ## Race Rules
 
@@ -68,16 +66,16 @@ Ray notes:
 - Outcome `PENALTY_LOSE`: `-5` when another car wins or timeout resolves against player.
 - Progress shaping: `r_progress = clip(5.0 * (Phi_next - Phi_prev), -0.25, +0.25)` with `Phi = track_progress_norm`.
 - Event `PENALTY_COLLISION`: `-0.5` on collision-start events.
-- Step `PENALTY_STEP`: `-0.005` every training step.
+- Step `PENALTY_STEP`: `0` every training step.
 
 ## Curriculum (Train)
 
 - Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
 - Promotion settings live in `games/vroom/config.py` under `CURRICULUM_PROMOTION`.
 - Levels:
-  - Level 1: `1` car, opponent speed cap `0.0`, `2` obstacle clusters, opponent obstacle avoid chance `0.00`
-  - Level 2: `2` cars, opponent speed cap `0.75`, `4` obstacle clusters, opponent obstacle avoid chance `0.70`
-  - Level 3: `4` cars, opponent speed cap `1.0`, `4` obstacle clusters, opponent obstacle avoid chance `0.90`
+  - Level 1: `1` car, opponent speed cap `0.0`
+  - Level 2: `2` cars, opponent speed cap `0.75`
+  - Level 3: `4` cars, opponent speed cap `1.0`
 
 Success per episode is `1` if player wins, else `0`.
 

@@ -26,9 +26,9 @@ Arcade-style top-down football with shared-team MAPPO training (CTDE): one share
   - `BALL` (7): `tgt_dx tgt_dy tgt_rel_angle_sin tgt_rel_angle_cos tgt_dvx tgt_dvy tgt_owner_team`
   - `GOAL (opponent)` (4): `goal_dx goal_dy goal_rel_angle_sin goal_rel_angle_cos`
   - `GOAL (own)` (4): `own_goal_dx own_goal_dy own_goal_rel_angle_sin own_goal_rel_angle_cos`
-  - `ALLIES 1..3` (12): `ally{k}_{dx,dy,dvx,dvy}`
-  - `FOES 1..3` (12): `foe{k}_{dx,dy,dvx,dvy}`
-- Nearest ally/foe selection is deterministic and stable: sorted by `(distance, player.slot_index)`.
+  - `OWN 1..3` (12): `own{k}_{dx,dy,dvx,dvy}`
+  - `OPP 1..3` (12): `opp{k}_{dx,dy,dvx,dvy}`
+- Nearest own/opp selection is deterministic and stable: sorted by `(distance, player.slot_index)`.
 - Actions: `Discrete(12)` (`ACTION_NAMES`, ordered)
   - RL mode expects one action per LEFT player each step: `(N_left,)`
   - `0 stay`
@@ -111,7 +111,7 @@ Success per episode is `1` when LEFT scores more than it concedes, else `0`.
 
 - `KICK_DEBUG_SANITY=1` enables quick runtime checks for:
   - RL obs shape `(N_left, 48)`
-  - stable nearest ordering for ally/foe blocks
+  - stable nearest ordering for own/opp blocks
   - masked invalid-kick prevention in eval
   - GK-catch turnover exclusion
   - scalar step reward + `reward_vec` length

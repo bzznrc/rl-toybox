@@ -89,8 +89,8 @@ Use this order when applicable:
 2. `RAYS` (`ray_*`)
 3. `TGT` (`tgt_*`)
 4. `GOALS/LANDMARKS` (`goal_*`, `own_goal_*`)
-5. `ALLIES` (`allyN_*`)
-6. `FOES` (`foeN_*`)
+5. `TEAMMATES` (`ownN_*`)
+6. `OPPONENTS` (`oppN_*`)
 7. `TRACK/MAP` (`trk_*`)
 8. `HAZARDS` (`haz_*`)
 

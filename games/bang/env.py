@@ -1298,48 +1298,45 @@ class BaseGame:
         return float(haz_dist_norm - 1.5 * haz_in_trajectory)
 
     def get_state_vector(self) -> list[float]:
-        target = self._get_player_target()
-        pos_scale_x = max(1.0, float(self.width))
-        pos_scale_y = max(1.0, float(self.height - BB_HEIGHT))
         dist_scale = max(1.0, max(float(self.width), float(self.height)))
-        actor_vel_scale = max(1.0, float(PLAYER_MOVE_SPEED))
-
-        if target is None:
-            tgt_dx = 0.0
-            tgt_dy = 0.0
-            tgt_dvx = 0.0
-            tgt_dvy = 0.0
-            tgt_dist = 1.0
-            tgt_in_los = 0.0
-        else:
-            to_target = target.position - self.player.position
-            tgt_dx = clip_signed(to_target.x / pos_scale_x)
-            tgt_dy = clip_signed(to_target.y / pos_scale_y)
-            tgt_dvx = clip_signed((float(target.vx) - float(self.player.vx)) / actor_vel_scale)
-            tgt_dvy = clip_signed((float(target.vy) - float(self.player.vy)) / actor_vel_scale)
-            tgt_dist = clip_unit(self.player.position.distance(target.position) / dist_scale)
-            tgt_in_los = 1.0 if self.has_line_of_sight(target) else 0.0
-
-        time_since_last_seen_enemy = self._update_enemy_seen_timer(bool(tgt_in_los))
         nearest_projectile = self._nearest_hostile_projectile()
-        hazard_vel_scale = max(1.0, float(PROJECTILE_SPEED) + actor_vel_scale)
         if nearest_projectile is None:
-            haz_dx = 0.0
-            haz_dy = 0.0
-            haz_dvx = 0.0
-            haz_dvy = 0.0
-            haz_dist = 1.0
+            haz_tti_norm = 0.0
+            haz_miss_norm = 0.0
             haz_in_trajectory = 0.0
         else:
             projectile_pos = nearest_projectile["pos"]
             projectile_vel = nearest_projectile["velocity"]
+            player_vel = Vec2(float(self.player.vx), float(self.player.vy))
             rel_pos = projectile_pos - self.player.position
-            rel_vel = projectile_vel - Vec2(float(self.player.vx), float(self.player.vy))
-            haz_dx = clip_signed(rel_pos.x / pos_scale_x)
-            haz_dy = clip_signed(rel_pos.y / pos_scale_y)
-            haz_dvx = clip_signed(rel_vel.x / hazard_vel_scale)
-            haz_dvy = clip_signed(rel_vel.y / hazard_vel_scale)
-            haz_dist = clip_unit(self.player.position.distance(projectile_pos) / dist_scale)
+            rel_vel = projectile_vel - player_vel
+            rel_speed_sq = length_squared(rel_vel)
+            rel_speed = math.sqrt(rel_speed_sq) if rel_speed_sq > 1e-8 else 0.0
+            tti_horizon = dist_scale / max(1.0, rel_speed)
+
+            approaching = False
+            t_closest = 0.0
+            if rel_speed_sq > 1e-8:
+                closing = -float(rel_pos.dot(rel_vel))
+                if closing > 0.0:
+                    approaching = True
+                    t_closest = closing / rel_speed_sq
+
+            if approaching:
+                haz_tti_norm = clip_unit(1.0 - clip_unit(t_closest / max(1e-6, tti_horizon)))
+            else:
+                haz_tti_norm = 0.0
+
+            closest_rel = rel_pos + (rel_vel * t_closest)
+            miss_distance = math.sqrt(length_squared(closest_rel))
+            lateral_cross = (float(rel_vel.x) * float(closest_rel.y)) - (float(rel_vel.y) * float(closest_rel.x))
+            if lateral_cross > 1e-8:
+                miss_sign = 1.0
+            elif lateral_cross < -1e-8:
+                miss_sign = -1.0
+            else:
+                miss_sign = 0.0
+            haz_miss_norm = clip_signed((miss_sign * miss_distance) / dist_scale)
             haz_in_trajectory = 1.0 if self._projectile_in_trajectory(nearest_projectile) else 0.0
 
         ray_fwd = self._ray_distance(self.player.angle)
@@ -1350,22 +1347,7 @@ class BaseGame:
         player_angle_sin = float(math.sin(player_angle_radians))
         player_angle_cos = float(math.cos(player_angle_radians))
 
-        tgt_vec_x = float(tgt_dx)
-        tgt_vec_y = float(tgt_dy)
-        tgt_norm = math.sqrt((tgt_vec_x * tgt_vec_x) + (tgt_vec_y * tgt_vec_y))
-        if tgt_norm <= 1e-8:
-            tgt_rel_angle_sin = 0.0
-            tgt_rel_angle_cos = 1.0
-        else:
-            tgt_rel_angle_cos = clip_signed(
-                ((player_angle_cos * tgt_vec_x) + (player_angle_sin * tgt_vec_y)) / tgt_norm
-            )
-            tgt_rel_angle_sin = clip_signed(
-                ((player_angle_cos * tgt_vec_y) - (player_angle_sin * tgt_vec_x)) / tgt_norm
-            )
-
         self_shot_cd_norm = clip_unit(float(self.player.cooldown_frames) / max(1, SHOOT_COOLDOWN_FRAMES))
-        self_tgt_seen_norm = clip_unit(float(time_since_last_seen_enemy))
 
         feature_values = {
             "self_angle_sin": player_angle_sin,
@@ -1373,26 +1355,44 @@ class BaseGame:
             "self_move_intent_x": float(self.player.move_intent_x),
             "self_move_intent_y": float(self.player.move_intent_y),
             "self_shot_cd_norm": float(self_shot_cd_norm),
-            "self_tgt_seen_norm": float(self_tgt_seen_norm),
             "ray_fwd": float(ray_fwd),
             "ray_left": float(ray_left),
             "ray_right": float(ray_right),
             "ray_back": float(ray_back),
-            "tgt_dx": float(tgt_dx),
-            "tgt_dy": float(tgt_dy),
-            "tgt_dvx": float(tgt_dvx),
-            "tgt_dvy": float(tgt_dvy),
-            "tgt_dist": float(tgt_dist),
-            "tgt_in_los": float(tgt_in_los),
-            "tgt_rel_angle_sin": float(tgt_rel_angle_sin),
-            "tgt_rel_angle_cos": float(tgt_rel_angle_cos),
-            "haz_dx": float(haz_dx),
-            "haz_dy": float(haz_dy),
-            "haz_dvx": float(haz_dvx),
-            "haz_dvy": float(haz_dvy),
-            "haz_dist": float(haz_dist),
+            "opp1_dx": 0.0,
+            "opp1_dy": 0.0,
+            "opp1_los": 0.0,
+            "opp1_rel_ang": 0.0,
+            "opp2_dx": 0.0,
+            "opp2_dy": 0.0,
+            "opp2_los": 0.0,
+            "opp2_rel_ang": 0.0,
+            "opp3_dx": 0.0,
+            "opp3_dy": 0.0,
+            "opp3_los": 0.0,
+            "opp3_rel_ang": 0.0,
+            "haz_tti_norm": float(haz_tti_norm),
+            "haz_miss_norm": float(haz_miss_norm),
             "haz_in_trajectory": float(haz_in_trajectory),
         }
+
+        opponent_slot_ids = [player_id for player_id in ALL_PLAYER_ORDER if player_id != self.player.team]
+        for slot_index, opponent_id in enumerate(opponent_slot_ids, start=1):
+            opponent = self.players_by_id.get(opponent_id)
+            if opponent is None or not opponent.is_alive:
+                continue
+
+            to_opponent = opponent.position - self.player.position
+            ego_dx = (player_angle_cos * float(to_opponent.x)) + (player_angle_sin * float(to_opponent.y))
+            ego_dy = (-player_angle_sin * float(to_opponent.x)) + (player_angle_cos * float(to_opponent.y))
+            opponent_angle = math.degrees(math.atan2(to_opponent.y, to_opponent.x))
+            relative_angle = normalize_angle_degrees(opponent_angle - float(self.player.angle))
+
+            feature_values[f"opp{slot_index}_dx"] = float(clip_signed(ego_dx / dist_scale))
+            feature_values[f"opp{slot_index}_dy"] = float(clip_signed(ego_dy / dist_scale))
+            feature_values[f"opp{slot_index}_los"] = 1.0 if self._has_clear_path_between(self.player, opponent) else 0.0
+            feature_values[f"opp{slot_index}_rel_ang"] = float(clip_signed(relative_angle / 180.0))
+
         return self._build_state_vector_from_features(feature_values)
 
     def _tick_players(self) -> None:

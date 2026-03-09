@@ -54,6 +54,7 @@ def normalized_ray_first_hit(
     is_blocked: Callable[[float, float], bool],
     step_size: float = 2.0,
     start_offset: float = 0.0,
+    refine_iterations: int = 5,
 ) -> float:
     ray_length = max(1e-6, float(max_distance))
     ux = float(dir_x)
@@ -66,12 +67,36 @@ def normalized_ray_first_hit(
         uy /= mag
 
     step = max(0.25, float(step_size))
-    distance = max(0.0, float(start_offset))
+    min_distance = max(0.0, float(start_offset))
+    distance = min_distance
+    prev_distance = min_distance
+    prev_blocked = False
+    started = False
+
     while distance <= ray_length:
         px = float(origin_x) + ux * distance
         py = float(origin_y) + uy * distance
-        if bool(is_blocked(px, py)):
-            return clip_unit(distance / ray_length)
+        blocked = bool(is_blocked(px, py))
+        if blocked:
+            if (not started) or prev_blocked:
+                return clip_unit(distance / ray_length)
+
+            low = float(prev_distance)
+            high = float(distance)
+            for _ in range(max(0, int(refine_iterations))):
+                mid = 0.5 * (low + high)
+                mx = float(origin_x) + ux * mid
+                my = float(origin_y) + uy * mid
+                if bool(is_blocked(mx, my)):
+                    high = mid
+                else:
+                    low = mid
+            hit_distance = 0.5 * (low + high)
+            return clip_unit(hit_distance / ray_length)
+
+        prev_distance = float(distance)
+        prev_blocked = bool(blocked)
+        started = True
         distance += step
 
     return 1.0

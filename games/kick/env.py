@@ -2065,8 +2065,8 @@ class KickEnv(Env):
             exclude=controlled,
         )
         opponents = self._nearest_players(self.TEAM_RIGHT, controlled.x, controlled.y, k=nearest_count)
-        self._debug_validate_nearest_order(controlled=controlled, players=teammates, label="allies")
-        self._debug_validate_nearest_order(controlled=controlled, players=opponents, label="foes")
+        self._debug_validate_nearest_order(controlled=controlled, players=teammates, label="own")
+        self._debug_validate_nearest_order(controlled=controlled, players=opponents, label="opp")
 
         angle_rad = math.radians(controlled.angle)
         self_theta_cos = float(math.cos(angle_rad))
@@ -2144,16 +2144,16 @@ class KickEnv(Env):
             opponents.append(self.right_players[0] if self.right_players else controlled)
 
         for idx, teammate in enumerate(teammates[:nearest_count], start=1):
-            feature_values[f"ally{idx}_dx"] = float(clip_signed((teammate.x - controlled.x) / width))
-            feature_values[f"ally{idx}_dy"] = float(clip_signed((teammate.y - controlled.y) / height))
-            feature_values[f"ally{idx}_dvx"] = float(clip_signed((teammate.vx - controlled.vx) / player_vel_norm))
-            feature_values[f"ally{idx}_dvy"] = float(clip_signed((teammate.vy - controlled.vy) / player_vel_norm))
+            feature_values[f"own{idx}_dx"] = float(clip_signed((teammate.x - controlled.x) / width))
+            feature_values[f"own{idx}_dy"] = float(clip_signed((teammate.y - controlled.y) / height))
+            feature_values[f"own{idx}_dvx"] = float(clip_signed((teammate.vx - controlled.vx) / player_vel_norm))
+            feature_values[f"own{idx}_dvy"] = float(clip_signed((teammate.vy - controlled.vy) / player_vel_norm))
 
         for idx, opponent in enumerate(opponents[:nearest_count], start=1):
-            feature_values[f"foe{idx}_dx"] = float(clip_signed((opponent.x - controlled.x) / width))
-            feature_values[f"foe{idx}_dy"] = float(clip_signed((opponent.y - controlled.y) / height))
-            feature_values[f"foe{idx}_dvx"] = float(clip_signed((opponent.vx - controlled.vx) / player_vel_norm))
-            feature_values[f"foe{idx}_dvy"] = float(clip_signed((opponent.vy - controlled.vy) / player_vel_norm))
+            feature_values[f"opp{idx}_dx"] = float(clip_signed((opponent.x - controlled.x) / width))
+            feature_values[f"opp{idx}_dy"] = float(clip_signed((opponent.y - controlled.y) / height))
+            feature_values[f"opp{idx}_dvx"] = float(clip_signed((opponent.vx - controlled.vx) / player_vel_norm))
+            feature_values[f"opp{idx}_dvy"] = float(clip_signed((opponent.vy - controlled.vy) / player_vel_norm))
 
         obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
         if obs.shape != (self.OBS_DIM,):

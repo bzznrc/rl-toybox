@@ -28,6 +28,7 @@ from core.curriculum import (
 )
 from core.envs.base import Env
 from core.io_schema import clip_signed, clip_unit, normalized_ray_first_hit, ordered_feature_vector
+from core.ray_viz import draw_player_rays
 from core.rewards import RewardBreakdown
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
 from core.utils import resolve_play_level
@@ -1332,18 +1333,15 @@ class WalkEnv(Env):
         if not bool(config.DRAW_RAYS):
             return
         origin_x, origin_y = self._last_ray_origin
-        sx0 = self._world_to_screen_x(origin_x)
-        sy0 = self._world_to_screen_y(origin_y)
-
-        for idx, (dir_x, dir_y) in enumerate(self._last_ray_dirs):
-            value = float(self._last_ray_values[idx])
-            distance = float(value) * float(config.RAY_MAX_DISTANCE)
-            hit_x = float(origin_x + dir_x * distance)
-            hit_y = float(origin_y + dir_y * distance)
-            sx1 = self._world_to_screen_x(hit_x)
-            sy1 = self._world_to_screen_y(hit_y)
-            color = COLOR_FOG_GRAY if value >= 1.0 else COLOR_AQUA
-            arcade.draw_line(sx0, sy0, sx1, sy1, color, 1.0)
+        draw_player_rays(
+            origin_x=float(origin_x),
+            origin_y=float(origin_y),
+            ray_dirs=self._last_ray_dirs,
+            ray_values=self._last_ray_values.tolist(),
+            ray_max_distances=[float(config.RAY_MAX_DISTANCE)] * len(self._last_ray_dirs),
+            to_screen=lambda x, y: (self._world_to_screen_x(x), self._world_to_screen_y(y)),
+            line_width=1.0,
+        )
 
     def _draw_hud(self) -> None:
         arcade.draw_lbwh_rectangle_filled(0, 0, config.SCREEN_WIDTH, config.BB_HEIGHT, COLOR_DARK_NEUTRAL)
@@ -1378,6 +1376,7 @@ class WalkEnv(Env):
         self._draw_terrain()
         self._draw_distance_markers()
         self._draw_walker()
+        self._draw_rays()
         self._draw_hud()
         self.window_controller.flip()
 

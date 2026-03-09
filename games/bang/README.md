@@ -26,24 +26,24 @@ Top-down arena shooter focused on movement, aiming, and timing shots under press
   - `self_move_intent_x`
   - `self_move_intent_y`
   - `self_shot_cd_norm`
-  - `self_tgt_seen_norm`
   - `ray_fwd`
   - `ray_left`
   - `ray_right`
   - `ray_back`
-  - `tgt_dx`
-  - `tgt_dy`
-  - `tgt_dvx`
-  - `tgt_dvy`
-  - `tgt_dist`
-  - `tgt_in_los`
-  - `tgt_rel_angle_sin`
-  - `tgt_rel_angle_cos`
-  - `haz_dx`
-  - `haz_dy`
-  - `haz_dvx`
-  - `haz_dvy`
-  - `haz_dist`
+  - `opp1_dx`
+  - `opp1_dy`
+  - `opp1_los`
+  - `opp1_rel_ang`
+  - `opp2_dx`
+  - `opp2_dy`
+  - `opp2_los`
+  - `opp2_rel_ang`
+  - `opp3_dx`
+  - `opp3_dy`
+  - `opp3_los`
+  - `opp3_rel_ang`
+  - `haz_tti_norm`
+  - `haz_miss_norm`
   - `haz_in_trajectory`
 - Actions: `Discrete(8)` (`ACTION_NAMES`, ordered)
   - `0 move_up`

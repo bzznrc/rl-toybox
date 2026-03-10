@@ -36,8 +36,10 @@ Current game snapshots live only in `games/<game>/README.md`.
 - `games/<game_name>/`
   - `env.py`: environment logic
   - `config.py`: game knobs/constants
+  - `spec.py`: game-specific `GameSpec` assembly and defaults
   - `README.md`: current game snapshot and run usage
 - `core/`
+  - game catalog/spec builders/run preparation helpers (`core/game.py`)
   - runtime/window/frame helpers
   - runner loops (`on_policy`, `off_policy`, `eval`)
   - curriculum helpers
@@ -47,6 +49,11 @@ Current game snapshots live only in `games/<game>/README.md`.
 - `env.step(...)` returns scalar float reward.
 - Extra outputs (for example per-agent reward vectors) are exposed through `info[...]`.
 - Cross-game RL/environment design standards are defined in [rl-design-guide.md](./rl-design-guide.md).
+
+### Metadata ownership
+- `games/<game>/spec.py` should contain only game-specific metadata assembly.
+- Shared `GameSpec` types, registry lookup, shared train/play prep, and shared training-config builders live in `core/game.py`.
+- Do not place cross-game helper modules under `games/`; `games/` is reserved for per-game code.
 
 ## 3) Logging Framework
 

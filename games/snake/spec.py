@@ -3,32 +3,30 @@
 from __future__ import annotations
 
 from core.envs.spaces import Discrete
-from games.off_policy_defaults import OFF_POLICY_TRAIN_DEFAULTS, make_exploration_config
+from core.game import (
+    GameSpec,
+    build_env_factory,
+    build_exploration_config,
+    build_hidden_run_name,
+    build_off_policy_train_config,
+)
 from games.snake import config
 from games.snake.env import SnakeEnv
-from games.spec_types import GameSpec
-
-
-def make_env(mode: str, render: bool, level: int | None = None):
-    return SnakeEnv(mode=mode, render=render, level=level)
-
-
-RUN_NAME = "_".join(str(size) for size in config.HIDDEN_DIMENSIONS)
 
 SPEC = GameSpec(
     game_id="snake",
     default_algo="qlearn",
-    make_env=make_env,
+    make_env=build_env_factory(SnakeEnv),
     obs_dim=config.OBS_DIM,
     action_space=Discrete(config.ACT_DIM),
-    run_name=RUN_NAME,
+    run_name=build_hidden_run_name(config.HIDDEN_DIMENSIONS),
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
         "learning_rate": config.LEARNING_RATE,
         "gamma": config.GAMMA,
         "max_memory": config.MAX_MEMORY,
         "batch_size": config.BATCH_SIZE,
-        "exploration": make_exploration_config(
+        "exploration": build_exploration_config(
             config.EPSILON_START,
             config.EPSILON_MIN,
             config.EPSILON_DECAY_STEPS,
@@ -39,11 +37,9 @@ SPEC = GameSpec(
         ),
         "use_gpu": config.USE_GPU,
     },
-    train_config={
-        **OFF_POLICY_TRAIN_DEFAULTS,
-        "max_steps": config.MAX_TRAINING_STEPS,
-        "checkpoint_every_steps": config.CHECKPOINT_EVERY_STEPS,
-        "reward_window": config.REWARD_ROLLING_WINDOW,
-        "min_episodes_for_stats": config.REWARD_ROLLING_WINDOW,
-    },
+    train_config=build_off_policy_train_config(
+        max_steps=config.MAX_TRAINING_STEPS,
+        checkpoint_every_steps=config.CHECKPOINT_EVERY_STEPS,
+        reward_window=config.REWARD_ROLLING_WINDOW,
+    ),
 )

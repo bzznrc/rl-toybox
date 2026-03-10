@@ -100,6 +100,7 @@ from games.vroom.config import (
 )
 from games.vroom.track_geometry import (
     TrackGeometry,
+    TrackProjection,
     build_boundary_loops,
     project_point_to_track,
     raycast_track_edge,
@@ -129,6 +130,9 @@ class RaceCar:
     in_contact: bool = False
     ai_lane_home: float = 0.0
     ai_lane_offset: float = 0.0
+    ai_curve_error_percent: float = 0.0
+    ai_curve_key: int = -1
+    ai_rejoin_steps: int = 0
     off_track: bool = False
     off_track_blend: float = 0.0
     track_progress: float = 0.0
@@ -313,6 +317,7 @@ class VroomEnv(Env):
         self.win_history: list[int | None] = self.match_tracker.history
         self.num_cars = int(self.NUM_CARS)
         self.opponent_speed_cap = 1.0
+        self.opponent_coast_error_choices: tuple[float, ...] = (0.0,)
         curriculum_config = build_curriculum_config(
             min_level=int(MIN_LEVEL),
             max_level=int(MAX_LEVEL),
@@ -354,6 +359,13 @@ class VroomEnv(Env):
         settings = LEVEL_SETTINGS.get(int(level), LEVEL_SETTINGS[int(MIN_LEVEL)])
         self.num_cars = max(1, min(int(settings["num_cars"]), len(self.player_color_pairs)))
         self.opponent_speed_cap = self._clamp(float(settings["opponent_speed_cap"]), 0.0, 1.0)
+        coast_error_choices = settings.get("opponent_coast_error_choices", [0.0])
+        if not isinstance(coast_error_choices, (list, tuple)) or len(coast_error_choices) == 0:
+            raise ValueError("Vroom LEVEL_SETTINGS entries must define non-empty opponent_coast_error_choices.")
+        try:
+            self.opponent_coast_error_choices = tuple(float(value) for value in coast_error_choices)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Vroom opponent_coast_error_choices entries must be numeric.") from exc
 
     @staticmethod
     def _clamp(value: float, low: float, high: float) -> float:
@@ -570,15 +582,19 @@ class VroomEnv(Env):
             max_lane_span = max(0.0, float(track.half_width) - self.car_half * 0.68)
             lane_span = min(max_lane_span, max(self.car_size * 0.82, max_lane_span * 0.82))
             lane_offsets = np.linspace(-lane_span, lane_span, num=car_count, dtype=np.float32).astype(float).tolist()
+        random.shuffle(lane_offsets)
+        spawn_slots = list(range(int(self.num_cars)))
+        random.shuffle(spawn_slots)
 
         longitudinal_spacing = max(self.car_size * 0.95, float(track.half_width) * 0.58)
         start_back_offset = max(self.car_size * 1.35, float(track.half_width) * 0.95)
 
         for idx in range(int(self.num_cars)):
             desired_lateral = float(lane_offsets[idx % len(lane_offsets)])
+            spawn_slot = int(spawn_slots[idx % len(spawn_slots)])
             (x, y), heading = spawn_pose(
                 track,
-                slot_idx=int(idx),
+                slot_idx=spawn_slot,
                 lateral_offset=float(desired_lateral),
                 longitudinal_spacing=float(longitudinal_spacing),
                 start_back_offset=float(start_back_offset),
@@ -794,49 +810,144 @@ class VroomEnv(Env):
     def _ai_lane_limit(self) -> float:
         return max(4.0, float(self.track_half_width) - float(self.track_probe_radius) - 1.0)
 
+    def _next_main_corner(
+        self,
+        track: TrackGeometry,
+        proj: TrackProjection,
+    ) -> tuple[float, int | None]:
+        if float(track.length) <= 1e-6 or not track.main_corner_s:
+            return 0.0, None
+
+        next_distance: float | None = None
+        next_key: int | None = None
+        for corner_key, corner_s in enumerate(track.main_corner_s):
+            distance = (float(corner_s) - float(proj.s)) % float(track.length)
+            if distance <= 1e-6:
+                continue
+            if next_distance is None or float(distance) < float(next_distance):
+                next_distance = float(distance)
+                next_key = int(corner_key)
+        if next_distance is None:
+            return 0.0, None
+        return float(next_distance), next_key
+
+    def _opponent_coast_error_percent(self, car: RaceCar, corner_key: int | None) -> float:
+        if corner_key is None:
+            car.ai_curve_key = -1
+            car.ai_curve_error_percent = 0.0
+            return 0.0
+        if int(car.ai_curve_key) != int(corner_key):
+            car.ai_curve_key = int(corner_key)
+            car.ai_curve_error_percent = float(random.choice(self.opponent_coast_error_choices))
+        return float(car.ai_curve_error_percent)
+
+    def _opponent_lane_target(self, car: RaceCar, signed_lateral: float) -> float:
+        lane_limit = self._ai_lane_limit()
+        if bool(car.in_contact) or bool(car.off_track):
+            car.ai_rejoin_steps = max(int(car.ai_rejoin_steps), 18)
+            car.ai_lane_offset = self._clamp(float(signed_lateral), -lane_limit, lane_limit)
+
+        blend = 0.08
+        if int(car.ai_rejoin_steps) > 0:
+            blend = 0.18
+            car.ai_rejoin_steps = max(0, int(car.ai_rejoin_steps) - 1)
+        car.ai_lane_offset += (float(car.ai_lane_home) - float(car.ai_lane_offset)) * float(blend)
+        if abs(float(car.ai_lane_offset) - float(car.ai_lane_home)) <= 0.25:
+            car.ai_lane_offset = float(car.ai_lane_home)
+        car.ai_lane_offset = self._clamp(float(car.ai_lane_offset), -lane_limit, lane_limit)
+        return float(car.ai_lane_offset)
+
+    def _opponent_drive_plan(
+        self,
+        track: TrackGeometry,
+        proj: TrackProjection,
+        car: RaceCar,
+        speed_ratio: float,
+    ) -> tuple[float, float, bool]:
+        del speed_ratio
+        side_before_corner = ("top", "right", "bottom", "left")
+        next_corner_distance, next_corner_key = self._next_main_corner(track, proj)
+        if next_corner_key is None:
+            return 1.0, 28.0, False
+
+        current_side = str(side_before_corner[int(next_corner_key) % len(side_before_corner)])
+        side_speed_factor = 0.75 if current_side in track.bulged_sides else 1.0
+
+        ideal_corner_distance = max(72.0, 2.75 * float(self.track_half_width) + 18.0)
+        coast_error_percent = self._opponent_coast_error_percent(car, next_corner_key)
+        corner_entry_distance = self._clamp(
+            float(ideal_corner_distance) * (1.0 - float(coast_error_percent) / 100.0),
+            36.0,
+            220.0,
+        )
+
+        previous_corner_key = (int(next_corner_key) - 1) % len(track.main_corner_s)
+        previous_corner_s = float(track.main_corner_s[int(previous_corner_key)])
+        distance_since_previous_corner = (float(proj.s) - float(previous_corner_s)) % float(track.length)
+        corner_release_distance = max(20.0, 0.90 * float(self.track_half_width))
+
+        in_corner_zone = bool(
+            float(next_corner_distance) <= float(corner_entry_distance)
+            or float(distance_since_previous_corner) <= float(corner_release_distance)
+        )
+        if in_corner_zone:
+            return 0.5, 15.0, True
+        if side_speed_factor < 1.0:
+            return float(side_speed_factor), 22.0, False
+        return 1.0, 30.0, False
+
     def _ai_control_for_car(self, car_index: int, car: RaceCar) -> tuple[float, float]:
+        del car_index
         track = self._require_track_geometry()
         proj = project_point_to_track(track, (float(car.x), float(car.y)))
-        distance = float(proj.distance)
         _, _, forward_speed, _ = self._project_to_car_frame(car)
-        max_forward_speed = float(self.max_speed) * float(self.opponent_speed_cap)
-        min_forward_speed = 0.5 * max_forward_speed
-
+        max_forward_speed = max(1.0, float(self.max_speed) * float(self.opponent_speed_cap))
         signed_lateral = float(proj.lateral_offset)
-        lane_target = float(self._clamp(float(car.ai_lane_home), -self._ai_lane_limit(), self._ai_lane_limit()))
-        car.ai_lane_offset = float(lane_target)
-        lane_error = signed_lateral - lane_target
-        correction_mag = self._clamp(lane_error * 0.65, -self.track_half_width * 0.65, self.track_half_width * 0.65)
         speed_ratio = self._clamp(abs(float(forward_speed)) / max(1.0, max_forward_speed), 0.0, 1.0)
-        look_ahead_s = (
-            20.0
-            + 42.0 * speed_ratio
-            + min(24.0, distance / max(1.0, self.track_half_width) * 14.0)
+        lane_target = self._opponent_lane_target(car, signed_lateral)
+        target_speed_factor, base_look_ahead_s, in_corner_zone = self._opponent_drive_plan(
+            track,
+            proj,
+            car,
+            speed_ratio,
         )
+        look_ahead_s = float(base_look_ahead_s) + 12.0 * float(speed_ratio)
         (target_x, target_y), _, (target_nx, target_ny) = sample_track_at_s(
             track,
             float(proj.s) + float(look_ahead_s),
         )
-        target_lateral = lane_target - correction_mag
-        aim_x = float(target_x) + target_nx * float(target_lateral)
-        aim_y = float(target_y) + target_ny * float(target_lateral)
+        aim_x = float(target_x) + target_nx * float(lane_target)
+        aim_y = float(target_y) + target_ny * float(lane_target)
         desired_heading = math.degrees(math.atan2(aim_y - car.y, aim_x - car.x))
         delta = self._normalize_degrees(desired_heading - car.heading_degrees)
 
-        if abs(delta) <= 2.0:
+        if abs(delta) <= 1.5:
             steer = 0.0
         else:
-            steer = self._clamp(float(delta) / 18.0, -1.0, 1.0)
+            steer_gain = 12.0 if in_corner_zone else 14.0 if target_speed_factor < 1.0 else 16.0
+            steer = self._clamp(float(delta) / float(steer_gain), -1.0, 1.0)
 
-        throttle = 1.0
-        abs_delta = abs(float(delta))
-        if abs_delta > 55.0:
+        target_speed = float(max_forward_speed) * float(target_speed_factor)
+        if bool(car.in_contact) or bool(car.off_track):
+            target_speed *= 0.85
+
+        cruise_throttle = 0.18 + 0.30 * float(target_speed_factor)
+        speed_gain = max(1.0, 0.32 * float(max_forward_speed))
+        speed_error = float(target_speed) - float(forward_speed)
+        throttle = self._clamp(float(cruise_throttle) + float(speed_error) / float(speed_gain), 0.0, 1.0)
+
+        overspeed_margin = max(0.15 * float(max_forward_speed), 0.25)
+        if float(forward_speed) > float(target_speed) + float(overspeed_margin):
             throttle = 0.0
-        elif abs_delta > 35.0:
-            throttle = 0.20
 
-        if forward_speed < float(min_forward_speed):
-            throttle = 1.0
+        if abs(float(delta)) >= 42.0:
+            throttle = min(float(throttle), 0.55)
+        if bool(car.in_contact) or bool(car.off_track):
+            throttle = max(float(throttle), 0.30)
+
+        min_forward_speed = max(0.75, 0.28 * float(max_forward_speed))
+        if float(forward_speed) < float(min_forward_speed):
+            throttle = max(float(throttle), 0.55)
 
         return float(steer), float(throttle)
 

@@ -3,25 +3,23 @@
 from __future__ import annotations
 
 from core.envs.spaces import Box
-from games.spec_types import GameSpec
+from core.game import (
+    GameSpec,
+    build_env_factory,
+    build_hidden_run_name,
+    build_on_policy_train_config,
+)
 from games.walk import config
 from games.walk.env import WalkEnv
-
-
-def make_env(mode: str, render: bool, level: int | None = None):
-    return WalkEnv(mode=mode, render=render, level=level)
-
-
-RUN_NAME = "_".join(str(size) for size in config.HIDDEN_DIMENSIONS)
 
 
 SPEC = GameSpec(
     game_id="walk",
     default_algo="ppo",
-    make_env=make_env,
+    make_env=build_env_factory(WalkEnv),
     obs_dim=config.OBS_DIM,
     action_space=Box(shape=(config.ACT_DIM,), low=-1.0, high=1.0),
-    run_name=RUN_NAME,
+    run_name=build_hidden_run_name(config.HIDDEN_DIMENSIONS),
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
         "learning_rate": config.LEARNING_RATE,
@@ -38,11 +36,11 @@ SPEC = GameSpec(
         "max_log_std": config.MAX_LOG_STD,
         "use_gpu": config.USE_GPU,
     },
-    train_config={
-        "max_iterations": config.MAX_TRAINING_ITERATIONS,
-        "rollout_steps": config.ROLLOUT_STEPS,
-        "checkpoint_every_iterations": config.CHECKPOINT_EVERY_ITERATIONS,
-        "reward_window": config.REWARD_ROLLING_WINDOW,
-        "min_episodes_for_stats": config.MIN_EPISODES_FOR_STATS,
-    },
+    train_config=build_on_policy_train_config(
+        max_iterations=config.MAX_TRAINING_ITERATIONS,
+        rollout_steps=config.ROLLOUT_STEPS,
+        checkpoint_every_iterations=config.CHECKPOINT_EVERY_ITERATIONS,
+        reward_window=config.REWARD_ROLLING_WINDOW,
+        min_episodes_for_stats=config.MIN_EPISODES_FOR_STATS,
+    ),
 )

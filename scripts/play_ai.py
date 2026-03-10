@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 
+from core.game import prepare_run, resolve_play_model_path
 from core.logging_utils import configure_logging, log_key_values, log_run_context
 from core.runners.eval import run_eval
-from scripts.common import prepare_run, resolve_play_model_path
 
 
 def _normalize_choice(value: str) -> str:

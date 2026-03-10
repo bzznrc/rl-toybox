@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from core.logging_utils import configure_logging, log_key_values, log_run_context
-from core.runners.off_policy import OffPolicyConfig, run_off_policy_training
-from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
-from scripts.common import (
+from core.game import (
     apply_training_start_level,
     normalize_resume_mode,
     prepare_run,
@@ -15,6 +12,9 @@ from scripts.common import (
     resolve_current_level,
     resolve_resume_path,
 )
+from core.logging_utils import configure_logging, log_key_values, log_run_context
+from core.runners.off_policy import OffPolicyConfig, run_off_policy_training
+from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
 
 
 def parse_args() -> argparse.Namespace:

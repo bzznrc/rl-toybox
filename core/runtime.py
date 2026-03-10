@@ -1,4 +1,4 @@
-"""Arcade runtime and geometry helpers for Bang AI."""
+"""Arcade runtime and geometry helpers shared across games."""
 
 from __future__ import annotations
 

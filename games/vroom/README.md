@@ -55,10 +55,26 @@ Opponent slot notes:
 
 - Each race is exactly `1` lap.
 - A new random smooth closed-loop track is created at every reset.
+- Car spawn row and lane are randomized each race across the start strip.
 - If any car completes a lap, the race ends.
 - Race count per episode:
   - `train`: `1` race
   - `eval` / `human`: `10` races per set
+
+## Scripted Opponents
+
+- Opponents follow a simple lane-keeping script.
+- Speed targets are scaled by `opponent_speed_cap`, with three section multipliers:
+  - `1.0x` on plain sides
+  - `0.75x` on bulged sides
+  - `0.5x` in the corner-control zone for each of the four main corners
+- They coast only for the four main rounded corners of the track.
+- Bulges are driven at regular speed rather than corner-coasted.
+- Each opponent samples a per-bend coasting timing error from `LEVEL_SETTINGS[*]["opponent_coast_error_choices"]`.
+  - Negative values coast early.
+  - `0` means the reference corner-entry point with no timing error.
+  - Positive values coast late.
+- After contact or an off-line shove, they blend back toward their assigned lane instead of snapping instantly.
 
 ## Rewards (Training)
 
@@ -66,16 +82,16 @@ Opponent slot notes:
 - Outcome `PENALTY_LOSE`: `-5` when another car wins or timeout resolves against player.
 - Progress shaping: `r_progress = clip(5.0 * (Phi_next - Phi_prev), -0.25, +0.25)` with `Phi = track_progress_norm`.
 - Event `PENALTY_COLLISION`: `-0.5` on collision-start events.
-- Step `PENALTY_STEP`: `0` every training step.
+- Step `PENALTY_STEP`: `-0.005` every training step.
 
 ## Curriculum (Train)
 
 - Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
 - Promotion settings live in `games/vroom/config.py` under `CURRICULUM_PROMOTION`.
 - Levels:
-  - Level 1: `1` car, opponent speed cap `0.0`
-  - Level 2: `2` cars, opponent speed cap `0.75`
-  - Level 3: `4` cars, opponent speed cap `1.0`
+  - Level 1: `1` car, opponent speed cap `0.0`, coast error choices `[-40, 0, 40]`
+  - Level 2: `2` cars, opponent speed cap `0.75`, coast error choices `[-20, 0, 20]`
+  - Level 3: `4` cars, opponent speed cap `1.0`, coast error choices `[-10, 0, 10]`
 
 Success per episode is `1` if player wins, else `0`.
 

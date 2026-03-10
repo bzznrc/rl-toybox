@@ -45,10 +45,11 @@ EVENT_TIMER_NORMALIZATION_FRAMES = MAX_EPISODE_STEPS
 PLAYER_SPAWN_X_RATIO = 1 / 8
 ENEMY_SPAWN_X_RATIO = 7 / 8
 
-ENEMY_STUCK_MOVE_ATTEMPTS = 2
-ENEMY_ESCAPE_FOLLOW_FRAMES = 12
-ENEMY_ESCAPE_ANGLE_OFFSETS_DEGREES = (90, -90, 180)
 ENEMY_SHOT_ERROR_CHOICES = [-20, -10, 0, 10, 20]
+ENEMY_MOVE_COMMIT_FRAMES = 10
+ENEMY_RECENT_POSITION_MEMORY = 8
+ENEMY_HIDDEN_URGENCY_FRAMES = 24
+ENEMY_RECENT_POSITION_PENALTY = 0.40
 SPAWN_Y_OFFSET = 180
 SAFE_RADIUS = 100
 MIN_OBSTACLE_SECTIONS = 2
@@ -125,19 +126,19 @@ LEVEL_SETTINGS = {
     1: {
         "num_players": 2,
         "num_obstacles": 4,
-        "enemy_move_probability": 0.00,
+        "enemy_reposition_bias": 0.25,
         "enemy_shoot_probability": 0.025,
     },
     2: {
         "num_players": 2,
         "num_obstacles": 8,
-        "enemy_move_probability": 0.10,
+        "enemy_reposition_bias": 0.60,
         "enemy_shoot_probability": 0.05,
     },
     3: {
         "num_players": 4,
         "num_obstacles": 12,
-        "enemy_move_probability": 0.20,
+        "enemy_reposition_bias": 1.00,
         "enemy_shoot_probability": 0.10,
     },
 }

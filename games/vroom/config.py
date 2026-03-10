@@ -116,14 +116,18 @@ LEVEL_SETTINGS = {
     1: {
         "num_cars": 1,
         "opponent_speed_cap": 0.0,
+        # Negative values coast early, positive values coast late.
+        "opponent_coast_error_choices": [-40.0, 0.0, 40.0],
     },
     2: {
         "num_cars": 2,
         "opponent_speed_cap": 0.75,
+        "opponent_coast_error_choices": [-20.0, 0.0, 20.0],
     },
     3: {
         "num_cars": 4,
         "opponent_speed_cap": 1.0,
+        "opponent_coast_error_choices": [-10.0, 0.0, 10.0],
     },
 }
 

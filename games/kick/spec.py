@@ -3,27 +3,26 @@
 from __future__ import annotations
 
 from core.envs.spaces import Discrete
+from core.game import (
+    GameSpec,
+    build_actor_critic_run_name,
+    build_env_factory,
+    build_on_policy_train_config,
+)
 from games.kick import config
 from games.kick.env import KickEnv
-from games.spec_types import GameSpec
-
-
-def make_env(mode: str, render: bool, level: int | None = None):
-    return KickEnv(mode=mode, render=render, level=level)
-
-
-RUN_NAME = "a" + "_".join(str(size) for size in config.HIDDEN_DIMENSIONS) + "_c" + "_".join(
-    str(size) for size in config.CRITIC_HIDDEN_DIMENSIONS
-)
 
 
 SPEC = GameSpec(
     game_id="kick",
     default_algo="ppo",
-    make_env=make_env,
+    make_env=build_env_factory(KickEnv),
     obs_dim=config.OBS_DIM,
     action_space=Discrete(config.ACT_DIM),
-    run_name=RUN_NAME,
+    run_name=build_actor_critic_run_name(
+        config.HIDDEN_DIMENSIONS,
+        config.CRITIC_HIDDEN_DIMENSIONS,
+    ),
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
         "critic_hidden_sizes": list(config.CRITIC_HIDDEN_DIMENSIONS),
@@ -41,11 +40,11 @@ SPEC = GameSpec(
         "max_grad_norm": config.MAX_GRAD_NORM,
         "use_gpu": config.USE_GPU,
     },
-    train_config={
-        "max_iterations": config.MAX_TRAINING_ITERATIONS,
-        "rollout_steps": config.ROLLOUT_STEPS,
-        "checkpoint_every_iterations": config.CHECKPOINT_EVERY_ITERATIONS,
-        "reward_window": config.REWARD_ROLLING_WINDOW,
-        "min_episodes_for_stats": config.MIN_EPISODES_FOR_STATS,
-    },
+    train_config=build_on_policy_train_config(
+        max_iterations=config.MAX_TRAINING_ITERATIONS,
+        rollout_steps=config.ROLLOUT_STEPS,
+        checkpoint_every_iterations=config.CHECKPOINT_EVERY_ITERATIONS,
+        reward_window=config.REWARD_ROLLING_WINDOW,
+        min_episodes_for_stats=config.MIN_EPISODES_FOR_STATS,
+    ),
 )

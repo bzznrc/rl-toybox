@@ -74,9 +74,23 @@ Ray notes:
 - Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
 - Promotion settings live in `games/bang/config.py` under `CURRICULUM_PROMOTION`.
 - Levels:
-  - Level 1: `2` players, `4` obstacles, enemy move probability `0.00`, enemy shoot probability `0.02`
-  - Level 2: `2` players, `8` obstacles, enemy move probability `0.10`, enemy shoot probability `0.06`
-  - Level 3: `4` players, `12` obstacles, enemy move probability `0.20`, enemy shoot probability `0.10`
+  - Level 1: `2` players, `4` obstacles, enemy reposition bias `0.25`, enemy shoot probability `0.025`
+  - Level 2: `2` players, `8` obstacles, enemy reposition bias `0.60`, enemy shoot probability `0.05`
+  - Level 3: `4` players, `12` obstacles, enemy reposition bias `1.00`, enemy shoot probability `0.10`
+
+## Scripted Enemies
+
+- Scripted enemies keep the current target-selection and shot-error model.
+- Movement is driven by a small local planner instead of random move attempts.
+- Each replan scores a small set of relative moves: hold, advance, retreat, strafe, and diagonal flank variants.
+- The planner prefers:
+  - regaining line of sight around obstacles
+  - holding a useful distance band around `SAFE_RADIUS`
+  - strafing when already in a good engagement position
+  - avoiding recently visited positions so enemies do not oscillate behind cover
+- `enemy_reposition_bias` is the main movement difficulty knob.
+  - Lower values make enemies less forceful about flanking cover.
+  - Higher values make them push harder to regain line of sight.
 
 Success per episode is `1` on win, else `0`.
 

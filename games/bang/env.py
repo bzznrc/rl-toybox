@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import arcade
 import numpy as np
@@ -59,8 +59,10 @@ from games.bang.config import (
     BB_HEIGHT,
     CELL_INSET,
     CURRICULUM_PROMOTION,
-    ENEMY_ESCAPE_ANGLE_OFFSETS_DEGREES,
-    ENEMY_ESCAPE_FOLLOW_FRAMES,
+    ENEMY_HIDDEN_URGENCY_FRAMES,
+    ENEMY_MOVE_COMMIT_FRAMES,
+    ENEMY_RECENT_POSITION_MEMORY,
+    ENEMY_RECENT_POSITION_PENALTY,
     ENEMY_SHOT_ERROR_CHOICES,
     ENEMY_SPAWN_X_RATIO,
     EVENT_TIMER_NORMALIZATION_FRAMES,
@@ -209,8 +211,31 @@ class TargetState:
 
 @dataclass
 class ScriptedMoveState:
-    escape_frames_remaining: int = 0
-    escape_offset_degrees: float = float(ENEMY_ESCAPE_ANGLE_OFFSETS_DEGREES[0])
+    planned_move_angle: float | None = None
+    planned_target_id: str | None = None
+    commit_frames_remaining: int = 0
+    blocked_frames: int = 0
+    hidden_frames: int = 0
+    recent_position_keys: list[tuple[int, int]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ScriptedMoveOption:
+    name: str
+    angle_offset_degrees: float | None
+
+
+SCRIPTED_MOVE_OPTIONS = (
+    ScriptedMoveOption("hold", None),
+    ScriptedMoveOption("advance", 0.0),
+    ScriptedMoveOption("advance_left", 45.0),
+    ScriptedMoveOption("advance_right", -45.0),
+    ScriptedMoveOption("strafe_left", 90.0),
+    ScriptedMoveOption("strafe_right", -90.0),
+    ScriptedMoveOption("retreat_left", 135.0),
+    ScriptedMoveOption("retreat_right", -135.0),
+    ScriptedMoveOption("retreat", 180.0),
+)
 
 
 class Actor:
@@ -536,7 +561,7 @@ class BaseGame:
         self._set_player_count(_num_players_for_level(level))
 
         self.num_obstacles = settings["num_obstacles"]
-        self.enemy_move_probability = settings["enemy_move_probability"]
+        self.enemy_reposition_bias = float(settings["enemy_reposition_bias"])
         self.enemy_shot_error_choices = list(ENEMY_SHOT_ERROR_CHOICES)
         self.enemy_shoot_probability = settings["enemy_shoot_probability"]
 
@@ -603,10 +628,7 @@ class BaseGame:
             for actor in self.players
         }
         self.scripted_move_states = {
-            actor.team: ScriptedMoveState(
-                escape_frames_remaining=0,
-                escape_offset_degrees=float(ENEMY_ESCAPE_ANGLE_OFFSETS_DEGREES[0]),
-            )
+            actor.team: ScriptedMoveState()
             for actor in self.scripted_players
         }
         self._place_obstacles()
@@ -946,9 +968,12 @@ class BaseGame:
         return target
 
     def _has_clear_path_between(self, actor: Actor, target: Actor) -> bool:
+        return self._has_clear_path_between_points(actor.position, target.position)
+
+    def _has_clear_path_between_points(self, point_a: Vec2, point_b: Vec2) -> bool:
         return not square_obstacle_between_points(
-            point_a=actor.position,
-            point_b=target.position,
+            point_a=point_a,
+            point_b=point_b,
             obstacles=self.obstacles,
             tile_size=TILE_SIZE,
         )
@@ -1076,24 +1101,8 @@ class BaseGame:
             cache_by_frame=True,
         )
 
-    def _scripted_desired_move_angle(self, actor: Actor, target: Actor, angle_to_target: float) -> float:
-        distance = actor.position.distance(target.position)
-        if distance < SAFE_RADIUS * 0.9:
-            return (angle_to_target + 180.0) % 360.0
-        if distance > SAFE_RADIUS * 1.8:
-            return angle_to_target
-        if random.random() < 0.35:
-            return (angle_to_target + random.choice((90.0, -90.0))) % 360.0
-        return angle_to_target
-
     def _scripted_move_state(self, actor: Actor) -> ScriptedMoveState:
-        return self.scripted_move_states.setdefault(
-            actor.team,
-            ScriptedMoveState(
-                escape_frames_remaining=0,
-                escape_offset_degrees=float(ENEMY_ESCAPE_ANGLE_OFFSETS_DEGREES[0]),
-            ),
-        )
+        return self.scripted_move_states.setdefault(actor.team, ScriptedMoveState())
 
     @staticmethod
     def _turn_toward_angle(current_angle: float, target_angle: float, max_step_degrees: float) -> float:
@@ -1102,61 +1111,165 @@ class BaseGame:
         step = max(-max_step, min(max_step, float(delta)))
         return (float(current_angle) + float(step)) % 360.0
 
-    def _available_escape_offsets(self, actor: Actor, angle_to_target: float) -> list[float]:
-        free_offsets: list[float] = []
-        for offset in ENEMY_ESCAPE_ANGLE_OFFSETS_DEGREES:
-            escape_angle = (angle_to_target + float(offset)) % 360.0
-            candidate_move = self._move_vector_for_angle(escape_angle)
-            if not self._would_collide(actor, candidate_move):
-                free_offsets.append(float(offset))
-        return free_offsets
+    @staticmethod
+    def _scripted_position_key(position: Vec2) -> tuple[int, int]:
+        cell_size = max(1.0, float(PLAYER_MOVE_SPEED) * 2.0)
+        return (
+            int(round(float(position.x) / cell_size)),
+            int(round(float(position.y) / cell_size)),
+        )
 
-    def _pick_random_escape_offset(self, actor: Actor, angle_to_target: float) -> float | None:
-        free_offsets = self._available_escape_offsets(actor, angle_to_target)
-        if not free_offsets:
-            return None
-        return random.choice(free_offsets)
+    def _remember_scripted_position(self, actor: Actor, move_state: ScriptedMoveState) -> None:
+        key = self._scripted_position_key(actor.position)
+        if move_state.recent_position_keys and move_state.recent_position_keys[-1] == key:
+            return
+        move_state.recent_position_keys.append(key)
+        max_memory = max(1, int(ENEMY_RECENT_POSITION_MEMORY))
+        if len(move_state.recent_position_keys) > max_memory:
+            del move_state.recent_position_keys[:-max_memory]
 
-    def _attempt_scripted_escape_move(
+    @staticmethod
+    def _normalized_move_offset(angle_degrees: float, angle_to_target: float) -> float:
+        return abs(normalize_angle_degrees(float(angle_degrees) - float(angle_to_target)))
+
+    def _score_scripted_move_option(
         self,
         actor: Actor,
+        target: Actor,
+        angle_to_target: float,
+        current_has_los: bool,
+        current_distance: float,
+        move_state: ScriptedMoveState,
+        option: ScriptedMoveOption,
+    ) -> tuple[float, float | None] | None:
+        candidate_angle: float | None = None
+        candidate_position = actor.position
+        if option.angle_offset_degrees is not None:
+            candidate_angle = (float(angle_to_target) + float(option.angle_offset_degrees)) % 360.0
+            movement = self._move_vector_for_angle(candidate_angle)
+            if self._would_collide(actor, movement):
+                return None
+            candidate_position = actor.position + movement
+
+        candidate_distance = float(candidate_position.distance(target.position))
+        candidate_has_los = self._has_clear_path_between_points(candidate_position, target.position)
+        candidate_key = self._scripted_position_key(candidate_position)
+
+        desired_distance = float(SAFE_RADIUS)
+        distance_error = abs(float(candidate_distance) - desired_distance) / max(1.0, desired_distance)
+        score = 0.7 - min(1.25, float(distance_error))
+
+        hidden_ratio = min(1.0, float(move_state.hidden_frames) / max(1.0, float(ENEMY_HIDDEN_URGENCY_FRAMES)))
+        reposition_urgency = 1.0 + float(self.enemy_reposition_bias) * float(hidden_ratio)
+
+        if candidate_has_los:
+            score += 0.9
+            if not current_has_los:
+                score += 1.0 * float(reposition_urgency)
+        elif not current_has_los:
+            score -= 0.15 * float(reposition_urgency)
+        else:
+            score -= 0.6
+
+        angle_offset = (
+            0.0
+            if candidate_angle is None
+            else self._normalized_move_offset(candidate_angle, angle_to_target)
+        )
+        lateral_bias = max(0.0, 1.0 - abs(float(angle_offset) - 90.0) / 90.0)
+        advance_bias = max(0.0, 1.0 - float(angle_offset) / 90.0) if angle_offset <= 90.0 else 0.0
+        retreat_bias = max(0.0, 1.0 - abs(float(angle_offset) - 180.0) / 90.0) if angle_offset >= 90.0 else 0.0
+
+        if current_has_los:
+            if desired_distance * 0.85 <= float(candidate_distance) <= desired_distance * 1.35:
+                score += 0.30 * float(lateral_bias)
+            elif float(candidate_distance) < desired_distance * 0.85:
+                score += 0.45 * float(retreat_bias)
+            else:
+                score += 0.35 * float(advance_bias)
+        else:
+            distance_delta = (float(current_distance) - float(candidate_distance)) / max(1.0, float(SAFE_RADIUS))
+            score += 0.55 * float(reposition_urgency) * float(lateral_bias)
+            score += 0.20 * float(distance_delta)
+
+        recent_revisits = move_state.recent_position_keys[:-1]
+        if candidate_key in recent_revisits:
+            score -= float(ENEMY_RECENT_POSITION_PENALTY)
+
+        if candidate_angle is None:
+            score -= 0.45 * float(reposition_urgency) if not current_has_los else 0.08
+
+        score += random.uniform(0.0, 0.01)
+        return float(score), candidate_angle
+
+    def _plan_scripted_move(
+        self,
+        actor: Actor,
+        target: Actor,
         angle_to_target: float,
         move_state: ScriptedMoveState,
-    ) -> bool:
-        escape_angle = (angle_to_target + move_state.escape_offset_degrees) % 360.0
-        if self._move_actor_in_direction(actor, escape_angle):
+    ) -> None:
+        current_has_los = self._has_clear_path_between(actor, target)
+        current_distance = float(actor.position.distance(target.position))
+        best_score: float | None = None
+        best_angle: float | None = None
+
+        for option in SCRIPTED_MOVE_OPTIONS:
+            scored = self._score_scripted_move_option(
+                actor=actor,
+                target=target,
+                angle_to_target=float(angle_to_target),
+                current_has_los=bool(current_has_los),
+                current_distance=float(current_distance),
+                move_state=move_state,
+                option=option,
+            )
+            if scored is None:
+                continue
+            score, candidate_angle = scored
+            if best_score is None or float(score) > float(best_score):
+                best_score = float(score)
+                best_angle = candidate_angle
+
+        move_state.planned_move_angle = best_angle
+        move_state.planned_target_id = target.team
+        move_state.commit_frames_remaining = (
+            max(4, int(ENEMY_MOVE_COMMIT_FRAMES) - min(4, int(move_state.hidden_frames) // 6))
+            if best_angle is not None
+            else 0
+        )
+        move_state.blocked_frames = 0
+
+    def _execute_scripted_move(self, actor: Actor, move_state: ScriptedMoveState) -> bool:
+        if move_state.planned_move_angle is None:
+            move_state.blocked_frames = 0
+            return False
+
+        moved = self._move_actor_in_direction(actor, move_state.planned_move_angle)
+        if moved:
+            move_state.commit_frames_remaining = max(0, int(move_state.commit_frames_remaining) - 1)
+            move_state.blocked_frames = 0
             return True
 
-        new_offset = self._pick_random_escape_offset(actor, angle_to_target)
-        if new_offset is None:
-            return False
-        move_state.escape_offset_degrees = new_offset
-        alternate_angle = (angle_to_target + move_state.escape_offset_degrees) % 360.0
-        return self._move_actor_in_direction(actor, alternate_angle)
+        move_state.blocked_frames += 1
+        move_state.commit_frames_remaining = 0
+        return False
 
     def _step_scripted_movement(self, actor: Actor, target: Actor, angle_to_target: float) -> None:
         move_state = self._scripted_move_state(actor)
-        if move_state.escape_frames_remaining <= 0 and random.random() >= self.enemy_move_probability:
-            return
-        moved = False
+        has_los = self._has_clear_path_between(actor, target)
+        move_state.hidden_frames = 0 if has_los else int(move_state.hidden_frames) + 1
+        target_changed = move_state.planned_target_id != target.team
 
-        if move_state.escape_frames_remaining > 0:
-            moved = self._attempt_scripted_escape_move(actor, angle_to_target, move_state)
-            move_state.escape_frames_remaining -= 1
-        else:
-            move_angle = self._scripted_desired_move_angle(actor, target, angle_to_target)
-            moved = self._move_actor_in_direction(actor, move_angle)
-            if not moved:
-                escape_offset = self._pick_random_escape_offset(actor, angle_to_target)
-                if escape_offset is not None:
-                    move_state.escape_offset_degrees = escape_offset
-                    move_state.escape_frames_remaining = ENEMY_ESCAPE_FOLLOW_FRAMES
-                    moved = self._attempt_scripted_escape_move(actor, angle_to_target, move_state)
-                    if moved:
-                        move_state.escape_frames_remaining -= 1
+        if target_changed or int(move_state.commit_frames_remaining) <= 0 or int(move_state.blocked_frames) > 0:
+            self._plan_scripted_move(actor, target, angle_to_target, move_state)
 
-        if not moved:
-            move_state.escape_frames_remaining = 0
+        moved = self._execute_scripted_move(actor, move_state)
+        if not moved and move_state.planned_move_angle is not None:
+            self._plan_scripted_move(actor, target, angle_to_target, move_state)
+            self._execute_scripted_move(actor, move_state)
+
+        self._remember_scripted_position(actor, move_state)
 
     def _step_scripted_actor(self, actor: Actor) -> None:
         if not actor.is_alive:

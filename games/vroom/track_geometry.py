@@ -52,6 +52,7 @@ class TrackGeometry:
     start_strip_s_min: float
     start_strip_s_max: float
     start_straight_len_px: float
+    main_corner_s: tuple[float, float, float, float]
     template_family: str
     bulged_sides: tuple[str, ...]
     _segment_vectors: np.ndarray
@@ -798,6 +799,28 @@ def build_track_geometry(
     signed_delta = ((arc_s - float(start_s) + 0.5 * float(track_len)) % float(track_len)) - 0.5 * float(track_len)
     start_index = int(np.argmin(np.abs(signed_delta)))
 
+    corner_sample_angles = (-0.25 * math.pi, 0.25 * math.pi, 0.75 * math.pi, 1.25 * math.pi)
+    corner_sample_centers = (
+        (right - corner_r, top + corner_r),
+        (right - corner_r, bottom - corner_r),
+        (left + corner_r, bottom - corner_r),
+        (left + corner_r, top + corner_r),
+    )
+    main_corner_s: list[float] = []
+    for (center_x, center_y), angle in zip(corner_sample_centers, corner_sample_angles):
+        sample_x = float(center_x) + math.cos(float(angle)) * float(corner_r)
+        sample_y = float(center_y) + math.sin(float(angle)) * float(corner_r)
+        corner_proj = _build_projection(
+            centerline=centerline,
+            seg_vec=seg_vec,
+            seg_len=seg_len,
+            seg_s=seg_s,
+            length=track_len,
+            x=float(sample_x),
+            y=float(sample_y),
+        )
+        main_corner_s.append(float(_wrap_s(float(corner_proj.s), float(track_len))))
+
     template_family = TEMPLATE_BY_BULGE_COUNT[int(len(effective_bulged_sides))]
     raw_road_polygon = np.vstack((left_boundary, right_boundary[::-1]))
     road_poly_points = clean_polygon_vertices(
@@ -831,6 +854,7 @@ def build_track_geometry(
         start_strip_s_min=float(start_strip_s_min),
         start_strip_s_max=float(start_strip_s_max),
         start_straight_len_px=float(strip_len),
+        main_corner_s=tuple(float(value) for value in main_corner_s),
         template_family=str(template_family),
         bulged_sides=tuple(str(side) for side in effective_bulged_sides),
         _segment_vectors=np.asarray(seg_vec, dtype=np.float32),

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 
+from core.game import get_game_spec
 from core.logging_utils import configure_logging, log_run_context
-from games.registry import get_game_spec
 
 
 def parse_args() -> argparse.Namespace:

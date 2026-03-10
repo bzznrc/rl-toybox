@@ -1,16 +1,43 @@
-"""Shared helpers used by CLI scripts."""
+"""Shared game catalog, spec builders, and run preparation helpers."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import sys
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
-from core.algorithms.base import Algorithm
-from core.algorithms.factory import build_algorithm
+from core.algorithms.exploration import compute_eps_decay
+from core.envs.base import Env
+from core.envs.spaces import Space
 from core.io.runs import RunPaths, normalize_model_kind, resolve_run_paths
-from games.registry import get_game_spec
-from games.spec_types import GameSpec
+
+if TYPE_CHECKING:
+    from core.algorithms.base import Algorithm
+
+
+EXPLORATION_AVG_WINDOW_EPISODES = 100
+MIN_EPISODES_FOR_STATS = 100
+
+OFF_POLICY_TRAIN_DEFAULTS: dict[str, Any] = {
+    "train_after_steps": 0,
+    "update_every_steps": 1,
+    "updates_per_step": 1,
+    "reward_window": int(EXPLORATION_AVG_WINDOW_EPISODES),
+    "min_episodes_for_stats": int(MIN_EPISODES_FOR_STATS),
+}
+
+
+@dataclass(frozen=True)
+class GameSpec:
+    game_id: str
+    default_algo: str
+    make_env: Callable[..., Env]
+    obs_dim: int
+    action_space: Space
+    run_name: str
+    train_config: dict[str, object] = field(default_factory=dict)
+    algo_config: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -18,10 +45,137 @@ class PreparedRun:
     spec: GameSpec
     algo_id: str
     run_paths: RunPaths
-    algorithm: Algorithm
+    algorithm: "Algorithm"
+
+
+def build_env_factory(env_type: type[Env]) -> Callable[..., Env]:
+    def make_env(mode: str, render: bool, level: int | None = None) -> Env:
+        return env_type(mode=mode, render=render, level=level)
+
+    return make_env
+
+
+def build_hidden_run_name(hidden_sizes: Iterable[int]) -> str:
+    sizes = [int(size) for size in hidden_sizes]
+    if not sizes:
+        raise ValueError("Run-name hidden sizes must not be empty.")
+    return "_".join(str(size) for size in sizes)
+
+
+def build_actor_critic_run_name(
+    actor_hidden_sizes: Iterable[int],
+    critic_hidden_sizes: Iterable[int],
+) -> str:
+    return f"a{build_hidden_run_name(actor_hidden_sizes)}_c{build_hidden_run_name(critic_hidden_sizes)}"
+
+
+def build_exploration_config(
+    eps_start: float,
+    eps_min: float,
+    eps_decay_steps: int,
+    *,
+    patience_episodes: int,
+    min_improvement: float,
+    eps_bump_cap: float,
+    bump_cooldown_steps: int,
+    avg_window_episodes: int = EXPLORATION_AVG_WINDOW_EPISODES,
+) -> dict[str, Any]:
+    return {
+        "eps_start": float(eps_start),
+        "eps_min": float(eps_min),
+        "eps_decay": compute_eps_decay(
+            eps_start=float(eps_start),
+            eps_min=float(eps_min),
+            eps_decay_steps=int(eps_decay_steps),
+        ),
+        "avg_window_episodes": int(avg_window_episodes),
+        "patience_episodes": int(patience_episodes),
+        "min_improvement": float(min_improvement),
+        "eps_bump_cap": float(eps_bump_cap),
+        "bump_cooldown_steps": int(bump_cooldown_steps),
+    }
+
+
+def build_off_policy_train_config(
+    *,
+    max_steps: int,
+    checkpoint_every_steps: int,
+    reward_window: int,
+    min_episodes_for_stats: int | None = None,
+    train_after_steps: int | None = None,
+    update_every_steps: int | None = None,
+    updates_per_step: int | None = None,
+) -> dict[str, object]:
+    config: dict[str, object] = {
+        **OFF_POLICY_TRAIN_DEFAULTS,
+        "max_steps": int(max_steps),
+        "checkpoint_every_steps": int(checkpoint_every_steps),
+        "reward_window": int(reward_window),
+        "min_episodes_for_stats": int(
+            reward_window if min_episodes_for_stats is None else min_episodes_for_stats
+        ),
+    }
+    if train_after_steps is not None:
+        config["train_after_steps"] = int(train_after_steps)
+    if update_every_steps is not None:
+        config["update_every_steps"] = int(update_every_steps)
+    if updates_per_step is not None:
+        config["updates_per_step"] = int(updates_per_step)
+    return config
+
+
+def build_on_policy_train_config(
+    *,
+    max_iterations: int,
+    rollout_steps: int,
+    checkpoint_every_iterations: int,
+    reward_window: int,
+    min_episodes_for_stats: int,
+) -> dict[str, object]:
+    return {
+        "max_iterations": int(max_iterations),
+        "rollout_steps": int(rollout_steps),
+        "checkpoint_every_iterations": int(checkpoint_every_iterations),
+        "reward_window": int(reward_window),
+        "min_episodes_for_stats": int(min_episodes_for_stats),
+    }
+
+
+_GAME_SPECS: dict[str, GameSpec] | None = None
+
+
+def _build_game_specs() -> dict[str, GameSpec]:
+    # Import game specs lazily so the shared builders above can be imported
+    # from each game spec without triggering a circular import.
+    from games.bang.spec import SPEC as bang_spec
+    from games.kick.spec import SPEC as kick_spec
+    from games.snake.spec import SPEC as snake_spec
+    from games.vroom.spec import SPEC as vroom_spec
+    from games.walk.spec import SPEC as walk_spec
+
+    specs = (bang_spec, kick_spec, snake_spec, vroom_spec, walk_spec)
+    return {spec.game_id: spec for spec in specs}
+
+
+def all_game_specs() -> dict[str, GameSpec]:
+    global _GAME_SPECS
+    if _GAME_SPECS is None:
+        _GAME_SPECS = _build_game_specs()
+    return dict(_GAME_SPECS)
+
+
+def get_game_spec(game_id: str) -> GameSpec:
+    game_key = str(game_id).strip().lower()
+    specs = all_game_specs()
+    if game_key not in specs:
+        valid = ", ".join(sorted(specs.keys()))
+        raise KeyError(f"Unknown game '{game_id}'. Valid options: {valid}")
+    return specs[game_key]
 
 
 def prepare_run(game_id: str, algo_override: str | None = None) -> PreparedRun:
+    from core.algorithms.factory import build_algorithm
+
     spec = get_game_spec(game_id)
     algo_id = str(algo_override or spec.default_algo).strip().lower()
     run_paths = resolve_run_paths(spec.game_id, algo_id, spec.run_name, create=True)
@@ -51,7 +205,7 @@ def normalize_resume_mode(mode: str) -> str:
         return "none"
     if mode_key == "checkpoint":
         return "check"
-    return str(mode_key)
+    return mode_key
 
 
 def resume_level_bounds(env: object) -> tuple[int, int]:
@@ -170,3 +324,28 @@ def resolve_play_model_path(run_paths: RunPaths, model_choice: str, level: int) 
     if not path.exists():
         raise FileNotFoundError(f"No model found at '{path}'.")
     return path
+
+
+__all__ = [
+    "EXPLORATION_AVG_WINDOW_EPISODES",
+    "MIN_EPISODES_FOR_STATS",
+    "OFF_POLICY_TRAIN_DEFAULTS",
+    "GameSpec",
+    "PreparedRun",
+    "build_env_factory",
+    "build_hidden_run_name",
+    "build_actor_critic_run_name",
+    "build_exploration_config",
+    "build_off_policy_train_config",
+    "build_on_policy_train_config",
+    "all_game_specs",
+    "get_game_spec",
+    "prepare_run",
+    "resolve_current_level",
+    "normalize_resume_mode",
+    "resume_level_bounds",
+    "resolve_best_resume_level",
+    "apply_training_start_level",
+    "resolve_resume_path",
+    "resolve_play_model_path",
+]

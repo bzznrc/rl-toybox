@@ -112,7 +112,7 @@ Promotion uses shared 3-level curriculum (`CURRICULUM_PROMOTION`) and episode `s
 Rendering notes:
 
 - Terrain rays remain part of the 18-dim observation.
-- Ray lines are hidden in the default render style.
+- Ray lines are shown by default (`WALK_SHOW_PLAYER_RAYS=1`) and can be disabled with that env flag.
 - Pavement distance markers are drawn every 1m from spawn; every 10m marker includes an outline.
 - Foot rendering is visual-clamped to the terrain outline; on contact, feet pivot to stay flat on the surface.
 - The torso render body is also clamped above the same terrain outline.

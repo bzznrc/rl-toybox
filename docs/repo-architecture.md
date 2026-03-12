@@ -35,7 +35,7 @@ Current game snapshots live only in `games/<game>/README.md`.
 ### Folder layout
 - `games/<game_name>/`
   - `env.py`: environment logic
-  - `config.py`: game knobs/constants
+  - `config.py`: game knobs/constants only; do not put `def` helpers here
   - `spec.py`: game-specific `GameSpec` assembly and defaults
   - `README.md`: current game snapshot and run usage
 - `core/`
@@ -52,6 +52,7 @@ Current game snapshots live only in `games/<game>/README.md`.
 
 ### Metadata ownership
 - `games/<game>/spec.py` should contain only game-specific metadata assembly.
+- `games/<game>/config.py` should stay declarative and constants-only; derived behavior belongs in precomputed constants or in the owning runtime/spec module.
 - Shared `GameSpec` types, registry lookup, shared train/play prep, and shared training-config builders live in `core/game.py`.
 - Do not place cross-game helper modules under `games/`; `games/` is reserved for per-game code.
 

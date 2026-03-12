@@ -69,6 +69,25 @@ def build_actor_critic_run_name(
     return f"a{build_hidden_run_name(actor_hidden_sizes)}_c{build_hidden_run_name(critic_hidden_sizes)}"
 
 
+def build_recurrent_run_name(
+    encoder_hidden_sizes: Iterable[int],
+    *,
+    recurrent_type: str,
+    recurrent_hidden_size: int,
+    actor_head_hidden_sizes: Iterable[int],
+    critic_head_hidden_sizes: Iterable[int],
+) -> str:
+    recurrent_key = str(recurrent_type).strip().lower()
+    if recurrent_key not in {"lstm", "gru"}:
+        raise ValueError("Recurrent run name requires recurrent_type 'lstm' or 'gru'.")
+    return (
+        f"e{build_hidden_run_name(encoder_hidden_sizes)}_"
+        f"{recurrent_key}{int(recurrent_hidden_size)}_"
+        f"a{build_hidden_run_name(actor_head_hidden_sizes)}_"
+        f"c{build_hidden_run_name(critic_head_hidden_sizes)}"
+    )
+
+
 def build_exploration_config(
     eps_start: float,
     eps_min: float,
@@ -149,11 +168,12 @@ def _build_game_specs() -> dict[str, GameSpec]:
     # from each game spec without triggering a circular import.
     from games.bang.spec import SPEC as bang_spec
     from games.kick.spec import SPEC as kick_spec
+    from games.peek.spec import SPEC as peek_spec
     from games.snake.spec import SPEC as snake_spec
     from games.vroom.spec import SPEC as vroom_spec
     from games.walk.spec import SPEC as walk_spec
 
-    specs = (bang_spec, kick_spec, snake_spec, vroom_spec, walk_spec)
+    specs = (bang_spec, kick_spec, peek_spec, snake_spec, vroom_spec, walk_spec)
     return {spec.game_id: spec for spec in specs}
 
 
@@ -335,6 +355,7 @@ __all__ = [
     "build_env_factory",
     "build_hidden_run_name",
     "build_actor_critic_run_name",
+    "build_recurrent_run_name",
     "build_exploration_config",
     "build_off_policy_train_config",
     "build_on_policy_train_config",

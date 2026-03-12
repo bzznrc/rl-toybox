@@ -80,6 +80,8 @@ Each game config should keep this structure:
 ### Ownership boundaries
 - Do not duplicate a knob in multiple places.
 - Keep path/artifact boilerplate out of game config when it belongs to shared code.
+- Keep `config.py` modules constants-only: no `def` helpers inside config files.
+- If a game needs derived settings, either precompute constant tables in `config.py` or move the operational logic into the owning runtime module (`env.py`, `spec.py`, shared core code).
 
 ## 4) Observation Taxonomy
 
@@ -156,6 +158,7 @@ Use this order when applicable:
 
 Before merging environment changes:
 - [ ] Config section ordering/ownership remains clean.
+- [ ] Game `config.py` files remain constants-only with no function definitions.
 - [ ] Observation ordering and symmetry rules are preserved.
 - [ ] Reward magnitudes and shaping discipline remain balanced.
 - [ ] Reward breakdown logs realized contributions only.

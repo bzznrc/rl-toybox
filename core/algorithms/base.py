@@ -31,6 +31,9 @@ class Algorithm(ABC):
     def load(self, path: str) -> None:
         """Load state from checkpoint path."""
 
+    def reset_policy_state(self) -> None:
+        """Optional hook for clearing recurrent policy state between episodes."""
+
     def on_episode_end(self, avg_reward: float) -> dict[str, float | int | str] | None:
         """Optional hook for episode-level bookkeeping in runners."""
         del avg_reward

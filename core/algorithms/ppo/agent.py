@@ -1,9 +1,9 @@
-"""Minimal PPO implementation with optional MAPPO-style centralized critic."""
+"""Minimal PPO implementation with optional MAPPO-style centralized critic and recurrence."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, TypeAlias
 
 import numpy as np
 import torch
@@ -12,9 +12,12 @@ import torch.optim as optim
 from torch.distributions import Categorical, Normal
 
 from core.algorithms.base import Algorithm
-from core.algorithms.ppo.networks import ActorCritic
+from core.algorithms.ppo.networks import ActorCritic, RecurrentActorCritic, RecurrentState
 from core.algorithms.ppo.rollout import RolloutBuffer
 from core.io.checkpoint import load_torch_checkpoint, save_torch_checkpoint
+
+
+NumpyRecurrentState: TypeAlias = np.ndarray | tuple[np.ndarray, np.ndarray]
 
 
 @dataclass
@@ -42,6 +45,22 @@ class PPOConfig:
     init_log_std: float = -0.5
     min_log_std: float = -5.0
     max_log_std: float = 2.0
+    recurrent_type: str = "none"
+    recurrent_hidden_size: int = 0
+    actor_head_hidden_sizes: list[int] | None = None
+    critic_head_hidden_sizes: list[int] | None = None
+    recurrent_seq_len: int = 32
+
+
+@dataclass(frozen=True)
+class RecurrentChunk:
+    observations: np.ndarray
+    actions: np.ndarray
+    action_masks: np.ndarray | None
+    old_log_probs: np.ndarray
+    advantages: np.ndarray
+    returns: np.ndarray
+    initial_state: NumpyRecurrentState | None
 
 
 class PPOAlgorithm(Algorithm):
@@ -60,7 +79,15 @@ class PPOAlgorithm(Algorithm):
         if (not self._is_discrete) and self._action_low >= self._action_high:
             raise ValueError("PPO continuous action bounds require action_low < action_high.")
 
+        self._recurrent_type = str(config.recurrent_type).strip().lower()
+        if self._recurrent_type not in {"none", "lstm", "gru"}:
+            raise ValueError("PPO recurrent_type must be 'none', 'lstm', or 'gru'.")
+        self._is_recurrent = bool(self._recurrent_type in {"lstm", "gru"})
+        self._recurrent_seq_len = max(1, int(config.recurrent_seq_len))
+
         self._use_centralized_critic = bool(config.centralized_critic)
+        if self._is_recurrent and self._use_centralized_critic:
+            raise ValueError("Recurrent PPO currently supports only decentralized critics.")
         if self._use_centralized_critic:
             if config.critic_obs_dim is None:
                 raise ValueError("PPO centralized critic requires critic_obs_dim.")
@@ -80,23 +107,50 @@ class PPOAlgorithm(Algorithm):
             else list(config.critic_hidden_sizes)
         )
 
-        self.model = ActorCritic(
-            config.obs_dim,
-            config.action_dim,
-            config.hidden_sizes,
-            critic_obs_dim=int(self._critic_obs_dim),
-            critic_hidden_sizes=critic_hidden_sizes,
-            action_type=str(self._action_type),
-            init_log_std=float(config.init_log_std),
-            min_log_std=float(config.min_log_std),
-            max_log_std=float(config.max_log_std),
-        ).to(self.device)
+        if self._is_recurrent:
+            if int(config.recurrent_hidden_size) <= 0:
+                raise ValueError("Recurrent PPO requires recurrent_hidden_size > 0.")
+            self.model = RecurrentActorCritic(
+                config.obs_dim,
+                config.action_dim,
+                list(config.hidden_sizes),
+                recurrent_hidden_size=int(config.recurrent_hidden_size),
+                recurrent_type=str(self._recurrent_type),
+                actor_head_hidden_sizes=(
+                    [] if config.actor_head_hidden_sizes is None else list(config.actor_head_hidden_sizes)
+                ),
+                critic_head_hidden_sizes=(
+                    [] if config.critic_head_hidden_sizes is None else list(config.critic_head_hidden_sizes)
+                ),
+                action_type=str(self._action_type),
+                init_log_std=float(config.init_log_std),
+                min_log_std=float(config.min_log_std),
+                max_log_std=float(config.max_log_std),
+            ).to(self.device)
+        else:
+            self.model = ActorCritic(
+                config.obs_dim,
+                config.action_dim,
+                config.hidden_sizes,
+                critic_obs_dim=int(self._critic_obs_dim),
+                critic_hidden_sizes=critic_hidden_sizes,
+                action_type=str(self._action_type),
+                init_log_std=float(config.init_log_std),
+                min_log_std=float(config.min_log_std),
+                max_log_std=float(config.max_log_std),
+            ).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=float(config.learning_rate))
         self.rollout = RolloutBuffer()
 
         self._last_log_prob: float | np.ndarray = 0.0
         self._last_value: float | np.ndarray = 0.0
         self._last_action_for_storage: int | np.ndarray | None = None
+        self._policy_state: RecurrentState | None = None
+        self._last_recurrent_state_for_storage: NumpyRecurrentState | None = None
+
+    def reset_policy_state(self) -> None:
+        self._policy_state = None
+        self._last_recurrent_state_for_storage = None
 
     def _normalize_action_mask(
         self,
@@ -267,8 +321,96 @@ class PPOAlgorithm(Algorithm):
 
     def _continuous_distribution(self, means: torch.Tensor) -> Normal:
         log_std = self.model.policy_log_std()
-        std = torch.exp(log_std).unsqueeze(0).expand_as(means)
+        expand_dims = [1] * max(0, means.dim() - 2)
+        std = torch.exp(log_std).reshape(*expand_dims, int(self.config.action_dim)).expand_as(means)
         return Normal(means, std)
+
+    @staticmethod
+    def _recurrent_batch_size(state: RecurrentState) -> int:
+        if isinstance(state, tuple):
+            return int(state[0].shape[1])
+        return int(state.shape[1])
+
+    def _zero_recurrent_state(self, batch_size: int) -> RecurrentState:
+        if not self._is_recurrent or not isinstance(self.model, RecurrentActorCritic):
+            raise RuntimeError("Recurrent PPO state requested for a feedforward PPO model.")
+        return self.model.zero_state(int(batch_size), self.device)
+
+    def _prepare_policy_state(self, batch_size: int) -> RecurrentState:
+        if not self._is_recurrent:
+            raise RuntimeError("Recurrent policy state requested for a feedforward PPO model.")
+        if int(batch_size) != 1:
+            raise ValueError("Recurrent PPO currently supports only single-agent rollout batches.")
+        state = self._policy_state
+        if state is None or int(self._recurrent_batch_size(state)) != int(batch_size):
+            state = self._zero_recurrent_state(int(batch_size))
+        return state
+
+    @staticmethod
+    def _detach_recurrent_state(state: RecurrentState) -> RecurrentState:
+        if isinstance(state, tuple):
+            return tuple(part.detach() for part in state)
+        return state.detach()
+
+    @staticmethod
+    def _recurrent_state_to_numpy(state: RecurrentState | None) -> NumpyRecurrentState | None:
+        if state is None:
+            return None
+        if isinstance(state, tuple):
+            h, c = state
+            return (
+                h.detach().cpu().numpy().astype(np.float32).squeeze(1),
+                c.detach().cpu().numpy().astype(np.float32).squeeze(1),
+            )
+        return state.detach().cpu().numpy().astype(np.float32).squeeze(1)
+
+    def _numpy_state_to_torch(
+        self,
+        state: NumpyRecurrentState | None,
+        *,
+        batch_size: int,
+    ) -> RecurrentState:
+        if state is None:
+            return self._zero_recurrent_state(int(batch_size))
+        if self._recurrent_type == "gru":
+            state_array = np.asarray(state, dtype=np.float32)
+            if state_array.ndim == 2:
+                state_array = state_array[:, None, :]
+            return torch.as_tensor(state_array, dtype=torch.float32, device=self.device)
+        if not isinstance(state, tuple) or len(state) != 2:
+            raise ValueError("LSTM PPO expected recurrent state tuple(h, c).")
+        h_raw, c_raw = state
+        h_array = np.asarray(h_raw, dtype=np.float32)
+        c_array = np.asarray(c_raw, dtype=np.float32)
+        if h_array.ndim == 2:
+            h_array = h_array[:, None, :]
+        if c_array.ndim == 2:
+            c_array = c_array[:, None, :]
+        return (
+            torch.as_tensor(h_array, dtype=torch.float32, device=self.device),
+            torch.as_tensor(c_array, dtype=torch.float32, device=self.device),
+        )
+
+    def _stack_recurrent_states(self, states: list[NumpyRecurrentState | None]) -> RecurrentState:
+        normalized = [
+            self._recurrent_state_to_numpy(self._zero_recurrent_state(1)) if state is None else state
+            for state in states
+        ]
+        if self._recurrent_type == "gru":
+            stacked = np.stack([np.asarray(state, dtype=np.float32) for state in normalized], axis=1)
+            return torch.as_tensor(stacked, dtype=torch.float32, device=self.device)
+        h_stack = np.stack([np.asarray(state[0], dtype=np.float32) for state in normalized], axis=1)
+        c_stack = np.stack([np.asarray(state[1], dtype=np.float32) for state in normalized], axis=1)
+        return (
+            torch.as_tensor(h_stack, dtype=torch.float32, device=self.device),
+            torch.as_tensor(c_stack, dtype=torch.float32, device=self.device),
+        )
+
+    @staticmethod
+    def _masked_mean(values: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        valid = valid_mask.to(dtype=values.dtype)
+        denom = torch.clamp(valid.sum(), min=1.0)
+        return (values * valid).sum() / denom
 
     def act(
         self,
@@ -284,19 +426,24 @@ class PPOAlgorithm(Algorithm):
         if action_mask is not None and self._is_discrete:
             mask_array = self._normalize_action_mask(action_mask, batch_size=batch_size)
 
-        central_batch = self._as_batch_central_obs(
-            central_obs,
-            batch_size=batch_size,
-            fallback_obs_batch=obs_batch,
-        )
-        critic_input_batch = self._build_critic_input(
-            obs_batch=obs_batch,
-            central_obs_batch=central_batch,
-        )
-
         obs_tensor = torch.as_tensor(obs_batch, dtype=torch.float32, device=self.device)
-        critic_obs_tensor = torch.as_tensor(critic_input_batch, dtype=torch.float32, device=self.device)
-        policy_output, value = self.model(obs_tensor, critic_obs=critic_obs_tensor)
+        if self._is_recurrent:
+            policy_state = self._prepare_policy_state(batch_size)
+            self._last_recurrent_state_for_storage = self._recurrent_state_to_numpy(policy_state)
+            policy_output, value, next_state = self.model.forward_step(obs_tensor, state=policy_state)
+            self._policy_state = self._detach_recurrent_state(next_state)
+        else:
+            central_batch = self._as_batch_central_obs(
+                central_obs,
+                batch_size=batch_size,
+                fallback_obs_batch=obs_batch,
+            )
+            critic_input_batch = self._build_critic_input(
+                obs_batch=obs_batch,
+                central_obs_batch=central_batch,
+            )
+            critic_obs_tensor = torch.as_tensor(critic_input_batch, dtype=torch.float32, device=self.device)
+            policy_output, value = self.model(obs_tensor, critic_obs=critic_obs_tensor)
 
         if self._is_discrete:
             masked_logits = self._masked_logits(policy_output, mask_array)
@@ -349,6 +496,9 @@ class PPOAlgorithm(Algorithm):
         next_obs_batch = self._as_batch_obs(transition["next_obs"])
         batch_size = int(obs_batch.shape[0])
 
+        if self._is_recurrent and int(batch_size) != 1:
+            raise ValueError("Recurrent PPO currently supports only single-agent rollout batches.")
+
         action_source = self._last_action_for_storage
         if action_source is None:
             action_source = transition["action"]
@@ -378,6 +528,8 @@ class PPOAlgorithm(Algorithm):
 
         self.rollout.observations.append(obs_batch)
         self.rollout.centralized_observations.append(central_obs_batch)
+        if self._is_recurrent:
+            self.rollout.recurrent_states.append(self._last_recurrent_state_for_storage)
         self.rollout.actions.append(actions)
         self.rollout.action_masks.append(action_masks)
         self.rollout.rewards.append(rewards)
@@ -386,8 +538,12 @@ class PPOAlgorithm(Algorithm):
         self.rollout.values.append(values)
         self.rollout.last_next_observation = next_obs_batch
         self.rollout.last_next_centralized_observation = next_central_obs_batch
+        self.rollout.last_next_recurrent_state = (
+            self._recurrent_state_to_numpy(self._policy_state) if self._is_recurrent else None
+        )
         self.rollout.last_done = np.asarray(dones, dtype=np.bool_).reshape(-1)
         self._last_action_for_storage = None
+        self._last_recurrent_state_for_storage = None
 
     def _rollout_bootstrap_value(self, expected_batch_size: int) -> np.ndarray:
         if expected_batch_size <= 0:
@@ -407,6 +563,17 @@ class PPOAlgorithm(Algorithm):
             return np.zeros((expected_batch_size,), dtype=np.float32)
 
         next_obs_batch = np.asarray(self.rollout.last_next_observation, dtype=np.float32)
+        if self._is_recurrent:
+            next_state = self._numpy_state_to_torch(
+                self.rollout.last_next_recurrent_state,
+                batch_size=expected_batch_size,
+            )
+            with torch.no_grad():
+                next_obs_tensor = torch.as_tensor(next_obs_batch, dtype=torch.float32, device=self.device)
+                _, next_values_tensor, _ = self.model.forward_step(next_obs_tensor, state=next_state)
+            next_values = next_values_tensor.detach().cpu().numpy().astype(np.float32).reshape(-1)
+            return next_values * (1.0 - done_last)
+
         next_central_obs_raw = self.rollout.last_next_centralized_observation
         next_central_obs_batch = self._as_batch_central_obs(
             next_central_obs_raw,
@@ -480,12 +647,11 @@ class PPOAlgorithm(Algorithm):
                 advantages = [(adv - mean) / (std + 1e-8) for adv in advantages]
         return advantages, returns
 
-    def update(self) -> dict[str, float]:
-        if len(self.rollout) == 0:
-            return {}
-
-        advantages_batches, returns_batches = self._compute_gae()
-
+    def _update_feedforward(
+        self,
+        advantages_batches: list[np.ndarray],
+        returns_batches: list[np.ndarray],
+    ) -> dict[str, float]:
         obs_flat = np.concatenate(
             [
                 np.asarray(batch, dtype=np.float32).reshape(-1, int(self.config.obs_dim))
@@ -628,7 +794,6 @@ class PPOAlgorithm(Algorithm):
         mean_entropy = entropy_sum / float(denom)
         mean_approx_kl = approx_kl_sum / float(denom)
         mean_clip_frac = clip_frac_sum / float(denom)
-        self.rollout.clear()
         return {
             "loss": mean_loss,
             "policy_loss": mean_policy_loss,
@@ -637,6 +802,252 @@ class PPOAlgorithm(Algorithm):
             "approx_kl": mean_approx_kl,
             "clip_frac": mean_clip_frac,
         }
+
+    def _build_recurrent_chunks(
+        self,
+        advantages_batches: list[np.ndarray],
+        returns_batches: list[np.ndarray],
+    ) -> list[RecurrentChunk]:
+        if len(self.rollout.observations) != len(self.rollout.recurrent_states):
+            raise RuntimeError("Recurrent PPO rollout missing recurrent states for one or more steps.")
+
+        obs_steps = [
+            np.asarray(batch, dtype=np.float32).reshape(-1, int(self.config.obs_dim))
+            for batch in self.rollout.observations
+        ]
+        action_steps = [np.asarray(batch) for batch in self.rollout.actions]
+        action_mask_steps = [
+            np.asarray(batch, dtype=np.bool_).reshape(-1, int(self.config.action_dim))
+            for batch in self.rollout.action_masks
+        ]
+        old_log_prob_steps = [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in self.rollout.log_probs]
+        advantage_steps = [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in advantages_batches]
+        return_steps = [np.asarray(batch, dtype=np.float32).reshape(-1) for batch in returns_batches]
+        done_steps = [np.asarray(batch, dtype=np.bool_).reshape(-1) for batch in self.rollout.dones]
+
+        for step_idx, obs_step in enumerate(obs_steps):
+            if int(obs_step.shape[0]) != 1:
+                raise ValueError("Recurrent PPO currently supports only single-agent rollout batches.")
+            if int(done_steps[step_idx].shape[0]) != 1:
+                raise ValueError("Recurrent PPO done flags must have batch size 1.")
+
+        chunks: list[RecurrentChunk] = []
+        step_count = len(obs_steps)
+        start = 0
+        while start < step_count:
+            end = start
+            max_end = min(step_count, start + int(self._recurrent_seq_len))
+            while end < max_end:
+                end += 1
+                if bool(done_steps[end - 1][0]):
+                    break
+
+            obs_chunk = np.stack([obs_steps[idx][0] for idx in range(start, end)], axis=0).astype(
+                np.float32,
+                copy=False,
+            )
+            if self._is_discrete:
+                action_chunk = np.asarray(
+                    [np.asarray(action_steps[idx], dtype=np.int64).reshape(-1)[0] for idx in range(start, end)],
+                    dtype=np.int64,
+                )
+            else:
+                action_chunk = np.stack(
+                    [
+                        np.asarray(action_steps[idx], dtype=np.float32).reshape(-1, int(self.config.action_dim))[0]
+                        for idx in range(start, end)
+                    ],
+                    axis=0,
+                ).astype(np.float32, copy=False)
+            action_mask_chunk = np.stack(
+                [action_mask_steps[idx][0] for idx in range(start, end)],
+                axis=0,
+            ).astype(np.bool_, copy=False)
+            old_log_prob_chunk = np.asarray(
+                [old_log_prob_steps[idx][0] for idx in range(start, end)],
+                dtype=np.float32,
+            )
+            advantage_chunk = np.asarray(
+                [advantage_steps[idx][0] for idx in range(start, end)],
+                dtype=np.float32,
+            )
+            return_chunk = np.asarray(
+                [return_steps[idx][0] for idx in range(start, end)],
+                dtype=np.float32,
+            )
+            chunks.append(
+                RecurrentChunk(
+                    observations=obs_chunk,
+                    actions=action_chunk,
+                    action_masks=action_mask_chunk if self._is_discrete else None,
+                    old_log_probs=old_log_prob_chunk,
+                    advantages=advantage_chunk,
+                    returns=return_chunk,
+                    initial_state=self.rollout.recurrent_states[start],
+                )
+            )
+            start = end
+        return chunks
+
+    def _recurrent_minibatches(self, chunks: list[RecurrentChunk]) -> list[list[RecurrentChunk]]:
+        if not chunks:
+            return []
+        order = np.random.permutation(len(chunks))
+        groups: list[list[RecurrentChunk]] = []
+        current_group: list[RecurrentChunk] = []
+        current_steps = 0
+        target_steps = max(1, int(self.config.minibatch_size))
+        for idx in order.tolist():
+            chunk = chunks[int(idx)]
+            chunk_steps = int(chunk.observations.shape[0])
+            if current_group and (current_steps + chunk_steps) > target_steps:
+                groups.append(current_group)
+                current_group = []
+                current_steps = 0
+            current_group.append(chunk)
+            current_steps += chunk_steps
+        if current_group:
+            groups.append(current_group)
+        return groups
+
+    def _update_recurrent(
+        self,
+        advantages_batches: list[np.ndarray],
+        returns_batches: list[np.ndarray],
+    ) -> dict[str, float]:
+        chunks = self._build_recurrent_chunks(advantages_batches, returns_batches)
+        if not chunks:
+            return {}
+
+        total_loss = 0.0
+        policy_loss_sum = 0.0
+        value_loss_sum = 0.0
+        entropy_sum = 0.0
+        approx_kl_sum = 0.0
+        clip_frac_sum = 0.0
+        update_steps = 0
+
+        for _ in range(int(self.config.update_epochs)):
+            for group in self._recurrent_minibatches(chunks):
+                batch_size = len(group)
+                max_len = max(int(chunk.observations.shape[0]) for chunk in group)
+                obs_batch = np.zeros((batch_size, max_len, int(self.config.obs_dim)), dtype=np.float32)
+                valid_mask = np.zeros((batch_size, max_len), dtype=np.bool_)
+                old_log_probs = np.zeros((batch_size, max_len), dtype=np.float32)
+                advantages = np.zeros((batch_size, max_len), dtype=np.float32)
+                returns = np.zeros((batch_size, max_len), dtype=np.float32)
+                if self._is_discrete:
+                    actions = np.zeros((batch_size, max_len), dtype=np.int64)
+                    action_masks = np.ones(
+                        (batch_size, max_len, int(self.config.action_dim)),
+                        dtype=np.bool_,
+                    )
+                else:
+                    actions = np.zeros(
+                        (batch_size, max_len, int(self.config.action_dim)),
+                        dtype=np.float32,
+                    )
+                    action_masks = None
+
+                initial_states: list[NumpyRecurrentState | None] = []
+                for row_idx, chunk in enumerate(group):
+                    length = int(chunk.observations.shape[0])
+                    obs_batch[row_idx, :length, :] = chunk.observations
+                    valid_mask[row_idx, :length] = True
+                    old_log_probs[row_idx, :length] = chunk.old_log_probs
+                    advantages[row_idx, :length] = chunk.advantages
+                    returns[row_idx, :length] = chunk.returns
+                    if self._is_discrete:
+                        actions[row_idx, :length] = np.asarray(chunk.actions, dtype=np.int64)
+                        action_masks[row_idx, :length, :] = np.asarray(chunk.action_masks, dtype=np.bool_)
+                    else:
+                        actions[row_idx, :length, :] = np.asarray(chunk.actions, dtype=np.float32)
+                    initial_states.append(chunk.initial_state)
+
+                obs_tensor = torch.as_tensor(obs_batch, dtype=torch.float32, device=self.device)
+                valid_tensor = torch.as_tensor(valid_mask, dtype=torch.bool, device=self.device)
+                old_log_prob_tensor = torch.as_tensor(old_log_probs, dtype=torch.float32, device=self.device)
+                advantage_tensor = torch.as_tensor(advantages, dtype=torch.float32, device=self.device)
+                returns_tensor = torch.as_tensor(returns, dtype=torch.float32, device=self.device)
+                initial_state_tensor = self._stack_recurrent_states(initial_states)
+
+                if self._is_discrete:
+                    action_tensor = torch.as_tensor(actions, dtype=torch.long, device=self.device)
+                    action_mask_tensor = torch.as_tensor(action_masks, dtype=torch.bool, device=self.device)
+                else:
+                    action_tensor = torch.as_tensor(actions, dtype=torch.float32, device=self.device)
+                    action_mask_tensor = None
+
+                policy_output, values, _ = self.model.forward_sequence(obs_tensor, state=initial_state_tensor)
+                if self._is_discrete:
+                    if action_mask_tensor is None:
+                        raise RuntimeError("Recurrent PPO discrete update requires action masks tensor.")
+                    masked_logits = policy_output.masked_fill(~action_mask_tensor, float(-1e9))
+                    dist = Categorical(logits=masked_logits)
+                    log_probs = dist.log_prob(action_tensor)
+                    entropy_terms = dist.entropy()
+                else:
+                    dist = self._continuous_distribution(policy_output)
+                    log_probs = dist.log_prob(action_tensor).sum(dim=-1)
+                    entropy_terms = dist.entropy().sum(dim=-1)
+
+                ratio = torch.exp(log_probs - old_log_prob_tensor)
+                unclipped = ratio * advantage_tensor
+                clipped = torch.clamp(
+                    ratio,
+                    1.0 - float(self.config.clip_ratio),
+                    1.0 + float(self.config.clip_ratio),
+                ) * advantage_tensor
+                policy_loss = -self._masked_mean(torch.min(unclipped, clipped), valid_tensor)
+                value_loss = self._masked_mean((values - returns_tensor) ** 2, valid_tensor)
+                entropy = self._masked_mean(entropy_terms, valid_tensor)
+                loss = (
+                    policy_loss
+                    + float(self.config.value_coef) * value_loss
+                    - float(self.config.entropy_coef) * entropy
+                )
+                with torch.no_grad():
+                    approx_kl = self._masked_mean(old_log_prob_tensor - log_probs, valid_tensor)
+                    clip_frac = self._masked_mean(
+                        (torch.abs(ratio - 1.0) > float(self.config.clip_ratio)).float(),
+                        valid_tensor,
+                    )
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), float(self.config.max_grad_norm))
+                self.optimizer.step()
+
+                total_loss += float(loss.item())
+                policy_loss_sum += float(policy_loss.item())
+                value_loss_sum += float(value_loss.item())
+                entropy_sum += float(entropy.item())
+                approx_kl_sum += float(approx_kl.item())
+                clip_frac_sum += float(clip_frac.item())
+                update_steps += 1
+
+        denom = max(1, int(update_steps))
+        return {
+            "loss": total_loss / float(denom),
+            "policy_loss": policy_loss_sum / float(denom),
+            "value_loss": value_loss_sum / float(denom),
+            "entropy": entropy_sum / float(denom),
+            "approx_kl": approx_kl_sum / float(denom),
+            "clip_frac": clip_frac_sum / float(denom),
+        }
+
+    def update(self) -> dict[str, float]:
+        if len(self.rollout) == 0:
+            return {}
+
+        advantages_batches, returns_batches = self._compute_gae()
+        metrics = (
+            self._update_recurrent(advantages_batches, returns_batches)
+            if self._is_recurrent
+            else self._update_feedforward(advantages_batches, returns_batches)
+        )
+        self.rollout.clear()
+        return metrics
 
     def save(self, path: str) -> None:
         save_torch_checkpoint(
@@ -656,6 +1067,6 @@ class PPOAlgorithm(Algorithm):
             optimizer_state = checkpoint.get("optimizer")
             if optimizer_state is not None:
                 self.optimizer.load_state_dict(optimizer_state)
-            return
-
-        self.model.load_state_dict(checkpoint)
+        else:
+            self.model.load_state_dict(checkpoint)
+        self.reset_policy_state()

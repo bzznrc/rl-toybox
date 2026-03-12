@@ -88,6 +88,12 @@ def _reward_scalar(reward: object) -> float:
     return float(reward_array.sum())
 
 
+def _reset_policy_state(algorithm: Algorithm) -> None:
+    reset_fn = getattr(algorithm, "reset_policy_state", None)
+    if callable(reset_fn):
+        reset_fn()
+
+
 def run_eval(
     env: Env,
     algorithm: Algorithm,
@@ -100,6 +106,7 @@ def run_eval(
     wins = 0
 
     for _ in range(int(episodes)):
+        _reset_policy_state(algorithm)
         obs = env.reset()
         episode_reward = 0.0
         length = 0

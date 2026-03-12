@@ -188,12 +188,19 @@ def _reward_scalar(reward: object) -> float:
     return float(reward_array.sum())
 
 
+def _reset_policy_state(algorithm: Algorithm) -> None:
+    reset_fn = getattr(algorithm, "reset_policy_state", None)
+    if callable(reset_fn):
+        reset_fn()
+
+
 def run_on_policy_training(
     env: Env,
     algorithm: Algorithm,
     run_paths: RunPaths,
     config: OnPolicyConfig,
 ) -> dict[str, float | int]:
+    _reset_policy_state(algorithm)
     obs = env.reset()
     episode_reward = 0.0
     episode_steps = 0
@@ -336,6 +343,7 @@ def run_on_policy_training(
                             ),
                         )
                 obs = env.reset()
+                _reset_policy_state(algorithm)
                 episode_reward = 0.0
                 episode_steps = 0
 

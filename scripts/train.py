@@ -19,7 +19,7 @@ from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an RL toybox game")
-    parser.add_argument("--game", required=True, help="Game id (bang, snake, vroom, walk, kick)")
+    parser.add_argument("--game", required=True, help="Game id (bang, snake, vroom, walk, kick, peek)")
     parser.add_argument("--algo", default=None, help="Override algorithm id")
     parser.add_argument("--render", action="store_true", help="Show Arcade window during training")
     parser.add_argument(

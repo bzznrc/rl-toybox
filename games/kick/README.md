@@ -2,6 +2,10 @@
 
 Arcade-style top-down football with shared-team MAPPO training (CTDE): one shared actor for all LEFT players, centralized critic during training.
 
+## Clip
+
+No embedded clip yet.
+
 ## Algorithm / Network
 
 - Algo: PPO with MAPPO-style training (shared/decentralized actor + centralized critic)
@@ -44,7 +48,9 @@ Arcade-style top-down football with shared-team MAPPO training (CTDE): one share
   - `10 kick_mid`
   - `11 kick_high`
 
-## Possession Semantics
+## Environment Notes
+
+### Possession Semantics
 
 - Physical owner:
   - `ball_owner_team`, `ball_owner_id` (stable slot id) from `ball_owner` (or `None` when free/in flight)
@@ -58,11 +64,32 @@ Arcade-style top-down football with shared-team MAPPO training (CTDE): one share
   - padded `central_obs` for up to `MAX_LEFT_PLAYERS=11`
   - `central_mask` marks present/padded LEFT slots
 
-## Action Masking
+### Action Masking
 
 - If `self_has_ball == 0`, `kick_low/mid/high` are invalid.
 - Masking is applied in both training and eval.
 - Eval policy selection uses masked argmax, so invalid kicks are not chosen.
+
+### Step Contract
+
+- `env.step(...)` returns scalar team reward (`float`, sum of per-player rewards).
+- Per-player rewards are always in `info["reward_vec"]` with length `N_left`.
+- Reward breakdown in `info["reward_breakdown"]` contains realized step contributions by component key.
+
+### PPO Debug Line
+
+- After each episode line, training prints one extra tab-separated PPO line:
+  - `> PPO	PolicyLoss: ...	ValueLoss: ...	Entropy: ...	ApproxKl: ...	ClipFrac: ...`
+- Before the first PPO update, these fields print as `n/a`.
+
+### Sanity Flag
+
+- `KICK_DEBUG_SANITY=1` enables quick runtime checks for:
+  - RL obs shape `(N_left, 48)`
+  - stable nearest ordering for own/opp blocks
+  - masked invalid-kick prevention in eval
+  - GK-catch turnover exclusion
+  - scalar step reward + `reward_vec` length
 
 ## Rewards (Training)
 
@@ -83,18 +110,6 @@ Realized components logged as `G C T A P Z`:
   - `excess = max(0, d_i - 0.05)`
   - `rZ_i = -0.01 * (excess^2)`
 
-## Step Contract
-
-- `env.step(...)` returns scalar team reward (`float`, sum of per-player rewards).
-- Per-player rewards are always in `info["reward_vec"]` with length `N_left`.
-- Reward breakdown in `info["reward_breakdown"]` contains realized step contributions by component key.
-
-## PPO Debug Line
-
-- After each episode line, training prints one extra tab-separated PPO line:
-  - `> PPO	PolicyLoss: ...	ValueLoss: ...	Entropy: ...	ApproxKl: ...	ClipFrac: ...`
-- Before the first PPO update, these fields print as `n/a`.
-
 ## Curriculum (Train)
 
 - Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
@@ -107,21 +122,15 @@ Realized components logged as `G C T A P Z`:
 
 Success per episode is `1` when LEFT scores more than it concedes, else `0`.
 
-## Sanity Flag
-
-- `KICK_DEBUG_SANITY=1` enables quick runtime checks for:
-  - RL obs shape `(N_left, 48)`
-  - stable nearest ordering for own/opp blocks
-  - masked invalid-kick prevention in eval
-  - GK-catch turnover exclusion
-  - scalar step reward + `reward_vec` length
-
 ## Run Commands
 
 ```bash
-rl-toybox-train --game kick --algo ppo
+rl-toybox-train --game kick
 rl-toybox-play-ai --game kick --model best --render
 rl-toybox-play-user --game kick
+python -m scripts.train --game kick
+python -m scripts.play_ai --game kick --model best --render
+python -m scripts.play_user --game kick
 ```
 
 Check `games/kick/config.py` for full PPO/MAPPO settings and curriculum parameters.

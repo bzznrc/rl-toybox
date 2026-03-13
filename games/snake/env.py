@@ -504,7 +504,7 @@ class TrainingSnakeGame(BaseSnakeGame):
             cell_x = head_cell_x + int(dir_x) * step
             cell_y = head_cell_y + int(dir_y) * step
             if self._is_collision_for_cell(cell_x, cell_y):
-                return float(step) / float(max_range)
+                return float(step - 1) / float(max_range)
         return 1.0
 
     def _food_manhattan_norm(self) -> float:

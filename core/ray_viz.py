@@ -19,7 +19,7 @@ def draw_player_rays(
     to_screen: Callable[[float, float], tuple[float, float]],
     line_width: float = 1.0,
 ) -> None:
-    """Draw player sensor rays using normalized hit fractions."""
+    """Draw player sensor rays using normalized free-space fractions."""
 
     count = min(len(ray_dirs), len(ray_values), len(ray_max_distances))
     if count <= 0:

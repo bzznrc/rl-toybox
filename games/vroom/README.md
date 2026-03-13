@@ -51,7 +51,13 @@ Opponent slot notes:
 - Opponents are ordered deterministically each frame: ahead first by nearest longitudinal `dx`, then behind by nearest `|dx|`, with `dy` tie-break.
 - Missing opponent slots are zero-filled.
 
-## Race Rules
+Edge probe notes:
+- `edg_*` are normalized free-space-before-track-edge values in `[0,1]`.
+- `0.0` means the edge is effectively in contact with the probe origin and `1.0` means no edge within probe range.
+
+## Environment Notes
+
+### Race Rules
 
 - Each race is exactly `1` lap.
 - A new random smooth closed-loop track is created at every reset.
@@ -61,7 +67,7 @@ Opponent slot notes:
   - `train`: `1` race
   - `eval` / `human`: `10` races per set
 
-## Scripted Opponents
+### Scripted Opponents
 
 - Opponents follow a simple lane-keeping script.
 - Speed targets are scaled by `opponent_speed_cap`, with three section multipliers:
@@ -101,6 +107,9 @@ Success per episode is `1` if player wins, else `0`.
 rl-toybox-train --game vroom
 rl-toybox-play-ai --game vroom --model best --render
 rl-toybox-play-user --game vroom
+python -m scripts.train --game vroom
+python -m scripts.play_ai --game vroom --model best --render
+python -m scripts.play_user --game vroom
 ```
 
 Check `games/vroom/config.py` for full hyperparameters.

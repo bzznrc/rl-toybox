@@ -4,12 +4,25 @@ Arcade-style side-view continuous-control biped walker demo for PPO.
 
 `walk` is intentionally lightweight: simple articulated kinematics, terrain contact springs, and a compact observation space designed for stable toy-repo training.
 
+## Clip
+
+No embedded clip yet.
+
 ## Algorithm / Network
 
 - Algo: PPO (shared on-policy runner)
 - Actor/Critic MLP: `[32, 32]`
 - Action space: `Box(shape=(4,), low=-1.0, high=1.0)`
 - Continuous policy: diagonal Gaussian (`mean + learned log_std`)
+
+## Controls (Human)
+
+- Minimal keyboard torque control is available:
+  - Left hip: `A` (negative), `D` (positive)
+  - Left knee: `S` (negative), `W` (positive)
+  - Right hip: `J` (negative), `L` (positive)
+  - Right knee: `K` (negative), `I` (positive)
+- AI train/eval flow is the primary target.
 
 ## Observation / Actions
 
@@ -48,14 +61,17 @@ Important walk-specific exception:
 - Joint/torso angles are normalized scalar angles (not sin/cos pairs) on purpose.
 - This keeps `OBS_DIM=18` exactly and is intentional for this compact demo.
 
-## Rays / Sensing
+## Environment Notes
+
+### Rays / Sensing
 
 - Four forward/down ground rays from the upper torso region.
 - Ray directions are `+15°`, `+30°`, `+45°`, `+60°` from straight down toward forward.
-- Values are normalized hit distances in `[0,1]`.
+- Values are normalized free-space-before-terrain values in `[0,1]`.
+- `0.0` means terrain is hit immediately from the ray origin.
 - `1.0` means no terrain hit within max ray range.
 
-## Physics Model
+### Physics Model
 
 - Semi-implicit Euler integration at fixed `dt`.
 - State includes torso pose/velocity and per-joint angles/velocities.
@@ -65,7 +81,15 @@ Important walk-specific exception:
 - Extreme torso tilt very near the ground is treated as a fall trigger to avoid unrealistic near-ground hovering.
 - Poor control falls; stable control can learn walk-like forward gait.
 
-## Rewards
+### Rendering Notes
+
+- Terrain rays remain part of the 18-dim observation.
+- Ray lines are shown by default (`WALK_SHOW_PLAYER_RAYS=1`) and can be disabled with that env flag.
+- Pavement distance markers are drawn every 1m from spawn; every 10m marker includes an outline.
+- Foot rendering is visual-clamped to the terrain outline; on contact, feet pivot to stay flat on the surface.
+- The torso render body is also clamped above the same terrain outline.
+
+## Rewards (Training)
 
 Realized reward components are logged as `P L`:
 
@@ -78,7 +102,7 @@ Realized reward components are logged as `P L`:
 
 No win bonus, no per-step penalty, and no signed-`dx`/velocity shaping are used.
 
-## Curriculum
+## Curriculum (Train)
 
 Three levels, success-based promotion:
 
@@ -99,23 +123,6 @@ Terrain spacing and base geometry are fixed in shared constants (feature spacing
 Terrain length and episode step budget are derived globally from `goal_distance` and shared viewport/runtime constants.
 
 Promotion uses shared 3-level curriculum (`CURRICULUM_PROMOTION`) and episode `success`, not raw reward.
-
-## Human Mode
-
-- Minimal keyboard torque control is available:
-  - Left hip: `A` (negative), `D` (positive)
-  - Left knee: `S` (negative), `W` (positive)
-  - Right hip: `J` (negative), `L` (positive)
-  - Right knee: `K` (negative), `I` (positive)
-- AI train/eval flow is the primary target.
-
-Rendering notes:
-
-- Terrain rays remain part of the 18-dim observation.
-- Ray lines are shown by default (`WALK_SHOW_PLAYER_RAYS=1`) and can be disabled with that env flag.
-- Pavement distance markers are drawn every 1m from spawn; every 10m marker includes an outline.
-- Foot rendering is visual-clamped to the terrain outline; on contact, feet pivot to stay flat on the surface.
-- The torso render body is also clamped above the same terrain outline.
 
 ## Run Commands
 

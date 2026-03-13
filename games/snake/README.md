@@ -11,18 +11,6 @@ Classic grid Snake with obstacle curriculum and lightweight shaping rewards.
 - Algo: Q-learning (`qlearn`)
 - Hidden sizes: `[32]`
 
-## Curriculum (Train)
-
-- Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
-- Promotion settings live in `games/snake/config.py` under `CURRICULUM_PROMOTION`.
-- `WRAP_AROUND` is global in `games/snake/config.py`.
-- Levels:
-  - Level 1: `0` obstacles, timeout `120 * snake_length`
-  - Level 2: `6` obstacles, timeout `100 * snake_length`
-  - Level 3: `12` obstacles, timeout `80 * snake_length`
-
-Success per episode is `1` if at least `5` foods are eaten (`SUCCESS_FOODS_REQUIRED`), else `0`.
-
 ## Controls (Human)
 
 - Move: `W/A/S/D`
@@ -48,8 +36,16 @@ Success per episode is `1` if at least `5` foods are eaten (`SUCCESS_FOODS_REQUI
   - `2 turn_left`
 
 Ray notes:
-- `ray_*` are normalized distance-to-first-collision in local snake directions.
-- Values are in `[0,1]`; `1.0` means no collision within ray range.
+- `ray_*` are normalized free-space-before-collision values in local snake directions.
+- Values are in `[0,1]`; `0.0` means collision on the adjacent cell and `1.0` means no collision within ray range.
+
+## Environment Notes
+
+### Board Rules
+
+- `WRAP_AROUND` is a global toggle in `games/snake/config.py`.
+- Obstacles are static within an episode and excluded from food spawn placement.
+- The timeout budget scales with current snake length.
 
 ## Rewards (Training)
 
@@ -61,12 +57,26 @@ Ray notes:
 `dist_food_norm` is normalized Manhattan head-to-food distance (shortest wrapped path when wrap-around is enabled).
 `hunger_norm` is `clamp(self_steps_since_food / hunger_cap_steps, 0, 1)`.
 
+## Curriculum (Train)
+
+- Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
+- Promotion settings live in `games/snake/config.py` under `CURRICULUM_PROMOTION`.
+- Levels:
+  - Level 1: `0` obstacles, timeout `120 * snake_length`
+  - Level 2: `6` obstacles, timeout `100 * snake_length`
+  - Level 3: `12` obstacles, timeout `80 * snake_length`
+
+Success per episode is `1` if at least `5` foods are eaten (`SUCCESS_FOODS_REQUIRED`), else `0`.
+
 ## Run Commands
 
 ```bash
 rl-toybox-train --game snake
 rl-toybox-play-ai --game snake --model best --render
 rl-toybox-play-user --game snake
+python -m scripts.train --game snake
+python -m scripts.play_ai --game snake --model best --render
+python -m scripts.play_user --game snake
 ```
 
 Check `games/snake/config.py` for full hyperparameters and thresholds.

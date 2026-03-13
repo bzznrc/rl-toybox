@@ -201,7 +201,6 @@ class PeekEnv(Env):
         self.has_key = False
         self.player = Cell(0, 0)
         self._visit_counts = np.zeros((config.GRID_HEIGHT_TILES, config.GRID_WIDTH_TILES), dtype=np.int32)
-        self._best_door_distance_after_key: int | None = None
         self._last_obs = np.zeros((self.OBS_DIM,), dtype=np.float32)
         self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
 
@@ -219,12 +218,6 @@ class PeekEnv(Env):
 
     def _episode_seed(self) -> int:
         return int(config.BASE_SEED + self._episode_counter * 1_003 + self._current_level * 53)
-
-    def _door_distance(self, *, player: Cell | None = None) -> int:
-        if self._layout is None:
-            return 0
-        active_player = self.player if player is None else player
-        return max(0, int(self._layout.door_distance_map[int(active_player.y), int(active_player.x)]))
 
     @staticmethod
     def _encode_current_tile_revisit(count: int) -> float:
@@ -267,11 +260,22 @@ class PeekEnv(Env):
             return
         reward_breakdown[str(code)] = float(reward_breakdown.get(str(code), 0.0) + float(value))
 
-    def _move_player(self, action_idx: int) -> None:
+    def _apply_reward(self, reward_breakdown: dict[str, float], code: str, value: float) -> float:
+        if self.mode == "human":
+            return 0.0
+        reward_value = float(value)
+        self._add_reward_component(reward_breakdown, str(code), reward_value)
+        return reward_value
+
+    def _move_player(self, action_idx: int) -> bool:
         dx, dy = ACTION_TO_DELTA.get(int(action_idx), (0, 0))
+        if int(dx) == 0 and int(dy) == 0:
+            return False
         candidate = self.player.moved(dx, dy)
         if is_walkable(self._layout.walkable, candidate):
             self.player = candidate
+            return False
+        return True
 
     def _human_action(self) -> int:
         if self.window_controller.is_key_down(arcade.key.W):
@@ -316,7 +320,7 @@ class PeekEnv(Env):
         for step in range(1, int(config.RAY_RANGE) + 1):
             cell = self.player.moved(int(dx) * step, int(dy) * step)
             if not is_walkable(self._layout.walkable, cell):
-                return float(clip_unit(float(step) / float(max(1, int(config.RAY_RANGE)))))
+                return float(clip_unit(float(step - 1) / float(max(1, int(config.RAY_RANGE)))))
         return 1.0
 
     def _rel_xy(self, cell: Cell) -> tuple[float, float]:
@@ -407,7 +411,6 @@ class PeekEnv(Env):
         self.steps = 0
         self.done = False
         self._visit_counts = np.zeros(self._layout.walkable.shape, dtype=np.int32)
-        self._best_door_distance_after_key = None
         self._episode_reward_components.reset()
         self._record_current_tile_visit()
         self._last_obs = self._build_observation()
@@ -427,25 +430,19 @@ class PeekEnv(Env):
         episode_level = int(self._current_level)
         action_idx = int(self._human_action() if self.mode == "human" else action)
         action_idx = int(np.clip(action_idx, 0, int(self.ACT_DIM) - 1))
-        self._move_player(action_idx)
+        blocked_move = self._move_player(action_idx)
         self.steps += 1
         current_tile_visit_count = self._record_current_tile_visit()
         first_visit_this_step = int(current_tile_visit_count) == 1
 
         reward = 0.0
         reward_breakdown: dict[str, float] = {}
-        if self.mode != "human":
-            reward += float(config.PENALTY_STEP)
-            self._add_reward_component(reward_breakdown, "S", float(config.PENALTY_STEP))
+        if blocked_move:
+            reward += self._apply_reward(reward_breakdown, "B", float(config.PENALTY_BLOCKED_MOVE))
 
-        gained_key_this_step = False
         if (not self.has_key) and self.player == self._layout.key:
             self.has_key = True
-            gained_key_this_step = True
-            self._best_door_distance_after_key = self._door_distance(player=self.player)
-            if self.mode != "human":
-                reward += float(config.REWARD_KEY)
-                self._add_reward_component(reward_breakdown, "K", float(config.REWARD_KEY))
+            reward += self._apply_reward(reward_breakdown, "K", float(config.REWARD_KEY))
 
         caught = False
         timed_out = False
@@ -453,45 +450,22 @@ class PeekEnv(Env):
         if self.has_key and self.player == self._layout.door:
             self.done = True
             success = 1
-            if self.mode != "human":
-                reward += float(config.REWARD_WIN)
-                self._add_reward_component(reward_breakdown, "W", float(config.REWARD_WIN))
+            reward += self._apply_reward(reward_breakdown, "W", float(config.REWARD_WIN))
         else:
             if self._is_caught():
                 caught = True
             if caught or self.steps >= int(self.max_steps):
                 timed_out = bool((not caught) and self.steps >= int(self.max_steps))
                 self.done = True
-                if self.mode != "human":
-                    reward += float(config.PENALTY_LOSE)
-                    self._add_reward_component(reward_breakdown, "L", float(config.PENALTY_LOSE))
+                reward += self._apply_reward(reward_breakdown, "L", float(config.PENALTY_LOSE))
             elif self.steps % int(config.GUARD_MOVE_PERIOD) == 0:
                 for guard in self._guards:
                     guard.advance()
 
-        if self.has_key and self._best_door_distance_after_key is None:
-            self._best_door_distance_after_key = self._door_distance(player=self.player)
+        if first_visit_this_step:
+            reward += self._apply_reward(reward_breakdown, "P", float(config.REWARD_EXPLORE_NEW_TILE))
 
         if self.mode != "human":
-            shaping_reward = 0.0
-            if (not self.has_key) and first_visit_this_step:
-                shaping_reward = float(config.REWARD_EXPLORE_NEW_TILE)
-            elif self.has_key and (not gained_key_this_step):
-                current_door_distance = self._door_distance(player=self.player)
-                best_door_distance = int(
-                    current_door_distance
-                    if self._best_door_distance_after_key is None
-                    else self._best_door_distance_after_key
-                )
-                if current_door_distance < best_door_distance:
-                    shaping_reward = float(best_door_distance - current_door_distance) * float(
-                        config.REWARD_DOOR_PROGRESS_STEP
-                    )
-                    self._best_door_distance_after_key = int(current_door_distance)
-            if shaping_reward > 0.0:
-                reward += float(shaping_reward)
-                self._add_reward_component(reward_breakdown, "P", float(shaping_reward))
-
             for code, value in reward_breakdown.items():
                 self._episode_reward_components.add(str(code), float(value))
 

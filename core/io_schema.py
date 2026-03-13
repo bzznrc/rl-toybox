@@ -67,7 +67,7 @@ def normalized_ray_first_hit(
         uy /= mag
 
     step = max(0.25, float(step_size))
-    min_distance = max(0.0, float(start_offset))
+    min_distance = min(ray_length, max(0.0, float(start_offset)))
     distance = min_distance
     prev_distance = min_distance
     prev_blocked = False
@@ -79,7 +79,7 @@ def normalized_ray_first_hit(
         blocked = bool(is_blocked(px, py))
         if blocked:
             if (not started) or prev_blocked:
-                return clip_unit(distance / ray_length)
+                return clip_unit(max(0.0, float(distance) - float(min_distance)) / ray_length)
 
             low = float(prev_distance)
             high = float(distance)
@@ -92,7 +92,7 @@ def normalized_ray_first_hit(
                 else:
                     low = mid
             hit_distance = 0.5 * (low + high)
-            return clip_unit(hit_distance / ray_length)
+            return clip_unit(max(0.0, float(hit_distance) - float(min_distance)) / ray_length)
 
         prev_distance = float(distance)
         prev_blocked = bool(blocked)

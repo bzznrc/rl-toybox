@@ -56,9 +56,28 @@ Top-down arena shooter focused on movement, aiming, and timing shots under press
   - `7 shoot`
 
 Ray notes:
-- `ray_*` are normalized distance-to-first-hit values in `[0,1]`.
+- `ray_*` are normalized free-space-before-hit values in `[0,1]`.
+- `0.0` means the ray is blocked immediately.
 - `1.0` means no hit within ray range.
 - Hits include arena walls and obstacles.
+
+## Environment Notes
+
+### Scripted Enemies
+
+- Scripted enemies keep the current target-selection and shot-error model.
+- Movement is driven by a small local planner instead of random move attempts.
+- Each replan scores a small set of relative moves: hold, advance, retreat, strafe, and diagonal flank variants.
+- The planner prefers:
+  - regaining line of sight around obstacles
+  - holding a useful distance band around `SAFE_RADIUS`
+  - strafing when already in a good engagement position
+  - avoiding recently visited positions so enemies do not oscillate behind cover
+- `enemy_reposition_bias` is the main movement difficulty knob.
+  - Lower values make enemies less forceful about flanking cover.
+  - Higher values make them push harder to regain line of sight.
+
+Success per episode is `1` on win, else `0`.
 
 ## Rewards (Training)
 
@@ -78,28 +97,15 @@ Ray notes:
   - Level 2: `2` players, `8` obstacles, enemy reposition bias `0.60`, enemy shoot probability `0.05`
   - Level 3: `4` players, `12` obstacles, enemy reposition bias `1.00`, enemy shoot probability `0.10`
 
-## Scripted Enemies
-
-- Scripted enemies keep the current target-selection and shot-error model.
-- Movement is driven by a small local planner instead of random move attempts.
-- Each replan scores a small set of relative moves: hold, advance, retreat, strafe, and diagonal flank variants.
-- The planner prefers:
-  - regaining line of sight around obstacles
-  - holding a useful distance band around `SAFE_RADIUS`
-  - strafing when already in a good engagement position
-  - avoiding recently visited positions so enemies do not oscillate behind cover
-- `enemy_reposition_bias` is the main movement difficulty knob.
-  - Lower values make enemies less forceful about flanking cover.
-  - Higher values make them push harder to regain line of sight.
-
-Success per episode is `1` on win, else `0`.
-
 ## Run Commands
 
 ```bash
 rl-toybox-train --game bang
 rl-toybox-play-ai --game bang --model best --render
 rl-toybox-play-user --game bang
+python -m scripts.train --game bang
+python -m scripts.play_ai --game bang --model best --render
+python -m scripts.play_user --game bang
 ```
 
 Check `games/bang/config.py` for full hyperparameters.

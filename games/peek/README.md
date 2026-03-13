@@ -2,6 +2,10 @@
 
 Top-down partial-observability stealth/navigation game built around memory: find the key, then reach the door without stepping into a guard's forward line of sight.
 
+## Clip
+
+No embedded clip yet.
+
 ## Algorithm / Network
 
 - Algo: recurrent PPO (`lstm`)
@@ -48,6 +52,7 @@ Observation notes:
 
 - Only current perception plus explicit episode-local revisit memory is exposed.
 - `self_here_revisited` uses `0.0` for the first visit to the current tile, `0.5` for the second or third visit, and `1.0` for the fourth visit or later.
+- `ray_wall_*` is normalized free space before a wall in that direction: `0.0` means the adjacent tile is blocked and `1.0` means no wall within ray range.
 - `obj1_*` is a single deterministic visible objective slot chosen from the visible world state. Before key pickup it prefers the visible key, otherwise the visible door. After key pickup it prefers the visible door. The door is never hidden when visible.
 - `mem_visited_*` is the clipped revisit level for the adjacent walkable tile in that direction: `0.0` never visited, `0.5` visited `1-2` times already, `1.0` visited `3+` times already. Non-walkable or out-of-bounds neighbors use `0.0`.
 - Visibility is local and wall-blocked; no global coordinates, discovery flags, or hidden world info are exposed.
@@ -64,7 +69,9 @@ Actions (`5`, ordered):
 
 Key and door interaction are automatic.
 
-## Layout / Guards
+## Environment Notes
+
+### Layout / Guards
 
 - Each episode generates a connected room-and-corridor layout.
 - Start, key, and door are placed in distinct rooms using walkable-path distance.
@@ -72,25 +79,26 @@ Key and door interaction are automatic.
 - Guards patrol deterministic straight room lanes, reverse at endpoints, and see only forward up to `4` tiles until a wall blocks their line.
 - Layout generation rejects guard placements unless the main route still has a valid timing window for a wait-and-go traversal.
 
-## Rewards
+### Render Notes
 
-Realized components are logged as `W L K P S`:
+- Walls use the same two-tone block tile family as the repo's obstacle-heavy top-down games.
+- Playfield background is light and wall tiles use dark outlines to match the shared neutral palette roles.
+- Player, guards, key, and door all stay in the shared arcade palette.
+- Guard vision can be rendered as a light overlay when `PEEK_DRAW_GUARD_VISION=1`.
+
+## Rewards (Training)
+
+Realized components are logged as `W L K P B`:
 
 - `W`: win reward `+10`
 - `L`: lose penalty `-5`
-- `K`: key pickup `+3`
-- `P`: phase-based shaping
-- `S`: step penalty `-0.001`
-
-Reward phases:
-
-- Before key pickup, `P = +0.02` only when the agent enters a walkable tile for the first time that episode.
-- On key pickup, exploration shaping stops immediately and the env initializes a best-so-far door-distance tracker from the pickup position.
-- After key pickup, `P = +0.05 * improvement_steps` only when the shortest-path distance to the door sets a new best. Moving away and returning to the same distance gives no shaping reward.
+- `K`: key pickup `+2.5`
+- `P`: first visit to a walkable tile that episode `+0.02`
+- `B`: blocked movement attempt `-0.01`
 
 Timeout and capture both count as loss. Success per episode is `1` only when the agent reaches the door while carrying the key.
 
-## Curriculum
+## Curriculum (Train)
 
 Three levels, success-based promotion:
 
@@ -99,13 +107,6 @@ Three levels, success-based promotion:
 - Level 3: eight rooms, one extra loop, four guards
 
 Route-distance targets, room-size range, and episode step budget are derived from the shared board size and current level rather than being repeated inside the per-level table.
-
-## Render Notes
-
-- Walls use the same two-tone block tile family as the repo's obstacle-heavy top-down games.
-- Playfield background is light and wall tiles use dark outlines to match the shared neutral palette roles.
-- Player, guards, key, and door all stay in the shared arcade palette.
-- Guard vision can be rendered as a light overlay when `PEEK_DRAW_GUARD_VISION=1`.
 
 ## Run Commands
 

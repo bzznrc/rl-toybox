@@ -13,7 +13,8 @@ Current implementation snapshots are owned by each `games/<game>/README.md`.
 - [5) Action Space Conventions](#5-action-space-conventions)
 - [6) Reward Framework](#6-reward-framework)
 - [7) Curriculum Framework](#7-curriculum-framework)
-- [8) Checklist for Environment Changes](#8-checklist-for-environment-changes)
+- [8) Game README Contract](#8-game-readme-contract)
+- [9) Checklist for Environment Changes](#9-checklist-for-environment-changes)
 
 ## 1) Runtime Contract
 
@@ -154,7 +155,37 @@ Use this order when applicable:
 - `success_threshold`
 - `consecutive_checks_required`
 
-## 8) Checklist for Environment Changes
+## 8) Game README Contract
+
+### Canonical game order
+When docs enumerate the full game set, use this order:
+1. `snake`
+2. `vroom`
+3. `bang`
+4. `walk`
+5. `peek`
+6. `kick`
+
+### Required top-level section order
+Each `games/<game>/README.md` must use this top-level heading order:
+1. `Clip`
+2. `Algorithm / Network`
+3. `Controls (Human)`
+4. `Observation / Actions`
+5. `Environment Notes`
+6. `Rewards (Training)`
+7. `Curriculum (Train)`
+8. `Run Commands`
+
+### Section usage
+- Game-specific detail belongs under these sections as `###` subsections rather than as ad hoc top-level headings.
+- If no clip is embedded yet, keep the `Clip` section and state that explicitly.
+- Keep root catalogs, docs indexes, and other full-game lists in the same canonical order.
+
+### Validation
+- Run `python -m scripts.validate_docs` after editing repo docs or game READMEs.
+
+## 9) Checklist for Environment Changes
 
 Before merging environment changes:
 - [ ] Config section ordering/ownership remains clean.
@@ -166,3 +197,4 @@ Before merging environment changes:
 - [ ] Render/training frame pacing follows runtime contract.
 - [ ] Render performance changes do not alter environment semantics.
 - [ ] Game README snapshot is updated for any current behavior/value change.
+- [ ] `python -m scripts.validate_docs` passes after README/doc edits.

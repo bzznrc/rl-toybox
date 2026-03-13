@@ -542,6 +542,8 @@ class VroomEnv(Env):
         track = self._require_track_geometry()
         ux, uy = self._normalize(float(dir_x), float(dir_y))
         max_dist = max(1.0, float(max_distance))
+        # Match the raycast epsilon so edge contact reads as zero free space.
+        origin_epsilon = 1e-4
         hit = raycast_track_edge(
             track,
             origin=(float(origin_x), float(origin_y)),
@@ -550,7 +552,7 @@ class VroomEnv(Env):
         )
         if hit is None:
             return 1.0
-        return float(clip_unit(float(max(0.0, hit)) / float(max_dist)))
+        return float(clip_unit(float(max(0.0, hit - origin_epsilon)) / float(max_dist)))
 
     def _nearest_track_sample(self, x: float, y: float) -> tuple[int, float, float, float]:
         if self.track_count <= 0:

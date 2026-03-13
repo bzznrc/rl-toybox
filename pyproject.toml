@@ -18,6 +18,7 @@ dependencies = [
 rl-toybox-train = "scripts.train:main"
 rl-toybox-play-ai = "scripts.play_ai:main"
 rl-toybox-play-user = "scripts.play_user:main"
+rl-toybox-validate-docs = "scripts.validate_docs:main"
 
 [tool.setuptools]
 include-package-data = true

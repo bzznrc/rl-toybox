@@ -98,7 +98,7 @@ MIN_EPISODES_FOR_STATS = REWARD_ROLLING_WINDOW
 CURRICULUM_PROMOTION = {
     "min_episodes_per_level": 200,
     "check_window": 25,
-    "success_threshold": 0.65,
+    "success_threshold": 0.60,
     "consecutive_checks_required": 2,
 }
 
@@ -127,17 +127,16 @@ LEVEL_SETTINGS = {
 # REWARDS
 REWARD_WIN = 10.0
 PENALTY_LOSE = -5.0
-REWARD_KEY = 3.0
-PENALTY_STEP = -0.001
+REWARD_KEY = 2.5
 REWARD_EXPLORE_NEW_TILE = 0.02
-REWARD_DOOR_PROGRESS_STEP = 0.05
+PENALTY_BLOCKED_MOVE = -0.01
 
 REWARD_COMPONENTS = {
     "W": REWARD_WIN,
     "L": PENALTY_LOSE,
     "K": REWARD_KEY,
-    "P": max(REWARD_EXPLORE_NEW_TILE, REWARD_DOOR_PROGRESS_STEP),
-    "S": PENALTY_STEP,
+    "P": REWARD_EXPLORE_NEW_TILE,
+    "B": PENALTY_BLOCKED_MOVE,
 }
 
 

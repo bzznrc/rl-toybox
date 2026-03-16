@@ -76,7 +76,9 @@ Key and door interaction are automatic.
 - Each episode generates a connected room-and-corridor layout.
 - Start, key, and door are placed in distinct rooms using walkable-path distance.
 - Key uses the sand pair and door uses the brown pair.
-- Guards patrol deterministic straight room lanes, reverse at endpoints, and see only forward up to `4` tiles until a wall blocks their line.
+- Guards use deterministic straight room lanes and see only forward up to `4` tiles until a wall blocks their line.
+- Level 1 freezes its single guard at the patrol position furthest from the main route and points it away from the route to preserve a passing lane.
+- Levels 2-3 keep guards on their full back-and-forth patrols.
 - Layout generation rejects guard placements unless the main route still has a valid timing window for a wait-and-go traversal.
 
 ### Render Notes
@@ -88,13 +90,16 @@ Key and door interaction are automatic.
 
 ## Rewards (Training)
 
-Realized components are logged as `W L K P B`:
+Realized components are logged as `W L K P B I`:
 
 - `W`: win reward `+10`
 - `L`: lose penalty `-5`
-- `K`: key pickup `+2.5`
-- `P`: first visit to a walkable tile that episode `+0.02`
+- `K`: key pickup `+3`
+- `P`: a shared progress component that starts as exploration and becomes door progress after the key
+- `P` before key: first visit to a walkable tile that episode `+0.02`
+- `P` after key: `+0.05 * clip(prev_shortest_path_to_door - curr_shortest_path_to_door, -1, 1)`
 - `B`: blocked movement attempt `-0.01`
+- `I`: wait penalty `-0.005`
 
 Timeout and capture both count as loss. Success per episode is `1` only when the agent reaches the door while carrying the key.
 
@@ -102,11 +107,11 @@ Timeout and capture both count as loss. Success per episode is `1` only when the
 
 Three levels, success-based promotion:
 
-- Level 1: three rooms, no extra loop, no guards
-- Level 2: six rooms, one extra loop, two guards
+- Level 1: four rooms, no extra loop, one stationary guard
+- Level 2: five rooms, one extra loop, two guards
 - Level 3: eight rooms, one extra loop, four guards
 
-Route-distance targets, room-size range, and episode step budget are derived from the shared board size and current level rather than being repeated inside the per-level table.
+Route-distance targets and room-size range are derived from the shared board size and current level. Episode step budget scales only with the expected route tiles, not guard count.
 
 ## Run Commands
 

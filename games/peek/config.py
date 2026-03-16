@@ -42,9 +42,8 @@ MAP_PATH_SPAN_TILES = GRID_WIDTH_TILES + GRID_HEIGHT_TILES
 START_KEY_DISTANCE_RATIO_MIN = 0.15
 START_KEY_DISTANCE_RATIO_MAX = 0.30
 KEY_DOOR_DISTANCE_RATIO = 0.55
-# Episode length is derived from the expected route length and guard pressure.
-STEP_BUDGET_PER_ROUTE_TILE = 20.0
-STEP_BUDGET_PER_GUARD = 20.0
+# Episode length is derived from the expected route length only.
+STEP_BUDGET_PER_ROUTE_TILE = 30.0
 
 
 # IO
@@ -106,19 +105,22 @@ LEVEL_SETTINGS = {
     1: {
         "room_count": 2,
         "extra_connection": False,
-        "guard_count": 0,
+        "guard_count": 1,
+        "stationary_guards": True,
         "entropy_coef": 0.04,
     },
     2: {
-        "room_count": 6,
+        "room_count": 4,
         "extra_connection": True,
         "guard_count": 2,
+        "stationary_guards": False,
         "entropy_coef": 0.02,
     },
     3: {
         "room_count": 8,
         "extra_connection": True,
         "guard_count": 4,
+        "stationary_guards": False,
         "entropy_coef": 0.015,
     },
 }
@@ -127,16 +129,25 @@ LEVEL_SETTINGS = {
 # REWARDS
 REWARD_WIN = 10.0
 PENALTY_LOSE = -5.0
-REWARD_KEY = 2.5
-REWARD_EXPLORE_NEW_TILE = 0.02
+REWARD_KEY = 3.0
+REWARD_PROGRESS_BEFORE_KEY_FIRST_VISIT = 0.02
+REWARD_PROGRESS_AFTER_KEY_DOOR_SCALE = 0.05
+REWARD_PROGRESS_AFTER_KEY_DOOR_DELTA_CLIP = 1.0
 PENALTY_BLOCKED_MOVE = -0.01
+PENALTY_WAIT = -0.005
 
+# `P` is one shared progress component that evolves with the episode:
+# exploration progress before the key, door-distance progress after the key.
 REWARD_COMPONENTS = {
     "W": REWARD_WIN,
     "L": PENALTY_LOSE,
     "K": REWARD_KEY,
-    "P": REWARD_EXPLORE_NEW_TILE,
+    "P": {
+        "before_key_first_visit": REWARD_PROGRESS_BEFORE_KEY_FIRST_VISIT,
+        "after_key_door_scale": REWARD_PROGRESS_AFTER_KEY_DOOR_SCALE,
+    },
     "B": PENALTY_BLOCKED_MOVE,
+    "I": PENALTY_WAIT,
 }
 
 

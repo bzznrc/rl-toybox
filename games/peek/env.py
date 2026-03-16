@@ -72,11 +72,11 @@ def _min_key_door_dist(level: int) -> int:
     return max(6, int(round(float(_min_start_key_dist(int(level))) * float(config.KEY_DOOR_DISTANCE_RATIO))))
 
 
-def _max_steps(level: int, guard_count: int) -> int:
+def _max_steps(level: int) -> int:
     route_tiles = int(_min_start_key_dist(int(level)) + _min_key_door_dist(int(level)))
     return max(
         route_tiles + 1,
-        int(round(route_tiles * float(config.STEP_BUDGET_PER_ROUTE_TILE) + int(guard_count) * float(config.STEP_BUDGET_PER_GUARD))),
+        int(round(route_tiles * float(config.STEP_BUDGET_PER_ROUTE_TILE))),
     )
 
 
@@ -87,10 +87,13 @@ def _resolve_level_settings(level: int) -> dict[str, object]:
         **base,
         "room_count": max(int(base["room_count"]), 3 + guard_count),
         "room_size_range": config.ROOM_SIZE_RANGE,
-        "max_steps": _max_steps(int(level), guard_count),
+        "max_steps": _max_steps(int(level)),
         "min_start_key_dist": _min_start_key_dist(int(level)),
         "min_key_door_dist": _min_key_door_dist(int(level)),
+        "stationary_guards": bool(base.get("stationary_guards", False)),
     }
+
+
 ACTION_TO_DELTA = {
     int(config.ACTION_MOVE_UP): (0, -1),
     int(config.ACTION_MOVE_DOWN): (0, 1),
@@ -119,12 +122,14 @@ class GuardActor:
         return cls(
             lane=lane,
             position=lane.start,
-            step_dir=1,
+            step_dir=0 if bool(lane.stationary) else 1,
             facing_dx=int(lane.facing_dx),
             facing_dy=int(lane.facing_dy),
         )
 
     def advance(self) -> None:
+        if bool(self.lane.stationary):
+            return
         target = self.lane.end if int(self.step_dir) > 0 else self.lane.start
         if self.position == target:
             self.step_dir *= -1
@@ -245,6 +250,42 @@ class PeekEnv(Env):
             return 0
         self._visit_counts[int(self.player.y), int(self.player.x)] += 1
         return int(self._visit_counts[int(self.player.y), int(self.player.x)])
+
+    def _door_distance(self, cell: Cell) -> int:
+        if self._layout is None or (not is_walkable(self._layout.walkable, cell)):
+            return -1
+        return int(self._layout.door_distance_map[int(cell.y), int(cell.x)])
+
+    def _progress_reward_before_key(self, *, first_visit_this_step: bool) -> float:
+        if not bool(first_visit_this_step):
+            return 0.0
+        return float(config.REWARD_PROGRESS_BEFORE_KEY_FIRST_VISIT)
+
+    def _progress_reward_after_key(self, previous_player: Cell) -> float:
+        previous_distance = self._door_distance(previous_player)
+        current_distance = self._door_distance(self.player)
+        if previous_distance < 0 or current_distance < 0:
+            return 0.0
+        distance_delta = int(previous_distance - current_distance)
+        clipped_delta = float(
+            np.clip(
+                float(distance_delta),
+                -float(config.REWARD_PROGRESS_AFTER_KEY_DOOR_DELTA_CLIP),
+                float(config.REWARD_PROGRESS_AFTER_KEY_DOOR_DELTA_CLIP),
+            )
+        )
+        return float(config.REWARD_PROGRESS_AFTER_KEY_DOOR_SCALE) * clipped_delta
+
+    def _progress_reward(
+        self,
+        *,
+        had_key_before_step: bool,
+        previous_player: Cell,
+        first_visit_this_step: bool,
+    ) -> float:
+        if bool(had_key_before_step):
+            return float(self._progress_reward_after_key(previous_player))
+        return float(self._progress_reward_before_key(first_visit_this_step=first_visit_this_step))
 
     def _adjacent_visit_memory(self, dx: int, dy: int) -> float:
         if self._layout is None:
@@ -403,6 +444,7 @@ class PeekEnv(Env):
             guard_move_period=int(config.GUARD_MOVE_PERIOD),
             min_start_key_dist=int(self._settings["min_start_key_dist"]),
             min_key_door_dist=int(self._settings["min_key_door_dist"]),
+            stationary_guards=bool(self._settings["stationary_guards"]),
         )
         self._episode_counter += 1
         self._guards = [GuardActor.from_lane(lane) for lane in self._layout.guards]
@@ -430,6 +472,8 @@ class PeekEnv(Env):
         episode_level = int(self._current_level)
         action_idx = int(self._human_action() if self.mode == "human" else action)
         action_idx = int(np.clip(action_idx, 0, int(self.ACT_DIM) - 1))
+        had_key_before_step = bool(self.has_key)
+        previous_player = self.player
         blocked_move = self._move_player(action_idx)
         self.steps += 1
         current_tile_visit_count = self._record_current_tile_visit()
@@ -439,10 +483,19 @@ class PeekEnv(Env):
         reward_breakdown: dict[str, float] = {}
         if blocked_move:
             reward += self._apply_reward(reward_breakdown, "B", float(config.PENALTY_BLOCKED_MOVE))
+        if int(action_idx) == int(config.ACTION_WAIT):
+            reward += self._apply_reward(reward_breakdown, "I", float(config.PENALTY_WAIT))
 
         if (not self.has_key) and self.player == self._layout.key:
             self.has_key = True
             reward += self._apply_reward(reward_breakdown, "K", float(config.REWARD_KEY))
+
+        progress_reward = self._progress_reward(
+            had_key_before_step=bool(had_key_before_step),
+            previous_player=previous_player,
+            first_visit_this_step=bool(first_visit_this_step),
+        )
+        reward += self._apply_reward(reward_breakdown, "P", float(progress_reward))
 
         caught = False
         timed_out = False
@@ -461,9 +514,6 @@ class PeekEnv(Env):
             elif self.steps % int(config.GUARD_MOVE_PERIOD) == 0:
                 for guard in self._guards:
                     guard.advance()
-
-        if first_visit_this_step:
-            reward += self._apply_reward(reward_breakdown, "P", float(config.REWARD_EXPLORE_NEW_TILE))
 
         if self.mode != "human":
             for code, value in reward_breakdown.items():

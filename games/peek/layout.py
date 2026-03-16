@@ -56,6 +56,7 @@ class GuardLane:
     end: Cell
     facing_dx: int
     facing_dy: int
+    stationary: bool = False
 
 
 @dataclass
@@ -71,7 +72,7 @@ class PatrolState:
         return cls(
             lane=lane,
             position=lane.start,
-            step_dir=1,
+            step_dir=0 if bool(lane.stationary) else 1,
             facing_dx=int(lane.facing_dx),
             facing_dy=int(lane.facing_dy),
         )
@@ -86,6 +87,8 @@ class PatrolState:
         )
 
     def advance(self) -> None:
+        if bool(self.lane.stationary):
+            return
         target = self.lane.end if int(self.step_dir) > 0 else self.lane.start
         if self.position == target:
             self.step_dir *= -1
@@ -137,6 +140,27 @@ def bfs_distance_map(walkable: np.ndarray, origin: Cell) -> np.ndarray:
         return dist
     queue: deque[Cell] = deque([origin])
     dist[int(origin.y), int(origin.x)] = 0
+    while queue:
+        cell = queue.popleft()
+        base = int(dist[int(cell.y), int(cell.x)])
+        for nxt in walkable_neighbors(walkable, cell):
+            if int(dist[int(nxt.y), int(nxt.x)]) >= 0:
+                continue
+            dist[int(nxt.y), int(nxt.x)] = int(base + 1)
+            queue.append(nxt)
+    return dist
+
+
+def bfs_distance_map_from_origins(walkable: np.ndarray, origins: Iterable[Cell]) -> np.ndarray:
+    dist = np.full(walkable.shape, -1, dtype=np.int32)
+    queue: deque[Cell] = deque()
+    for origin in origins:
+        if not is_walkable(walkable, origin):
+            continue
+        if int(dist[int(origin.y), int(origin.x)]) >= 0:
+            continue
+        dist[int(origin.y), int(origin.x)] = 0
+        queue.append(origin)
     while queue:
         cell = queue.popleft()
         base = int(dist[int(cell.y), int(cell.x)])
@@ -327,6 +351,88 @@ def _build_guard_lane(room: Room, guard_id: int) -> GuardLane:
     return GuardLane(guard_id=int(guard_id), start=start, end=end, facing_dx=0, facing_dy=1)
 
 
+def _guard_lane_cells(lane: GuardLane) -> list[Cell]:
+    dx = int(np.sign(int(lane.end.x) - int(lane.start.x)))
+    dy = int(np.sign(int(lane.end.y) - int(lane.start.y)))
+    cells = [lane.start]
+    cursor = lane.start
+    while cursor != lane.end:
+        cursor = cursor.moved(dx, dy)
+        cells.append(cursor)
+    return cells
+
+
+def _freeze_guard_lane(
+    walkable: np.ndarray,
+    lane: GuardLane,
+    *,
+    route_cells: set[Cell],
+    route_distance_map: np.ndarray,
+    vision_range: int,
+) -> GuardLane:
+    best_score: tuple[int, int, int, int, int, int] | None = None
+    best_cell = lane.start
+    best_facing = (int(lane.facing_dx), int(lane.facing_dy))
+
+    for cell in _guard_lane_cells(lane):
+        cell_route_dist = int(route_distance_map[int(cell.y), int(cell.x)])
+        if cell_route_dist < 0:
+            continue
+        if cell == lane.start and cell != lane.end:
+            candidate_facings = [(-int(lane.facing_dx), -int(lane.facing_dy))]
+        elif cell == lane.end and cell != lane.start:
+            candidate_facings = [(int(lane.facing_dx), int(lane.facing_dy))]
+        else:
+            candidate_facings = [
+                (int(lane.facing_dx), int(lane.facing_dy)),
+                (-int(lane.facing_dx), -int(lane.facing_dy)),
+            ]
+        for facing_dx, facing_dy in candidate_facings:
+            stationary_lane = GuardLane(
+                guard_id=int(lane.guard_id),
+                start=cell,
+                end=cell,
+                facing_dx=int(facing_dx),
+                facing_dy=int(facing_dy),
+                stationary=True,
+            )
+            observed = _guard_observed_cells(
+                walkable,
+                PatrolState.from_lane(stationary_lane),
+                vision_range=int(vision_range),
+            )
+            route_overlap = sum(1 for observed_cell in observed if observed_cell in route_cells)
+            observed_route_dist = min(
+                (
+                    int(route_distance_map[int(observed_cell.y), int(observed_cell.x)])
+                    for observed_cell in observed
+                    if int(route_distance_map[int(observed_cell.y), int(observed_cell.x)]) >= 0
+                ),
+                default=-1,
+            )
+            score = (
+                int(cell_route_dist),
+                -int(route_overlap),
+                int(observed_route_dist),
+                -int(cell.y),
+                -int(cell.x),
+                int(facing_dx + facing_dy),
+            )
+            if best_score is None or score > best_score:
+                best_score = score
+                best_cell = cell
+                best_facing = (int(facing_dx), int(facing_dy))
+
+    return GuardLane(
+        guard_id=int(lane.guard_id),
+        start=best_cell,
+        end=best_cell,
+        facing_dx=int(best_facing[0]),
+        facing_dy=int(best_facing[1]),
+        stationary=True,
+    )
+
+
 def _guard_observed_cells(
     walkable: np.ndarray,
     state: PatrolState,
@@ -432,6 +538,7 @@ def generate_layout(
     guard_move_period: int,
     min_start_key_dist: int,
     min_key_door_dist: int,
+    stationary_guards: bool = False,
 ) -> PeekLayout:
     requested_room_count = max(0, int(room_count))
     requested_guard_count = max(0, int(guard_count))
@@ -495,7 +602,21 @@ def generate_layout(
         if len(eligible_rooms) < requested_guard_count:
             failure_counts["insufficient_guard_rooms"] += 1
             continue
-        guards = tuple(_build_guard_lane(room, idx) for idx, room in enumerate(eligible_rooms[:requested_guard_count]))
+        base_guards = tuple(_build_guard_lane(room, idx) for idx, room in enumerate(eligible_rooms[:requested_guard_count]))
+        if bool(stationary_guards) and base_guards:
+            route_distance_map = bfs_distance_map_from_origins(walkable, route_cells)
+            guards = tuple(
+                _freeze_guard_lane(
+                    walkable,
+                    lane,
+                    route_cells=route_cells,
+                    route_distance_map=route_distance_map,
+                    vision_range=int(guard_vision_range),
+                )
+                for lane in base_guards
+            )
+        else:
+            guards = base_guards
         observed_cycle = _combined_guard_observation_cycle(
             walkable,
             guards,

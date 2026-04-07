@@ -15,6 +15,7 @@ from games.kick.env import KickEnv
 
 SPEC = GameSpec(
     game_id="kick",
+    display_name="Kick",
     default_algo="ppo",
     make_env=build_env_factory(KickEnv),
     obs_dim=config.OBS_DIM,
@@ -23,6 +24,11 @@ SPEC = GameSpec(
         config.HIDDEN_DIMENSIONS,
         config.CRITIC_HIDDEN_DIMENSIONS,
     ),
+    family="marl_ctde",
+    role="Paused multi-agent CTDE / MAPPO-style project.",
+    summary="Experimental shared-team football project retained in the repo but no longer part of the main progression.",
+    primary_algo_label="MAPPO-style PPO / CTDE",
+    status="paused",
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
         "critic_hidden_sizes": list(config.CRITIC_HIDDEN_DIMENSIONS),

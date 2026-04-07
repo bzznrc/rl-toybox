@@ -6,6 +6,7 @@ It is intentionally game-agnostic.
 Current implementation snapshots are owned by each `games/<game>/README.md`.
 
 ## Table of Contents
+
 - [1) Runtime Contract](#1-runtime-contract)
 - [2) Render and Performance Patterns](#2-render-and-performance-patterns)
 - [3) Config Contract](#3-config-contract)
@@ -19,50 +20,37 @@ Current implementation snapshots are owned by each `games/<game>/README.md`.
 ## 1) Runtime Contract
 
 ### Step/reset
-- `reset()` returns `np.ndarray` observation of shape `(OBS_DIM,)` (or game-documented multi-agent equivalent).
+
+- `reset()` returns an `np.ndarray` observation (or a documented multi-agent equivalent).
 - `step(action)` returns `(obs, reward, done, info)`.
-- `reward` is scalar float.
-- Extra signals (for example reward vectors) are provided via `info[...]`.
+- `reward` is scalar float unless a multi-agent game explicitly documents additional `info["reward_vec"]` behavior.
+- Extra signals are exposed through `info[...]`.
 
 ### Frame pacing
-- Use `ArcadeFrameClock.tick(...)`.
-- Use render/training FPS split:
-  - `frame_clock.tick(FPS if show_game else TRAINING_FPS)`
-- `TRAINING_FPS=0` means no sleep and max throughput.
+
+- Use `ArcadeFrameClock.tick(...)` when a game renders in real time.
+- Keep render FPS and training FPS separate.
+- `TRAINING_FPS=0` means max-throughput training.
 
 ### Terminal commit
-- Success/failure must come from explicit terminal conditions.
-- If using render-only terminal holds, latch terminal semantics first so outcome does not drift during the hold.
-- Configure hold durations in seconds and convert to frames via `FPS`.
+
+- Success/failure should come from explicit terminal conditions.
+- Render-only terminal holds should not change already-latched outcomes.
 
 ## 2) Render and Performance Patterns
 
-### Reuse static visual assets
-- Build static masks/backgrounds/textures once and reuse them each frame.
-- Prefer drawing textures over regenerating complex geometry every frame.
-
-### Keep draw-call pressure intentional
-- Decouple simulation fidelity from render mesh density where possible.
-- Typical pattern:
-  - finer sampling for physics/contact
-  - coarser sampling for filled visual meshes
-  - single strip/polyline for outlines
-
-### Avoid unnecessary per-frame text overhead
-- Avoid expensive per-frame text creation patterns in hot loops.
-- Prefer reusable text objects (`arcade.Text`) or `TextCache`.
-- If exact frame-by-frame updates are unnecessary, throttle display updates.
-
-### Gate optional expensive logic
-- Keep debug and display-only computations behind explicit mode/flag checks.
-
-### Preserve runtime semantics
-- Performance optimizations must not break observation, reward, or termination semantics.
+- Reuse static visual assets when possible.
+- Keep draw-call pressure intentional.
+- Avoid expensive per-frame text churn in hot loops.
+- Gate expensive debug-only work behind explicit flags.
+- Performance changes must not alter observation, reward, or termination semantics.
 
 ## 3) Config Contract
 
 ### Section order
-Each game config should keep this structure:
+
+Each game config should prefer this order:
+
 1. `RUNTIME`
 2. `ENV`
 3. `IO`
@@ -70,104 +58,73 @@ Each game config should keep this structure:
 5. `REWARDS`
 6. `TRAINING`
 
-### Section expectations
-- `RUNTIME`: `WINDOW_TITLE`, `FPS`, `TRAINING_FPS`, `USE_GPU`
-- `ENV`: geometry/physics/limits
-- `IO`: `INPUT_FEATURE_NAMES`, `ACTION_NAMES`, `OBS_DIM`, `ACT_DIM`
-- `CURRICULUM`: level bounds, promotion settings, per-level settings
-- `REWARDS`: reward magnitudes and taxonomy keys
-- `TRAINING`: model and optimizer/training hyperparameters
-
 ### Ownership boundaries
-- Do not duplicate a knob in multiple places.
-- Keep path/artifact boilerplate out of game config when it belongs to shared code.
-- Keep `config.py` modules constants-only: no `def` helpers inside config files.
-- If a game needs derived settings, either precompute constant tables in `config.py` or move the operational logic into the owning runtime module (`env.py`, `spec.py`, shared core code).
+
+- Keep `config.py` declarative and constants-only.
+- Put shared training/runtime boilerplate in shared `core/` code.
+- Keep future placeholder configs lightweight rather than speculative.
 
 ## 4) Observation Taxonomy
 
 ### Feature block ordering
-Use this order when applicable:
-1. `SELF` (`self_*`)
-2. `RAYS` (`ray_*`)
-3. `TGT` (`tgt_*`)
-4. `GOALS/LANDMARKS` (`goal_*`, `own_goal_*`)
-5. `TEAMMATES` (`ownN_*`)
-6. `OPPONENTS` (`oppN_*`)
-7. `TRACK/MAP` (`trk_*`)
-8. `HAZARDS` (`haz_*`)
 
-### Naming and symmetry rules
+Use this order when applicable:
+
+1. `SELF`
+2. `RAYS`
+3. `TGT`
+4. `GOALS/LANDMARKS`
+5. `TEAMMATES`
+6. `OPPONENTS`
+7. `TRACK/MAP`
+8. `HAZARDS`
+
+### Naming rules
+
 - `*_sin` pairs with `*_cos`
 - `dx` pairs with `dy`
 - `dvx` pairs with `dvy`
-
-### Normalization rules
-- Normalize relative positions consistently.
-- Prefer sin/cos for angles, unless a game intentionally documents a compact scalar-angle exception.
-- Boolean features should be numeric `0.0/1.0`.
-
-### Stable nearest ordering
-- Nearest-N selections must be deterministic (for example `(distance, stable_slot_index)`).
+- Boolean features should be numeric `0.0/1.0`
 
 ## 5) Action Space Conventions
 
 - Prefer discrete actions unless continuous control is core to the game.
 - Keep action names explicit and verb-oriented.
-- If some actions are state-invalid (for example kick without ball), mask consistently in:
-  - sampling
-  - logprob/entropy evaluation
-  - evaluation/inference
+- When action masking exists, apply it consistently in training, evaluation, and policy scoring.
+- `vroom` and future continuous-control games are allowed to break the discrete-default rule when the control problem truly needs it.
 
 ## 6) Reward Framework
 
-### Outcome scale philosophy
-- Keep cross-game outcome magnitudes comparable:
-  - win/score about `+10`
-  - lose/concede about `-5`
+- Keep outcome magnitudes broadly comparable across games.
 - Dense shaping should support, not dominate, outcomes.
-
-### Reward categories
-1. Outcome
-2. Event
-3. Shaping
-
-### Shaping discipline
-- Prefer signed potential-difference or clipped delta shaping.
-- Keep shaping interpretable and bounded.
-
-### Logging discipline
-- Log realized reward contributions, not reward parameter constants.
-- Keep component naming compact and consistent.
+- Prefer interpretable, bounded shaping terms.
+- Log realized reward contributions, not just reward constants.
 
 ## 7) Curriculum Framework
 
-### Defaults
-- Prefer a 3-level curriculum when applicable.
-- Keep per-level knobs in `LEVEL_SETTINGS`.
-
-### Promotion rule of thumb
-- When dense shaping exists, promote using success metrics rather than raw reward.
-
-### Typical promotion settings
-- `min_episodes_per_level`
-- `check_window`
-- `success_threshold`
-- `consecutive_checks_required`
+- Prefer a compact 3-level curriculum when applicable.
+- Promote using success metrics when dense shaping could distort reward totals.
+- Keep per-level knobs in clearly named config tables.
 
 ## 8) Game README Contract
 
 ### Canonical game order
-When docs enumerate the full game set, use this order:
+
+When docs enumerate the active lineup, use:
+
 1. `snake`
-2. `vroom`
-3. `bang`
-4. `walk`
-5. `peek`
-6. `kick`
+2. `bang`
+3. `tower`
+4. `vroom`
+5. `stealth`
+6. `card`
+7. `othello`
+8. `kick`
 
 ### Required top-level section order
-Each `games/<game>/README.md` must use this top-level heading order:
+
+Each active `games/<game>/README.md` must use this top-level heading order:
+
 1. `Clip`
 2. `Algorithm / Network`
 3. `Controls (Human)`
@@ -177,24 +134,15 @@ Each `games/<game>/README.md` must use this top-level heading order:
 7. `Curriculum (Train)`
 8. `Run Commands`
 
-### Section usage
-- Game-specific detail belongs under these sections as `###` subsections rather than as ad hoc top-level headings.
-- If no clip is embedded yet, keep the `Clip` section and state that explicitly.
-- Keep root catalogs, docs indexes, and other full-game lists in the same canonical order.
-
-### Validation
-- Run `python -m scripts.validate_docs` after editing repo docs or game READMEs.
+Scaffold games should keep the same section structure and clearly say what is placeholder.
 
 ## 9) Checklist for Environment Changes
 
 Before merging environment changes:
-- [ ] Config section ordering/ownership remains clean.
-- [ ] Game `config.py` files remain constants-only with no function definitions.
-- [ ] Observation ordering and symmetry rules are preserved.
-- [ ] Reward magnitudes and shaping discipline remain balanced.
-- [ ] Reward breakdown logs realized contributions only.
-- [ ] Action masking is consistent across train/eval when used.
-- [ ] Render/training frame pacing follows runtime contract.
-- [ ] Render performance changes do not alter environment semantics.
-- [ ] Game README snapshot is updated for any current behavior/value change.
+
+- [ ] Config ownership remains clean.
+- [ ] Observation ordering and naming stay intentional.
+- [ ] Reward magnitudes remain balanced and interpretable.
+- [ ] Action masking is consistent when used.
+- [ ] Scaffold entries are still clearly marked as scaffolded.
 - [ ] `python -m scripts.validate_docs` passes after README/doc edits.

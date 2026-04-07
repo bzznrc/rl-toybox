@@ -58,6 +58,7 @@ from games.vroom.config import (
     CURRICULUM_PROMOTION,
     DRAW_RAYS,
     FPS,
+    FORWARD_RAY_MAX_DISTANCE_PX,
     LEVEL_SETTINGS,
     INPUT_FEATURE_NAMES as VROOM_INPUT_FEATURE_NAMES,
     LATERAL_DAMPING_OFF_TRACK,
@@ -80,19 +81,18 @@ from games.vroom.config import (
     SCREEN_WIDTH,
     STEER_SPEED_DECAY,
     TILE_SIZE,
-    TRACK_BULGE_AMPLITUDE_MAX_PX,
-    TRACK_BULGE_AMPLITUDE_MIN_PX,
-    TRACK_BULGE_LENGTH_CAP_RATIO,
-    TRACK_BULGE_SHORT_SIDE_LENGTH_CAP_RATIO,
-    TRACK_BULGE_SHORT_SIDE_THRESHOLD_PX,
-    TRACK_BULGE_WIDTH_CAP_RATIO,
     TRACK_CORNER_RADIUS_PX,
     TRACK_FOOTPRINT_SCALE,
+    TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX,
+    TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX,
+    TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO,
+    TRACK_LONG_SIDE_INSET_WIDTH_CAP_RATIO,
+    TRACK_LONG_SIDE_S_AMPLITUDE_MAX_PX,
+    TRACK_LONG_SIDE_S_AMPLITUDE_MIN_PX,
+    TRACK_LONG_SIDE_TEMPLATE_CHOICES,
     TRACK_PADDING_PX,
     TRACK_SAMPLE_SPACING_PX,
     TRACK_START_STRAIGHT_LEN_PX,
-    TRACK_TEMPLATE_MAX_BULGED_SIDES,
-    TRACK_TEMPLATE_MIN_BULGED_SIDES,
     TRACK_WIDTH_PX,
     TURN_THROTTLE_LOSS,
     TRAINING_FPS,
@@ -148,13 +148,6 @@ class VroomEnv(Env):
     ACTION_NAMES = tuple(VROOM_ACTION_NAMES)
     OBS_DIM = int(VROOM_OBS_DIM)
     ACT_DIM = int(VROOM_ACT_DIM)
-
-    ACTION_COAST = 0
-    ACTION_THROTTLE = 1
-    ACTION_LEFT_COAST = 2
-    ACTION_RIGHT_COAST = 3
-    ACTION_LEFT_THROTTLE = 4
-    ACTION_RIGHT_THROTTLE = 5
 
     NUM_CARS = 4
     TRAINING_TOTAL_RACES = 1
@@ -248,6 +241,7 @@ class VroomEnv(Env):
         self.lateral_damping_on_track = self._clamp(float(LATERAL_DAMPING_ON_TRACK), 0.0, 1.0)
         self.lateral_damping_off_track = self._clamp(float(LATERAL_DAMPING_OFF_TRACK), 0.0, 1.0)
         self.edge_probe_max_distance = max(8.0, float(EDGE_PROBE_MAX_DISTANCE_PX))
+        self.forward_ray_max_distance = max(self.edge_probe_max_distance, float(FORWARD_RAY_MAX_DISTANCE_PX))
         self.contact_sep_strength = 1.0
         self.contact_overlap_cap = self.car_radius * 0.12
         self.contact_damp = 0.12
@@ -260,14 +254,13 @@ class VroomEnv(Env):
             corner_radius_px=float(TRACK_CORNER_RADIUS_PX),
             sample_spacing_px=float(TRACK_SAMPLE_SPACING_PX),
             start_straight_len_px=float(TRACK_START_STRAIGHT_LEN_PX),
-            template_min_bulged_sides=int(TRACK_TEMPLATE_MIN_BULGED_SIDES),
-            template_max_bulged_sides=int(TRACK_TEMPLATE_MAX_BULGED_SIDES),
-            bulge_amplitude_min_px=float(TRACK_BULGE_AMPLITUDE_MIN_PX),
-            bulge_amplitude_max_px=float(TRACK_BULGE_AMPLITUDE_MAX_PX),
-            bulge_width_cap_ratio=float(TRACK_BULGE_WIDTH_CAP_RATIO),
-            bulge_length_cap_ratio=float(TRACK_BULGE_LENGTH_CAP_RATIO),
-            bulge_short_side_threshold_px=float(TRACK_BULGE_SHORT_SIDE_THRESHOLD_PX),
-            bulge_short_side_length_cap_ratio=float(TRACK_BULGE_SHORT_SIDE_LENGTH_CAP_RATIO),
+            long_side_template_choices=tuple(str(value) for value in TRACK_LONG_SIDE_TEMPLATE_CHOICES),
+            bell_amplitude_min_px=float(TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX),
+            bell_amplitude_max_px=float(TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX),
+            s_amplitude_min_px=float(TRACK_LONG_SIDE_S_AMPLITUDE_MIN_PX),
+            s_amplitude_max_px=float(TRACK_LONG_SIDE_S_AMPLITUDE_MAX_PX),
+            inset_width_cap_ratio=float(TRACK_LONG_SIDE_INSET_WIDTH_CAP_RATIO),
+            inset_length_cap_ratio=float(TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO),
         )
         self.track_width_px = float(self.track_config.track_width_px)
         self.track_half_width = self.track_width_px * 0.5
@@ -338,14 +331,17 @@ class VroomEnv(Env):
 
         self.steps = 0
         self.done = False
-        self.last_action_index = self.ACTION_COAST
-        self._last_ray_values = np.ones((4,), dtype=np.float32)
+        self.last_action = np.zeros((self.ACT_DIM,), dtype=np.float32)
+        self._last_ray_values = np.ones((5,), dtype=np.float32)
         self._last_ray_origin = (0.0, 0.0)
-        self._last_ray_dirs: list[tuple[float, float]] = [(1.0, 0.0)] * 4
-        self._last_ray_max_distances = tuple([float(self.edge_probe_max_distance)] * 4)
+        self._last_ray_dirs: list[tuple[float, float]] = [(1.0, 0.0)] * 5
+        self._last_ray_max_distances = tuple(
+            [float(self.forward_ray_max_distance)] + [float(self.edge_probe_max_distance)] * 4
+        )
         self._last_obs = np.zeros((self.OBS_DIM,), dtype=np.float32)
         self._prev_progress_potential = 0.0
         self._prev_player_in_contact = False
+        self._prev_player_forward_speed = 0.0
         self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
         self._apply_level_settings(int(self._current_level))
         self.reset()
@@ -655,6 +651,7 @@ class VroomEnv(Env):
         car: RaceCar,
         steer: float,
         throttle: float,
+        brake: float,
         *,
         max_forward_speed: float | None = None,
     ) -> None:
@@ -678,12 +675,13 @@ class VroomEnv(Env):
         steer_load = self._clamp(abs(float(steer)), 0.0, 1.0)
         throttle_turn_scale = 1.0 - float(self.turn_throttle_loss) * (steer_load**1.25)
         throttle_turn_scale = self._clamp(throttle_turn_scale, 0.0, 1.0)
-        effective_throttle = float(throttle)
+        effective_throttle = self._clamp(float(throttle), 0.0, 1.0)
+        effective_brake = self._clamp(float(brake), 0.0, 1.0)
         if effective_throttle > 0.0:
             effective_throttle *= throttle_turn_scale
         forward_speed += effective_throttle * self.accel_force * accel_scale * float(surface_grip)
-        if throttle < 0.0:
-            forward_speed += float(throttle) * self.brake_force * accel_scale * float(surface_grip)
+        if effective_brake > 0.0:
+            forward_speed -= effective_brake * self.brake_force * accel_scale * float(surface_grip)
         allowed_forward_speed = float(self.max_speed if max_forward_speed is None else max_forward_speed)
         forward_speed = self._clamp(forward_speed, -self.max_reverse_speed, allowed_forward_speed)
         lateral_speed *= self._lateral_damping(float(surface_grip))
@@ -786,6 +784,7 @@ class VroomEnv(Env):
         self.steps = 0
         self._prev_progress_potential = float(self._player_progress_potential())
         self._prev_player_in_contact = bool(self.cars[self.player_index].in_contact) if self.cars else False
+        self._prev_player_forward_speed = 0.0
 
     def _finalize_race(self, winner_idx: int | None) -> None:
         self.last_race_winner = None if winner_idx is None else int(winner_idx)
@@ -797,17 +796,21 @@ class VroomEnv(Env):
         self.current_race = int(self.match_tracker.matches_played()) + 1
         self._setup_race()
 
-    def _resolve_human_action(self) -> int:
+    def _resolve_human_action(self) -> np.ndarray:
         left = self.window_controller.is_key_down(arcade.key.LEFT) or self.window_controller.is_key_down(arcade.key.A)
         right = self.window_controller.is_key_down(arcade.key.RIGHT) or self.window_controller.is_key_down(arcade.key.D)
         throttle = self.window_controller.is_key_down(arcade.key.UP) or self.window_controller.is_key_down(arcade.key.W)
+        brake = self.window_controller.is_key_down(arcade.key.DOWN) or self.window_controller.is_key_down(arcade.key.S)
+        steer = 0.0
         if left and (not right):
-            return self.ACTION_LEFT_THROTTLE if throttle else self.ACTION_LEFT_COAST
-        if right and (not left):
-            return self.ACTION_RIGHT_THROTTLE if throttle else self.ACTION_RIGHT_COAST
-        if throttle:
-            return self.ACTION_THROTTLE
-        return self.ACTION_COAST
+            steer = -1.0
+        elif right and (not left):
+            steer = 1.0
+        return self._normalized_action_vector(
+            steer=float(steer),
+            throttle=(1.0 if bool(throttle) else 0.0),
+            brake=(1.0 if bool(brake) else 0.0),
+        )
 
     def _ai_lane_limit(self) -> float:
         return max(4.0, float(self.track_half_width) - float(self.track_probe_radius) - 1.0)
@@ -859,6 +862,15 @@ class VroomEnv(Env):
         car.ai_lane_offset = self._clamp(float(car.ai_lane_offset), -lane_limit, lane_limit)
         return float(car.ai_lane_offset)
 
+    def _side_template_factor(self, track: TrackGeometry, side_name: str) -> float:
+        side_templates = dict(track.side_templates)
+        template_name = str(side_templates.get(str(side_name), "straight"))
+        if template_name == "bell":
+            return 0.80
+        if template_name == "s_curve":
+            return 0.72
+        return 1.0
+
     def _opponent_drive_plan(
         self,
         track: TrackGeometry,
@@ -873,7 +885,7 @@ class VroomEnv(Env):
             return 1.0, 28.0, False
 
         current_side = str(side_before_corner[int(next_corner_key) % len(side_before_corner)])
-        side_speed_factor = 0.75 if current_side in track.bulged_sides else 1.0
+        side_speed_factor = self._side_template_factor(track, current_side)
 
         ideal_corner_distance = max(72.0, 2.75 * float(self.track_half_width) + 18.0)
         coast_error_percent = self._opponent_coast_error_percent(car, next_corner_key)
@@ -898,7 +910,7 @@ class VroomEnv(Env):
             return float(side_speed_factor), 22.0, False
         return 1.0, 30.0, False
 
-    def _ai_control_for_car(self, car_index: int, car: RaceCar) -> tuple[float, float]:
+    def _ai_control_for_car(self, car_index: int, car: RaceCar) -> tuple[float, float, float]:
         del car_index
         track = self._require_track_geometry()
         proj = project_point_to_track(track, (float(car.x), float(car.y)))
@@ -937,36 +949,52 @@ class VroomEnv(Env):
         speed_gain = max(1.0, 0.32 * float(max_forward_speed))
         speed_error = float(target_speed) - float(forward_speed)
         throttle = self._clamp(float(cruise_throttle) + float(speed_error) / float(speed_gain), 0.0, 1.0)
+        brake = 0.0
 
         overspeed_margin = max(0.15 * float(max_forward_speed), 0.25)
         if float(forward_speed) > float(target_speed) + float(overspeed_margin):
             throttle = 0.0
+            brake = self._clamp(
+                (float(forward_speed) - float(target_speed)) / max(0.5, 0.35 * float(max_forward_speed)),
+                0.0,
+                1.0,
+            )
 
         if abs(float(delta)) >= 42.0:
             throttle = min(float(throttle), 0.55)
         if bool(car.in_contact) or bool(car.off_track):
             throttle = max(float(throttle), 0.30)
+            brake = 0.0
 
         min_forward_speed = max(0.75, 0.28 * float(max_forward_speed))
         if float(forward_speed) < float(min_forward_speed):
             throttle = max(float(throttle), 0.55)
+            brake = 0.0
 
-        return float(steer), float(throttle)
+        return float(steer), float(throttle), float(brake)
 
-    def _player_controls_from_action(self, action_idx: int) -> tuple[float, float]:
-        if action_idx == self.ACTION_THROTTLE:
-            return 0.0, 1.0
-        if action_idx == self.ACTION_LEFT_COAST:
-            return -1.0, 0.0
-        if action_idx == self.ACTION_RIGHT_COAST:
-            return 1.0, 0.0
-        if action_idx == self.ACTION_LEFT_THROTTLE:
-            return -1.0, 1.0
-        if action_idx == self.ACTION_RIGHT_THROTTLE:
-            return 1.0, 1.0
-        return 0.0, 0.0
+    def _normalized_action_vector(self, *, steer: float, throttle: float, brake: float) -> np.ndarray:
+        return np.asarray(
+            [
+                self._clamp(float(steer), -1.0, 1.0),
+                self._clamp(float(throttle), 0.0, 1.0),
+                self._clamp(float(brake), 0.0, 1.0),
+            ],
+            dtype=np.float32,
+        )
 
-    def _step_simulation(self, action_idx: int) -> None:
+    def _player_controls_from_action(self, action: object) -> tuple[float, float, float]:
+        action_array = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action_array.size != int(self.ACT_DIM):
+            raise ValueError(f"Vroom expected continuous action with {self.ACT_DIM} values, got {action_array.size}.")
+        normalized = self._normalized_action_vector(
+            steer=float(action_array[0]),
+            throttle=float(action_array[1]),
+            brake=float(action_array[2]),
+        )
+        return float(normalized[0]), float(normalized[1]), float(normalized[2])
+
+    def _step_simulation(self, action: object) -> None:
         for car in self.cars:
             self._update_off_track_state(car)
 
@@ -974,12 +1002,12 @@ class VroomEnv(Env):
         for idx, car in enumerate(self.cars):
             speed_multiplier = self._off_track_speed_multiplier(car)
             if idx == self.player_index:
-                steer, throttle = self._player_controls_from_action(action_idx)
+                steer, throttle, brake = self._player_controls_from_action(action)
                 allowed_speed = float(self.max_speed) * float(speed_multiplier)
             else:
-                steer, throttle = self._ai_control_for_car(idx, car)
+                steer, throttle, brake = self._ai_control_for_car(idx, car)
                 allowed_speed = float(self.max_speed) * float(self.opponent_speed_cap) * float(speed_multiplier)
-            self._apply_car_controls(car, steer, throttle, max_forward_speed=allowed_speed)
+            self._apply_car_controls(car, steer, throttle, brake, max_forward_speed=allowed_speed)
 
         for car in self.cars:
             car.x += car.vx
@@ -993,7 +1021,7 @@ class VroomEnv(Env):
     def _edge_probe_values(
         self,
         car: RaceCar,
-    ) -> tuple[float, float, float, float, list[tuple[float, float]]]:
+    ) -> tuple[float, float, float, float, float, list[tuple[float, float]], tuple[float, ...]]:
         heading_rad = math.radians(float(car.heading_degrees))
         forward_x = math.cos(heading_rad)
         forward_y = math.sin(heading_rad)
@@ -1003,28 +1031,37 @@ class VroomEnv(Env):
         def _norm(dx: float, dy: float) -> tuple[float, float]:
             return self._normalize(float(dx), float(dy))
 
+        f_dir = (float(forward_x), float(forward_y))
         fl_dir = _norm(forward_x + 0.70 * left_x, forward_y + 0.70 * left_y)
         fr_dir = _norm(forward_x - 0.70 * left_x, forward_y - 0.70 * left_y)
         l_dir = (float(left_x), float(left_y))
         r_dir = (float(-left_x), float(-left_y))
-        probe_dirs = [fl_dir, fr_dir, l_dir, r_dir]
-        max_dist = float(self.edge_probe_max_distance)
+        probe_dirs = [f_dir, fl_dir, fr_dir, l_dir, r_dir]
+        probe_max_distances = (
+            float(self.forward_ray_max_distance),
+            float(self.edge_probe_max_distance),
+            float(self.edge_probe_max_distance),
+            float(self.edge_probe_max_distance),
+            float(self.edge_probe_max_distance),
+        )
         probe_vals = [
             self._probe_distance(
                 float(car.x),
                 float(car.y),
                 float(dir_x),
                 float(dir_y),
-                max_dist,
+                float(max_distance),
             )
-            for dir_x, dir_y in probe_dirs
+            for (dir_x, dir_y), max_distance in zip(probe_dirs, probe_max_distances)
         ]
         return (
             float(probe_vals[0]),
             float(probe_vals[1]),
             float(probe_vals[2]),
             float(probe_vals[3]),
+            float(probe_vals[4]),
             probe_dirs,
+            probe_max_distances,
         )
 
     def _compute_obs(self) -> np.ndarray:
@@ -1032,80 +1069,63 @@ class VroomEnv(Env):
         player = self.cars[self.player_index]
         proj = project_point_to_track(track, (float(player.x), float(player.y)))
         tangent_x, tangent_y = float(proj.tangent[0]), float(proj.tangent[1])
-        trk_off = clip_signed(float(proj.lateral_offset) / max(1e-6, float(track.half_width)))
+        lat_off = clip_signed(float(proj.lateral_offset) / max(1e-6, float(track.half_width)))
 
         heading_rad = math.radians(player.heading_degrees)
         heading_x = math.cos(heading_rad)
         heading_y = math.sin(heading_rad)
         forward_x, forward_y, fwd_speed_raw, lat_speed_raw = self._project_to_car_frame(player)
         spd_fwd = clip_signed(float(fwd_speed_raw) / max(1.0, float(self.max_speed)))
-        spd_lat = clip_signed(float(lat_speed_raw) / max(1.0, float(self.max_speed)))
+        lat_vel = clip_signed(float(lat_speed_raw) / max(1.0, float(self.max_speed)))
+        spd_delta = clip_signed(float(fwd_speed_raw - self._prev_player_forward_speed) / max(1.0, float(self.accel_force * 2.0)))
         yaw_rt = clip_signed(float(player.yaw_rate) / float(max(1e-6, self.yaw_rate_norm)))
-        surf = self._surface_grip(player)
+        heading_err = float(self._signed_angle_norm(heading_x, heading_y, tangent_x, tangent_y))
+        heading_err_rad = float(heading_err) * math.pi
+        heading_err_sin = clip_signed(math.sin(heading_err_rad))
+        heading_err_cos = clip_signed(math.cos(heading_err_rad))
 
-        trk_ang = self._signed_angle_norm(heading_x, heading_y, tangent_x, tangent_y)
         near_lookahead_s = max(18.0, min(70.0, 0.07 * float(track.length)))
         far_lookahead_s = max(near_lookahead_s + 24.0, min(190.0, 0.22 * float(track.length)))
         _, (near_tx, near_ty), _ = sample_track_at_s(track, float(proj.s) + float(near_lookahead_s))
         _, (far_tx, far_ty), _ = sample_track_at_s(track, float(proj.s) + float(far_lookahead_s))
-        trk_ang_n = self._signed_angle_norm(heading_x, heading_y, near_tx, near_ty)
-        trk_ang_f = self._signed_angle_norm(heading_x, heading_y, far_tx, far_ty)
+        look_near = float(self._signed_angle_norm(heading_x, heading_y, near_tx, near_ty))
+        look_far = float(self._signed_angle_norm(heading_x, heading_y, far_tx, far_ty))
+        curve_near = float(self._signed_angle_norm(tangent_x, tangent_y, near_tx, near_ty))
+        curve_far = float(self._signed_angle_norm(tangent_x, tangent_y, far_tx, far_ty))
+        look_near_rad = float(look_near) * math.pi
+        look_far_rad = float(look_far) * math.pi
 
-        edg_fl, edg_fr, edg_l, edg_r, probe_dirs = self._edge_probe_values(player)
+        ray_f, edg_fl, edg_fr, edg_l, edg_r, probe_dirs, probe_max_distances = self._edge_probe_values(player)
         self._last_ray_origin = (float(player.x), float(player.y))
         self._last_ray_values = np.asarray(
-            [edg_fl, edg_fr, edg_l, edg_r],
+            [ray_f, edg_fl, edg_fr, edg_l, edg_r],
             dtype=np.float32,
         )
         self._last_ray_dirs = [(float(dx), float(dy)) for dx, dy in probe_dirs]
-        self._last_ray_max_distances = tuple([float(self.edge_probe_max_distance)] * 4)
-
-        side_x = -forward_y
-        side_y = forward_x
-        opponent_rel: list[tuple[float, float, int]] = []
-        for idx, car in enumerate(self.cars):
-            if int(idx) == int(self.player_index):
-                continue
-            rel_x = float(car.x - player.x)
-            rel_y = float(car.y - player.y)
-            rel_dx = rel_x * forward_x + rel_y * forward_y
-            rel_dy = rel_x * side_x + rel_y * side_y
-            opponent_rel.append((float(rel_dx), float(rel_dy), int(idx)))
-
-        opponent_rel.sort(
-            key=lambda item: (
-                0 if item[0] >= 0.0 else 1,
-                float(item[0]) if item[0] >= 0.0 else abs(float(item[0])),
-                float(item[1]),
-                int(item[2]),
-            )
-        )
-        pos_scale = max(1.0, float(self.edge_probe_max_distance) * 1.5)
-        opp_dx = [0.0, 0.0, 0.0]
-        opp_dy = [0.0, 0.0, 0.0]
-        for slot_idx, (rel_dx, rel_dy, _) in enumerate(opponent_rel[:3]):
-            opp_dx[slot_idx] = float(clip_signed(float(rel_dx) / float(pos_scale)))
-            opp_dy[slot_idx] = float(clip_signed(float(rel_dy) / float(pos_scale)))
+        self._last_ray_max_distances = tuple(float(value) for value in probe_max_distances)
+        self._prev_player_forward_speed = float(fwd_speed_raw)
 
         feature_values = {
-            "spd_fwd": float(spd_fwd),
-            "spd_lat": float(spd_lat),
-            "yaw_rt": float(yaw_rt),
-            "surf": float(surf),
-            "trk_off": float(trk_off),
-            "trk_ang": float(trk_ang),
-            "trk_ang_n": float(trk_ang_n),
-            "trk_ang_f": float(trk_ang_f),
-            "edg_fl": float(edg_fl),
-            "edg_fr": float(edg_fr),
-            "edg_l": float(edg_l),
-            "edg_r": float(edg_r),
-            "opp1_dx": float(opp_dx[0]),
-            "opp1_dy": float(opp_dy[0]),
-            "opp2_dx": float(opp_dx[1]),
-            "opp2_dy": float(opp_dy[1]),
-            "opp3_dx": float(opp_dx[2]),
-            "opp3_dy": float(opp_dy[2]),
+            "track_lat_off": float(lat_off),
+            "ego_spd_lat": float(lat_vel),
+            "ego_spd_fwd": float(spd_fwd),
+            "ego_spd_delta": float(spd_delta),
+            "ego_yaw_rate": float(yaw_rt),
+            "track_heading_err_sin": float(heading_err_sin),
+            "track_heading_err_cos": float(heading_err_cos),
+            "track_look_near_sin": float(clip_signed(math.sin(look_near_rad))),
+            "track_look_near_cos": float(clip_signed(math.cos(look_near_rad))),
+            "track_look_far_sin": float(clip_signed(math.sin(look_far_rad))),
+            "track_look_far_cos": float(clip_signed(math.cos(look_far_rad))),
+            "track_curve_near": float(curve_near),
+            "track_curve_far": float(curve_far),
+            "ray_f": float(ray_f),
+            "ray_fl": float(edg_fl),
+            "ray_fr": float(edg_fr),
+            "ray_l": float(edg_l),
+            "ray_r": float(edg_r),
+            "flag_contact": 1.0 if bool(player.in_contact) else 0.0,
+            "flag_off_track": 1.0 if bool(player.off_track) else 0.0,
         }
         obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
         if obs.shape != (self.OBS_DIM,):
@@ -1123,7 +1143,7 @@ class VroomEnv(Env):
         self.player_index = 0
         self.done = False
         self._episode_reward_components.reset()
-        self.last_action_index = self.ACTION_COAST
+        self.last_action = np.zeros((self.ACT_DIM,), dtype=np.float32)
         self._setup_race()
         return self._compute_obs()
 
@@ -1139,15 +1159,24 @@ class VroomEnv(Env):
 
         self.window_controller.poll_events_or_raise()
         if self.mode == "human":
-            action_idx = self._resolve_human_action()
+            action_array = self._resolve_human_action()
         else:
-            action_idx = int(action)
-        action_idx = int(np.clip(action_idx, 0, self.ACT_DIM - 1))
-        self.last_action_index = int(action_idx)
+            action_array = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action_array.size != int(self.ACT_DIM):
+            raise ValueError(f"Vroom expected action with {self.ACT_DIM} values, got {action_array.size}.")
+        action_array = np.asarray(
+            [
+                self._clamp(float(action_array[0]), -1.0, 1.0),
+                self._clamp(float(action_array[1]), 0.0, 1.0),
+                self._clamp(float(action_array[2]), 0.0, 1.0),
+            ],
+            dtype=np.float32,
+        )
+        self.last_action = action_array.copy()
 
         phi_prev = float(self._prev_progress_potential)
         was_in_contact = bool(self._prev_player_in_contact)
-        self._step_simulation(action_idx)
+        self._step_simulation(action_array)
         self.steps += 1
 
         reward = 0.0

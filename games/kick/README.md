@@ -1,6 +1,7 @@
 # Kick
 
 Arcade-style top-down football with shared-team MAPPO training (CTDE): one shared actor for all LEFT players, centralized critic during training.
+This project is intentionally paused / experimental in the new lineup.
 
 ## Clip
 

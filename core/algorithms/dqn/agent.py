@@ -92,14 +92,44 @@ class DQNAlgorithm(Algorithm):
         self._exploration = EpsilonController(resolve_exploration_config(config.exploration))
         self.epsilon = float(self._exploration.epsilon)
 
-    def act(self, obs: np.ndarray, explore: bool) -> int:
+    def _normalize_action_mask(self, action_mask: object | None) -> np.ndarray:
+        action_dim = int(self.config.action_dim)
+        if action_mask is None:
+            return np.ones((action_dim,), dtype=np.bool_)
+
+        mask_array = np.asarray(action_mask, dtype=np.bool_).reshape(-1)
+        if int(mask_array.size) != action_dim:
+            raise ValueError(f"DQN action mask expected {action_dim} values, got {int(mask_array.size)}.")
+        if int(mask_array.sum()) <= 0:
+            mask_array = np.ones((action_dim,), dtype=np.bool_)
+        return mask_array.astype(np.bool_, copy=False)
+
+    def _normalize_next_action_masks(self, action_masks: tuple[object | None, ...]) -> np.ndarray:
+        if not action_masks:
+            return np.ones((0, int(self.config.action_dim)), dtype=np.bool_)
+        normalized = [self._normalize_action_mask(mask) for mask in action_masks]
+        return np.stack(normalized, axis=0).astype(np.bool_, copy=False)
+
+    @staticmethod
+    def _masked_q_values(q_values: torch.Tensor, action_mask: np.ndarray) -> torch.Tensor:
+        mask_tensor = torch.as_tensor(action_mask, dtype=torch.bool, device=q_values.device)
+        if mask_tensor.dim() == 1:
+            mask_tensor = mask_tensor.unsqueeze(0)
+        return q_values.masked_fill(~mask_tensor, float(-1e9))
+
+    def act(self, obs: np.ndarray, explore: bool, action_mask: np.ndarray | None = None) -> int:
+        valid_mask = self._normalize_action_mask(action_mask)
+        valid_actions = np.flatnonzero(valid_mask)
         if explore and random.random() < self.epsilon:
-            return random.randint(0, int(self.config.action_dim) - 1)
+            if valid_actions.size <= 0:
+                return 0
+            return int(random.choice(valid_actions.tolist()))
 
         with torch.no_grad():
             obs_tensor = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
             q_values = self.online_model(obs_tensor)
-            action = int(torch.argmax(q_values, dim=1).item())
+            masked_q_values = self._masked_q_values(q_values, valid_mask)
+            action = int(torch.argmax(masked_q_values, dim=1).item())
         return action
 
     def observe(self, transition: dict[str, Any]) -> None:
@@ -110,6 +140,11 @@ class DQNAlgorithm(Algorithm):
                 float(transition["reward"]),
                 np.asarray(transition["next_obs"], dtype=np.float32),
                 bool(transition["done"]),
+                (
+                    self._normalize_action_mask(transition.get("next_action_mask"))
+                    if transition.get("next_action_mask") is not None
+                    else None
+                ),
             )
         )
         self.total_env_steps += 1
@@ -135,23 +170,49 @@ class DQNAlgorithm(Algorithm):
             return {}
 
         batch, indices, is_weights = self.replay.sample(self.config.batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
+        states: list[np.ndarray] = []
+        actions: list[int] = []
+        rewards: list[float] = []
+        next_states: list[np.ndarray] = []
+        dones: list[bool] = []
+        next_action_masks: list[object | None] = []
+        for transition in batch:
+            if len(transition) >= 6:
+                state, action, reward, next_state, done, next_action_mask = transition[:6]
+            else:
+                state, action, reward, next_state, done = transition[:5]
+                next_action_mask = None
+            states.append(np.asarray(state, dtype=np.float32))
+            actions.append(int(action))
+            rewards.append(float(reward))
+            next_states.append(np.asarray(next_state, dtype=np.float32))
+            dones.append(bool(done))
+            next_action_masks.append(next_action_mask)
 
-        state_tensor = torch.as_tensor(np.asarray(states), dtype=torch.float32, device=self.device)
+        state_tensor = torch.as_tensor(np.asarray(states, dtype=np.float32), dtype=torch.float32, device=self.device)
         action_tensor = torch.as_tensor(np.asarray(actions), dtype=torch.long, device=self.device)
         reward_tensor = torch.as_tensor(np.asarray(rewards), dtype=torch.float32, device=self.device)
-        next_state_tensor = torch.as_tensor(np.asarray(next_states), dtype=torch.float32, device=self.device)
+        next_state_tensor = torch.as_tensor(
+            np.asarray(next_states, dtype=np.float32),
+            dtype=torch.float32,
+            device=self.device,
+        )
         done_tensor = torch.as_tensor(np.asarray(dones), dtype=torch.bool, device=self.device)
         weight_tensor = torch.as_tensor(np.asarray(is_weights), dtype=torch.float32, device=self.device)
+        next_action_mask_array = self._normalize_next_action_masks(tuple(next_action_masks))
 
         current_q = self.online_model(state_tensor).gather(1, action_tensor.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
+            next_online_q = self.online_model(next_state_tensor)
+            next_target_q = self.target_model(next_state_tensor)
+            masked_next_online_q = self._masked_q_values(next_online_q, next_action_mask_array)
+            masked_next_target_q = self._masked_q_values(next_target_q, next_action_mask_array)
             if self.config.double_dqn:
-                next_actions = self.online_model(next_state_tensor).argmax(dim=1)
+                next_actions = masked_next_online_q.argmax(dim=1)
             else:
-                next_actions = self.target_model(next_state_tensor).argmax(dim=1)
-            next_q = self.target_model(next_state_tensor).gather(1, next_actions.unsqueeze(1)).squeeze(1)
+                next_actions = masked_next_target_q.argmax(dim=1)
+            next_q = masked_next_target_q.gather(1, next_actions.unsqueeze(1)).squeeze(1)
             target_q = reward_tensor + (~done_tensor).float() * float(self.config.gamma) * next_q
 
         td_errors = target_q - current_q

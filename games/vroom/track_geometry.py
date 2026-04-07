@@ -9,12 +9,8 @@ import numpy as np
 
 
 SIDE_ORDER = ("top", "right", "bottom", "left")
-TEMPLATE_BY_BULGE_COUNT = {
-    0: "rounded_rectangle",
-    1: "one_side_bulge",
-    2: "two_side_bulge",
-    3: "three_side_bulge",
-}
+LONG_SIDE_ORDER = ("top", "bottom")
+LONG_SIDE_TEMPLATE_CHOICES = ("straight", "bell", "s_curve")
 
 
 @dataclass(frozen=True)
@@ -54,7 +50,8 @@ class TrackGeometry:
     start_straight_len_px: float
     main_corner_s: tuple[float, float, float, float]
     template_family: str
-    bulged_sides: tuple[str, ...]
+    side_templates: tuple[tuple[str, str], ...]
+    curved_sides: tuple[str, ...]
     _segment_vectors: np.ndarray
     _segment_lengths: np.ndarray
     _segment_s: np.ndarray
@@ -104,21 +101,30 @@ def _line_points(
     p1: tuple[float, float],
     count: int,
     *,
-    bulge_amp: float,
-    bulge_sign: float,
-    bulge_normal: tuple[float, float],
+    template_kind: str,
+    template_amp: float,
+    template_normal: tuple[float, float],
 ) -> list[tuple[float, float]]:
     point_count = max(3, int(count))
-    nx, ny = float(bulge_normal[0]), float(bulge_normal[1])
+    nx, ny = float(template_normal[0]), float(template_normal[1])
     out: list[tuple[float, float]] = []
     for i in range(point_count):
         t = float(i) / float(max(1, point_count - 1))
         x = float(p0[0]) + (float(p1[0]) - float(p0[0])) * t
         y = float(p0[1]) + (float(p1[1]) - float(p0[1])) * t
-        if float(bulge_amp) > 0.0:
-            # Single-lobe side bulge with zero displacement and slope at side ends.
+        disp = 0.0
+        if float(template_amp) > 0.0:
+            kind = str(template_kind).strip().lower()
             fade = math.sin(math.pi * t) ** 2
-            disp = float(bulge_sign) * float(bulge_amp) * fade
+            if kind == "bell":
+                # Smooth inward single-lobe indentation.
+                disp = -float(template_amp) * fade
+            elif kind == "s_curve":
+                # Two opposing smooth bends joined into a mild S profile.
+                disp = float(template_amp) * math.sin(2.0 * math.pi * t) * fade
+            elif kind != "straight":
+                raise ValueError(f"Unsupported long-side template '{template_kind}'.")
+        if abs(float(disp)) > 1e-9:
             x += nx * disp
             y += ny * disp
         out.append((float(x), float(y)))
@@ -498,29 +504,32 @@ def build_track_geometry(
     corner_radius_px: float,
     sample_spacing_px: float,
     start_straight_len_px: float,
-    template_min_bulged_sides: int,
-    template_max_bulged_sides: int,
-    bulge_amplitude_min_px: float,
-    bulge_amplitude_max_px: float,
-    bulge_width_cap_ratio: float,
-    bulge_length_cap_ratio: float,
-    bulge_short_side_threshold_px: float,
-    bulge_short_side_length_cap_ratio: float,
+    long_side_template_choices: tuple[str, ...] | list[str],
+    bell_amplitude_min_px: float,
+    bell_amplitude_max_px: float,
+    s_amplitude_min_px: float,
+    s_amplitude_max_px: float,
+    inset_width_cap_ratio: float,
+    inset_length_cap_ratio: float,
 ) -> TrackGeometry:
     rng = np.random.default_rng(int(seed))
     half_width = max(8.0, 0.5 * float(track_width_px))
     sample_spacing = max(3.0, float(sample_spacing_px))
-
-    min_bulges = max(0, min(3, int(template_min_bulged_sides)))
-    max_bulges = max(min_bulges, min(3, int(template_max_bulged_sides)))
+    template_choices = [
+        str(value).strip().lower()
+        for value in long_side_template_choices
+        if str(value).strip().lower() in LONG_SIDE_TEMPLATE_CHOICES
+    ]
+    if not template_choices:
+        template_choices = list(LONG_SIDE_TEMPLATE_CHOICES)
     start_side = str(SIDE_ORDER[int(rng.integers(0, len(SIDE_ORDER)))])
-    side_candidates = [side for side in SIDE_ORDER if side != start_side]
-    rng.shuffle(side_candidates)
-    bulge_count = int(rng.integers(min_bulges, max_bulges + 1)) if max_bulges > 0 else 0
-    bulged_sides = tuple(sorted(side_candidates[:bulge_count], key=SIDE_ORDER.index))
+    long_side_templates = {
+        "top": str(template_choices[int(rng.integers(0, len(template_choices)))]),
+        "bottom": str(template_choices[int(rng.integers(0, len(template_choices)))]),
+    }
 
-    max_bulge_guard = max(0.0, float(bulge_amplitude_max_px))
-    margin = float(padding_px) + float(half_width) + max_bulge_guard + 2.0
+    max_inset_guard = max(0.0, float(bell_amplitude_max_px), float(s_amplitude_max_px))
+    margin = float(padding_px) + float(half_width) + max_inset_guard + 2.0
     left = margin
     right = float(width) - margin
     top = margin
@@ -612,33 +621,38 @@ def build_track_geometry(
         float(start_mid[1]) + float(start_dir_y) * half_strip,
     )
 
-    bulge_min = max(0.0, float(bulge_amplitude_min_px))
-    bulge_max = max(float(bulge_min), float(bulge_amplitude_max_px))
-    side_params: dict[str, tuple[float, float]] = {}
+    side_params: dict[str, tuple[str, float]] = {}
     for side in SIDE_ORDER:
         side_info = side_defs[side]
         p0 = side_info["p0"]  # type: ignore[assignment]
         p1 = side_info["p1"]  # type: ignore[assignment]
         side_len = float(math.hypot(float(p1[0]) - float(p0[0]), float(p1[1]) - float(p0[1])))  # type: ignore[index]
-        if side == start_side or side not in bulged_sides:
-            side_params[side] = (0.0, 1.0)
+        if side in {"left", "right"}:
+            side_params[side] = ("straight", 0.0)
             continue
+        template_kind = str(long_side_templates.get(side, "straight"))
+        if side == start_side:
+            template_kind = "straight"
         amp_cap = min(
-            max(0.0, float(bulge_width_cap_ratio) * float(half_width)),
-            max(0.0, float(bulge_length_cap_ratio) * float(side_len)),
+            max(0.0, float(inset_width_cap_ratio) * float(half_width)),
+            max(0.0, float(inset_length_cap_ratio) * float(side_len)),
         )
-        if side_len < float(bulge_short_side_threshold_px):
-            amp_cap = min(amp_cap, max(0.0, float(bulge_short_side_length_cap_ratio) * float(side_len)))
-        amp_high = min(float(bulge_max), float(amp_cap))
-        amp_low = min(float(bulge_min), float(amp_high))
+        if template_kind == "bell":
+            amp_low = min(max(0.0, float(bell_amplitude_min_px)), amp_cap)
+            amp_high = min(max(float(amp_low), float(bell_amplitude_max_px)), amp_cap)
+        elif template_kind == "s_curve":
+            amp_low = min(max(0.0, float(s_amplitude_min_px)), amp_cap)
+            amp_high = min(max(float(amp_low), float(s_amplitude_max_px)), amp_cap)
+        else:
+            amp_low = 0.0
+            amp_high = 0.0
         if amp_high <= 1.0:
-            side_params[side] = (0.0, 1.0)
+            side_params[side] = ("straight", 0.0)
             continue
         amp = float(rng.uniform(amp_low, amp_high)) if amp_high > amp_low + 1e-6 else float(amp_high)
-        sign = -1.0 if float(rng.random()) < 0.5 else 1.0
-        side_params[side] = (float(amp), float(sign))
+        side_params[side] = (str(template_kind), float(amp))
 
-    def _compose_loop(local_side_params: dict[str, tuple[float, float]]) -> list[tuple[float, float]]:
+    def _compose_loop(local_side_params: dict[str, tuple[str, float]]) -> list[tuple[float, float]]:
         points: list[tuple[float, float]] = []
         arc_count = max(8, int((0.5 * math.pi * corner_r) / max(1.0, sample_spacing * 0.6)) + 1)
         for side in SIDE_ORDER:
@@ -654,19 +668,19 @@ def build_track_geometry(
                 strip_count = max(8, int(float(strip_len) / max(1.0, sample_spacing * 0.45)) + 1)
                 tail_count = max(3, int(tail_len / max(1.0, sample_spacing * 0.65)) + 1)
                 side_pts: list[tuple[float, float]] = []
-                _append_no_dup(side_pts, _line_points(p0, start_strip_a, lead_count, bulge_amp=0.0, bulge_sign=1.0, bulge_normal=outward))  # type: ignore[arg-type]
-                _append_no_dup(side_pts, _line_points(start_strip_a, start_strip_b, strip_count, bulge_amp=0.0, bulge_sign=1.0, bulge_normal=outward))
-                _append_no_dup(side_pts, _line_points(start_strip_b, p1, tail_count, bulge_amp=0.0, bulge_sign=1.0, bulge_normal=outward))  # type: ignore[arg-type]
+                _append_no_dup(side_pts, _line_points(p0, start_strip_a, lead_count, template_kind="straight", template_amp=0.0, template_normal=outward))  # type: ignore[arg-type]
+                _append_no_dup(side_pts, _line_points(start_strip_a, start_strip_b, strip_count, template_kind="straight", template_amp=0.0, template_normal=outward))
+                _append_no_dup(side_pts, _line_points(start_strip_b, p1, tail_count, template_kind="straight", template_amp=0.0, template_normal=outward))  # type: ignore[arg-type]
             else:
                 side_count = max(5, int(side_len / max(1.0, sample_spacing * 0.65)) + 1)
-                amp, sign = local_side_params[side]
+                template_kind, amp = local_side_params[side]
                 side_pts = _line_points(
                     p0,  # type: ignore[arg-type]
                     p1,  # type: ignore[arg-type]
                     side_count,
-                    bulge_amp=float(amp),
-                    bulge_sign=float(sign),
-                    bulge_normal=outward,  # type: ignore[arg-type]
+                    template_kind=str(template_kind),
+                    template_amp=float(amp),
+                    template_normal=outward,  # type: ignore[arg-type]
                 )
             _append_no_dup(points, side_pts)
 
@@ -690,15 +704,23 @@ def build_track_geometry(
     dense_points = _compose_loop(side_params)
     if _has_self_intersection(dense_points):
         for side in SIDE_ORDER:
-            amp, _ = side_params[side]
+            template_kind, amp = side_params[side]
             if amp > 0.0:
-                side_params[side] = (float(amp) * 0.55, 1.0)
+                side_params[side] = (str(template_kind), float(amp) * 0.55)
         dense_points = _compose_loop(side_params)
         if _has_self_intersection(dense_points):
             for side in SIDE_ORDER:
-                side_params[side] = (0.0, 1.0)
+                side_params[side] = ("straight", 0.0)
             dense_points = _compose_loop(side_params)
-    effective_bulged_sides = tuple(side for side in SIDE_ORDER if float(side_params[side][0]) > 1e-6 and side != start_side)
+    effective_side_templates = tuple(
+        (str(side), str(side_params[side][0]))
+        for side in SIDE_ORDER
+    )
+    curved_sides = tuple(
+        str(side)
+        for side in LONG_SIDE_ORDER
+        if str(side_params[side][0]) != "straight"
+    )
 
     dense_np = np.asarray(dense_points, dtype=np.float64)
     if dense_np.shape[0] < 24:
@@ -821,7 +843,7 @@ def build_track_geometry(
         )
         main_corner_s.append(float(_wrap_s(float(corner_proj.s), float(track_len))))
 
-    template_family = TEMPLATE_BY_BULGE_COUNT[int(len(effective_bulged_sides))]
+    template_family = "rounded_long_side_templates"
     raw_road_polygon = np.vstack((left_boundary, right_boundary[::-1]))
     road_poly_points = clean_polygon_vertices(
         [(float(row[0]), float(row[1])) for row in raw_road_polygon],
@@ -856,7 +878,8 @@ def build_track_geometry(
         start_straight_len_px=float(strip_len),
         main_corner_s=tuple(float(value) for value in main_corner_s),
         template_family=str(template_family),
-        bulged_sides=tuple(str(side) for side in effective_bulged_sides),
+        side_templates=tuple((str(side), str(template)) for side, template in effective_side_templates),
+        curved_sides=tuple(str(side) for side in curved_sides),
         _segment_vectors=np.asarray(seg_vec, dtype=np.float32),
         _segment_lengths=np.asarray(seg_len, dtype=np.float32),
         _segment_s=np.asarray(seg_s, dtype=np.float32),

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 
+from core.algorithms.factory import is_on_policy_algo
 from core.game import (
+    ACTIVE_GAME_ORDER,
     apply_training_start_level,
     normalize_resume_mode,
     prepare_run,
@@ -19,7 +21,7 @@ from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an RL toybox game")
-    parser.add_argument("--game", required=True, help="Game id (bang, snake, vroom, walk, kick, peek)")
+    parser.add_argument("--game", required=True, help=f"Game id ({', '.join(ACTIVE_GAME_ORDER)})")
     parser.add_argument("--algo", default=None, help="Override algorithm id")
     parser.add_argument("--render", action="store_true", help="Show Arcade window during training")
     parser.add_argument(
@@ -131,7 +133,7 @@ def main() -> None:
             },
         )
 
-        if algo_id == "ppo":
+        if is_on_policy_algo(algo_id):
             train_config = dict(spec.train_config)
             if args.max_iterations is not None:
                 train_config["max_iterations"] = int(args.max_iterations)

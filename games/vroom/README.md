@@ -1,6 +1,7 @@
 # Vroom
 
 Top-down one-lap racing with procedural closed-loop tracks.
+Vroom is the repo's compact continuous-control showcase: same arcade feel and core car physics, but now driven with true continuous `steer / throttle / brake` controls and SAC-oriented defaults.
 
 ## Clip
 
@@ -8,52 +9,56 @@ Top-down one-lap racing with procedural closed-loop tracks.
 
 ## Algorithm / Network
 
-- Algo: vanilla DQN
-- Hidden sizes: `[32, 32]`
+- Algo: soft actor-critic (`sac`)
+- Hidden sizes: `[128, 128]`
 
 ## Controls (Human)
 
 - Steer: `A/D` or left/right arrows
 - Throttle: `W` or up arrow
-- Coast: no input
+- Brake: `S` or down arrow
+- Coast: no throttle / brake input
 
 ## Observation / Actions
 
-- Observation: `18` floats (`INPUT_FEATURE_NAMES`, ordered)
-  - `spd_fwd`
-  - `spd_lat`
-  - `yaw_rt`
-  - `surf`
-  - `trk_off`
-  - `trk_ang`
-  - `trk_ang_n`
-  - `trk_ang_f`
-  - `edg_fl`
-  - `edg_fr`
-  - `edg_l`
-  - `edg_r`
-  - `opp1_dx`
-  - `opp1_dy`
-  - `opp2_dx`
-  - `opp2_dy`
-  - `opp3_dx`
-  - `opp3_dy`
-- Actions: `Discrete(6)` (`ACTION_NAMES`, ordered)
-  - `0 coast`
-  - `1 throttle`
-  - `2 left_coast`
-  - `3 right_coast`
-  - `4 left_throttle`
-  - `5 right_throttle`
+- Observation: `20` floats (`INPUT_FEATURE_NAMES`, ordered)
+  - `track_lat_off`
+  - `ego_spd_lat`
+  - `ego_spd_fwd`
+  - `ego_spd_delta`
+  - `ego_yaw_rate`
+  - `track_heading_err_sin`
+  - `track_heading_err_cos`
+  - `track_look_near_sin`
+  - `track_look_near_cos`
+  - `track_look_far_sin`
+  - `track_look_far_cos`
+  - `track_curve_near`
+  - `track_curve_far`
+  - `ray_f`
+  - `ray_fl`
+  - `ray_fr`
+  - `ray_l`
+  - `ray_r`
+  - `flag_contact`
+  - `flag_off_track`
+- Actions: `Box(3)` (`ACTION_NAMES`, ordered)
+  - `steer` in `[-1, 1]`
+  - `throttle` in `[0, 1]`
+  - `brake` in `[0, 1]`
 
-Opponent slot notes:
-- `opp{1..3}_{dx,dy}` are ego-frame relative coordinates.
-- Opponents are ordered deterministically each frame: ahead first by nearest longitudinal `dx`, then behind by nearest `|dx|`, with `dy` tie-break.
-- Missing opponent slots are zero-filled.
-
-Edge probe notes:
-- `edg_*` are normalized free-space-before-track-edge values in `[0,1]`.
-- `0.0` means the edge is effectively in contact with the probe origin and `1.0` means no edge within probe range.
+Observation notes:
+- The observation stays vector-only and intentionally compact.
+- `ego_*` names are reserved for car-state features.
+- `track_*` names are reserved for track-relative and lookahead geometry features.
+- `ray_*` names are reserved for normalized probe distances.
+- `flag_*` names are reserved for binary state flags.
+- `track_heading_err_*` encode the player's heading relative to the local track tangent.
+- `track_look_*` encode heading relative to near/far lookahead tangents.
+- `track_curve_*` encode how the track tangent itself changes over those lookaheads.
+- The rendered ray lines now match the NN inputs exactly: forward, front-left, front-right, left, and right.
+- `ray_*` values are normalized free space before the track edge; `0.0` means near-contact and `1.0` means no edge hit within probe range.
+- `flag_contact` and `flag_off_track` are binary control-state flags.
 
 ## Environment Notes
 
@@ -67,15 +72,27 @@ Edge probe notes:
   - `train`: `1` race
   - `eval` / `human`: `10` races per set
 
+### Vehicle Model
+
+- The core top-down car handling is intentionally preserved from the previous Vroom runtime.
+- Steering, speed cap, drag, lateral damping, off-track slowdown, and collision response still follow the same underlying physics path.
+- The main change is the action interface: both the policy and human play now use the same continuous `steer / throttle / brake` control channels.
+
+### Track Generation
+
+- Tracks stay in the same rounded-rectangle family as before.
+- The two short sides are always straight.
+- The two long sides are each sampled independently from:
+  - `straight`
+  - `bell`: one smooth inward indentation
+  - `s_curve`: two opposing smooth bends
+- The long-side amplitudes are intentionally stronger now so those templates read more clearly while staying within the same family.
+- Rounded corners and the start strip are still built by the same geometry-first pipeline, so the resulting tracks stay readable and raceable.
+
 ### Scripted Opponents
 
 - Opponents follow a simple lane-keeping script.
-- Speed targets are scaled by `opponent_speed_cap`, with three section multipliers:
-  - `1.0x` on plain sides
-  - `0.75x` on bulged sides
-  - `0.5x` in the corner-control zone for each of the four main corners
-- They coast only for the four main rounded corners of the track.
-- Bulges are driven at regular speed rather than corner-coasted.
+- Speed targets are scaled by `opponent_speed_cap`, with lighter speed reductions on curved long-side templates and heavier slowdowns in the four rounded-corner zones.
 - Each opponent samples a per-bend coasting timing error from `LEVEL_SETTINGS[*]["opponent_coast_error_choices"]`.
   - Negative values coast early.
   - `0` means the reference corner-entry point with no timing error.

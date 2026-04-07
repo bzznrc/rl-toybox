@@ -1,0 +1,1 @@
+"""Stealth game package."""

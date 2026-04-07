@@ -39,44 +39,42 @@ TRACK_FOOTPRINT_SCALE = 1.25
 TRACK_CORNER_RADIUS_PX = 120.0
 TRACK_SAMPLE_SPACING_PX = 6.0
 TRACK_START_STRAIGHT_LEN_PX = 180.0
-TRACK_TEMPLATE_MIN_BULGED_SIDES = 0
-TRACK_TEMPLATE_MAX_BULGED_SIDES = 3
-TRACK_BULGE_AMPLITUDE_MIN_PX = 60.0
-TRACK_BULGE_AMPLITUDE_MAX_PX = 60.0
-TRACK_BULGE_WIDTH_CAP_RATIO = 0.60
-TRACK_BULGE_LENGTH_CAP_RATIO = 0.15
-TRACK_BULGE_SHORT_SIDE_THRESHOLD_PX = 240.0
-TRACK_BULGE_SHORT_SIDE_LENGTH_CAP_RATIO = 0.15
+TRACK_LONG_SIDE_TEMPLATE_CHOICES = ("straight", "bell", "s_curve")
+TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX = 72.0
+TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX = 92.0
+TRACK_LONG_SIDE_S_AMPLITUDE_MIN_PX = 40.0
+TRACK_LONG_SIDE_S_AMPLITUDE_MAX_PX = 58.0
+TRACK_LONG_SIDE_INSET_WIDTH_CAP_RATIO = 0.72
+TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO = 0.20
 
 
 # IO
 INPUT_FEATURE_NAMES = [
-    "spd_fwd",
-    "spd_lat",
-    "yaw_rt",
-    "surf",
-    "trk_off",
-    "trk_ang",
-    "trk_ang_n",
-    "trk_ang_f",
-    "edg_fl",
-    "edg_fr",
-    "edg_l",
-    "edg_r",
-    "opp1_dx",
-    "opp1_dy",
-    "opp2_dx",
-    "opp2_dy",
-    "opp3_dx",
-    "opp3_dy",
+    "track_lat_off",
+    "ego_spd_lat",
+    "ego_spd_fwd",
+    "ego_spd_delta",
+    "ego_yaw_rate",
+    "track_heading_err_sin",
+    "track_heading_err_cos",
+    "track_look_near_sin",
+    "track_look_near_cos",
+    "track_look_far_sin",
+    "track_look_far_cos",
+    "track_curve_near",
+    "track_curve_far",
+    "ray_f",
+    "ray_fl",
+    "ray_fr",
+    "ray_l",
+    "ray_r",
+    "flag_contact",
+    "flag_off_track",
 ]
 ACTION_NAMES = [
-    "coast",
+    "steer",
     "throttle",
-    "left_coast",
-    "right_coast",
-    "left_throttle",
-    "right_throttle",
+    "brake",
 ]
 OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
@@ -94,6 +92,7 @@ LATERAL_DAMPING_ON_TRACK = 0.90
 LATERAL_DAMPING_OFF_TRACK = 0.975
 # Probe distance for road-edge sensing.
 EDGE_PROBE_MAX_DISTANCE_PX = 140.0
+FORWARD_RAY_MAX_DISTANCE_PX = 180.0
 
 
 # CURRICULUM
@@ -144,26 +143,19 @@ REWARD_COMPONENTS = {
 }
 
 # TRAINING
-HIDDEN_DIMENSIONS = [32, 32]
+HIDDEN_DIMENSIONS = [128, 128]
 
 MAX_TRAINING_STEPS = 10_000_000
 CHECKPOINT_EVERY_STEPS = 100_000
 
 REPLAY_BUFFER_SIZE = 200_000
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 LEARNING_RATE = 3e-4
-WEIGHT_DECAY = 0.0
 GAMMA = 0.99
-TARGET_SYNC_EVERY = 2_000
+TAU = 0.005
 GRAD_CLIP_NORM = 10.0
+INIT_ALPHA = 0.20
 
-LEARN_START_STEPS = 20_000
-TRAIN_EVERY_STEPS = 4
+LEARN_START_STEPS = 10_000
+TRAIN_EVERY_STEPS = 1
 UPDATES_PER_TRAIN = 1
-EPSILON_START = 1.0
-EPSILON_MIN = 0.05
-EPSILON_DECAY_STEPS = 1_500_000
-EPS_BUMP_PATIENCE_EPISODES = 100
-EPS_BUMP_MIN_IMPROVEMENT = 0.10
-EPS_BUMP_CAP = 0.35
-EPS_BUMP_COOLDOWN_STEPS = EPSILON_DECAY_STEPS // 2

@@ -146,7 +146,7 @@
       ]
     },
     {
-      "name": "Walk - Play User",
+      "name": "Tower - Play User",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -155,13 +155,13 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "walk",
+        "tower",
         "--level",
         "${input:playLevel}"
       ]
     },
     {
-      "name": "Walk - Play AI",
+      "name": "Tower - Play AI",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -170,14 +170,14 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "walk",
+        "tower",
         "--level",
         "${input:playLevel}",
         "--render"
       ]
     },
     {
-      "name": "Walk - Train AI",
+      "name": "Tower - Train AI",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -186,7 +186,7 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "walk",
+        "tower",
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",
@@ -242,7 +242,7 @@
       ]
     },
     {
-      "name": "Peek - Play User",
+      "name": "Stealth - Play User",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -251,13 +251,13 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "peek",
+        "stealth",
         "--level",
         "${input:playLevel}"
       ]
     },
     {
-      "name": "Peek - Play AI",
+      "name": "Stealth - Play AI",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -266,14 +266,14 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "peek",
+        "stealth",
         "--level",
         "${input:playLevel}",
         "--render"
       ]
     },
     {
-      "name": "Peek - Train AI",
+      "name": "Stealth - Train AI",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -282,7 +282,7 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "peek",
+        "stealth",
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",

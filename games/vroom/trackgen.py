@@ -25,14 +25,13 @@ class TrackGenConfig:
     corner_radius_px: float = 130.0
     sample_spacing_px: float = 6.0
     start_straight_len_px: float = 180.0
-    template_min_bulged_sides: int = 0
-    template_max_bulged_sides: int = 3
-    bulge_amplitude_min_px: float = 14.0
-    bulge_amplitude_max_px: float = 40.0
-    bulge_width_cap_ratio: float = 0.62
-    bulge_length_cap_ratio: float = 0.16
-    bulge_short_side_threshold_px: float = 260.0
-    bulge_short_side_length_cap_ratio: float = 0.12
+    long_side_template_choices: tuple[str, ...] = ("straight", "bell", "s_curve")
+    bell_amplitude_min_px: float = 14.0
+    bell_amplitude_max_px: float = 40.0
+    s_amplitude_min_px: float = 10.0
+    s_amplitude_max_px: float = 28.0
+    inset_width_cap_ratio: float = 0.62
+    inset_length_cap_ratio: float = 0.16
 
 
 def _road_polygon(track: TrackGeometry) -> list[tuple[float, float]]:
@@ -91,14 +90,13 @@ def generate_track(
         corner_radius_px=float(cfg.corner_radius_px),
         sample_spacing_px=float(cfg.sample_spacing_px),
         start_straight_len_px=float(cfg.start_straight_len_px),
-        template_min_bulged_sides=int(cfg.template_min_bulged_sides),
-        template_max_bulged_sides=int(cfg.template_max_bulged_sides),
-        bulge_amplitude_min_px=float(cfg.bulge_amplitude_min_px),
-        bulge_amplitude_max_px=float(cfg.bulge_amplitude_max_px),
-        bulge_width_cap_ratio=float(cfg.bulge_width_cap_ratio),
-        bulge_length_cap_ratio=float(cfg.bulge_length_cap_ratio),
-        bulge_short_side_threshold_px=float(cfg.bulge_short_side_threshold_px),
-        bulge_short_side_length_cap_ratio=float(cfg.bulge_short_side_length_cap_ratio),
+        long_side_template_choices=tuple(str(value) for value in cfg.long_side_template_choices),
+        bell_amplitude_min_px=float(cfg.bell_amplitude_min_px),
+        bell_amplitude_max_px=float(cfg.bell_amplitude_max_px),
+        s_amplitude_min_px=float(cfg.s_amplitude_min_px),
+        s_amplitude_max_px=float(cfg.s_amplitude_max_px),
+        inset_width_cap_ratio=float(cfg.inset_width_cap_ratio),
+        inset_length_cap_ratio=float(cfg.inset_length_cap_ratio),
     )
     road_mask = build_track_mask(track=geometry, width=int(width), height=int(height))
     collision_mask = np.asarray(road_mask, dtype=np.uint8)

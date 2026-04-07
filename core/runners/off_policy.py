@@ -19,6 +19,36 @@ from core.logging_utils import (
 )
 
 
+def _extract_action_mask(env: Env, obs: object) -> object | None:
+    for method_name in ("get_action_mask", "action_mask"):
+        getter = getattr(env, method_name, None)
+        if not callable(getter):
+            continue
+        try:
+            mask = getter(obs)
+        except TypeError:
+            mask = getter()
+        if mask is None:
+            return None
+        return mask
+    return None
+
+
+def _act_with_optional_mask(
+    algorithm: Algorithm,
+    obs: object,
+    *,
+    explore: bool,
+    action_mask: object | None,
+):
+    if action_mask is None:
+        return algorithm.act(obs, explore=explore)
+    try:
+        return algorithm.act(obs, explore=explore, action_mask=action_mask)
+    except TypeError:
+        return algorithm.act(obs, explore=explore)
+
+
 @dataclass
 class OffPolicyConfig:
     max_steps: int
@@ -79,8 +109,15 @@ def run_off_policy_training(
         if config.max_episodes is not None and total_episodes >= int(config.max_episodes):
             break
 
-        action = algorithm.act(obs, explore=True)
+        action_mask = _extract_action_mask(env, obs)
+        action = _act_with_optional_mask(
+            algorithm,
+            obs,
+            explore=True,
+            action_mask=action_mask,
+        )
         next_obs, reward, done, info = env.step(action)
+        next_action_mask = None if done else _extract_action_mask(env, next_obs)
 
         transition = {
             "obs": obs,
@@ -89,6 +126,8 @@ def run_off_policy_training(
             "next_obs": next_obs,
             "done": bool(done),
             "info": dict(info),
+            "action_mask": action_mask,
+            "next_action_mask": next_action_mask,
         }
         algorithm.observe(transition)
 

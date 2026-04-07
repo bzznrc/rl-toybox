@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from core.algorithms.exploration import compute_eps_decay
 from core.envs.base import Env
+from core.envs.scaffold import ScaffoldEnv
 from core.envs.spaces import Space
 from core.io.runs import RunPaths, normalize_model_kind, resolve_run_paths
 
@@ -27,15 +28,33 @@ OFF_POLICY_TRAIN_DEFAULTS: dict[str, Any] = {
     "min_episodes_for_stats": int(MIN_EPISODES_FOR_STATS),
 }
 
+ACTIVE_GAME_ORDER: tuple[str, ...] = (
+    "snake",
+    "bang",
+    "tower",
+    "vroom",
+    "stealth",
+    "card",
+    "othello",
+    "kick",
+)
+
 
 @dataclass(frozen=True)
 class GameSpec:
     game_id: str
+    display_name: str
     default_algo: str
     make_env: Callable[..., Env]
     obs_dim: int
     action_space: Space
     run_name: str
+    family: str
+    role: str
+    summary: str
+    primary_algo_label: str
+    status: str = "active"
+    implementation_stage: str = "implemented"
     train_config: dict[str, object] = field(default_factory=dict)
     algo_config: dict[str, object] = field(default_factory=dict)
 
@@ -51,6 +70,25 @@ class PreparedRun:
 def build_env_factory(env_type: type[Env]) -> Callable[..., Env]:
     def make_env(mode: str, render: bool, level: int | None = None) -> Env:
         return env_type(mode=mode, render=render, level=level)
+
+    return make_env
+
+
+def build_scaffold_env_factory(
+    *,
+    game_id: str,
+    obs_dim: int,
+    note: str,
+) -> Callable[..., Env]:
+    def make_env(mode: str, render: bool, level: int | None = None) -> Env:
+        return ScaffoldEnv(
+            game_id=game_id,
+            obs_dim=int(obs_dim),
+            mode=mode,
+            render=render,
+            level=level,
+            note=note,
+        )
 
     return make_env
 
@@ -167,13 +205,24 @@ def _build_game_specs() -> dict[str, GameSpec]:
     # Import game specs lazily so the shared builders above can be imported
     # from each game spec without triggering a circular import.
     from games.bang.spec import SPEC as bang_spec
+    from games.card.spec import SPEC as card_spec
     from games.kick.spec import SPEC as kick_spec
-    from games.peek.spec import SPEC as peek_spec
+    from games.othello.spec import SPEC as othello_spec
     from games.snake.spec import SPEC as snake_spec
+    from games.stealth.spec import SPEC as stealth_spec
+    from games.tower.spec import SPEC as tower_spec
     from games.vroom.spec import SPEC as vroom_spec
-    from games.walk.spec import SPEC as walk_spec
 
-    specs = (bang_spec, kick_spec, peek_spec, snake_spec, vroom_spec, walk_spec)
+    specs = (
+        snake_spec,
+        bang_spec,
+        tower_spec,
+        vroom_spec,
+        stealth_spec,
+        card_spec,
+        othello_spec,
+        kick_spec,
+    )
     return {spec.game_id: spec for spec in specs}
 
 
@@ -350,9 +399,11 @@ __all__ = [
     "EXPLORATION_AVG_WINDOW_EPISODES",
     "MIN_EPISODES_FOR_STATS",
     "OFF_POLICY_TRAIN_DEFAULTS",
+    "ACTIVE_GAME_ORDER",
     "GameSpec",
     "PreparedRun",
     "build_env_factory",
+    "build_scaffold_env_factory",
     "build_hidden_run_name",
     "build_actor_critic_run_name",
     "build_recurrent_run_name",

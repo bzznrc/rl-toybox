@@ -15,11 +15,16 @@ from games.bang.env import BangEnv
 
 SPEC = GameSpec(
     game_id="bang",
+    display_name="Bang",
     default_algo="dqn",
     make_env=build_env_factory(BangEnv),
     obs_dim=config.OBS_DIM,
     action_space=Discrete(config.ACT_DIM),
     run_name=build_hidden_run_name(config.HIDDEN_DIMENSIONS),
+    family="value_discrete",
+    role="Flagship discrete RL game.",
+    summary="Arena shooter used to showcase the repo's advanced value-based stack.",
+    primary_algo_label="Rainbow-lite DQN",
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
         "learning_rate": config.LEARNING_RATE,

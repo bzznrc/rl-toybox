@@ -15,11 +15,16 @@ from games.snake.env import SnakeEnv
 
 SPEC = GameSpec(
     game_id="snake",
+    display_name="Snake",
     default_algo="qlearn",
     make_env=build_env_factory(SnakeEnv),
     obs_dim=config.OBS_DIM,
     action_space=Discrete(config.ACT_DIM),
     run_name=build_hidden_run_name(config.HIDDEN_DIMENSIONS),
+    family="value_discrete",
+    role="Intro game for simple value-based RL.",
+    summary="Classic grid snake kept as the first stop in the repo.",
+    primary_algo_label="Tabular / linear Q-learning",
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
         "learning_rate": config.LEARNING_RATE,

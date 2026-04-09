@@ -9,15 +9,15 @@
 ## Active Game Docs
 
 Canonical active lineup order across repo docs is:
-`snake`, `bang`, `tower`, `vroom`, `stealth`, `card`, `othello`, `kick`
+`snake`, `bang`, `tower`, `vroom`, `frogger`, `card`, `osero`, `kick`
 
 - [games/snake/README.md](../games/snake/README.md)
 - [games/bang/README.md](../games/bang/README.md)
 - [games/tower/README.md](../games/tower/README.md)
 - [games/vroom/README.md](../games/vroom/README.md)
-- [games/stealth/README.md](../games/stealth/README.md)
+- [games/frogger/README.md](../games/frogger/README.md)
 - [games/card/README.md](../games/card/README.md)
-- [games/othello/README.md](../games/othello/README.md)
+- [games/osero/README.md](../games/osero/README.md)
 - [games/kick/README.md](../games/kick/README.md)
 
 Validate the shared README contract with:

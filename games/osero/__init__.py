@@ -1,0 +1,1 @@
+"""Osero game package."""

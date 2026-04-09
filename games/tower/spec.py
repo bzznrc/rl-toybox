@@ -24,7 +24,7 @@ SPEC = GameSpec(
     run_name=build_hidden_run_name(config.HIDDEN_DIMENSIONS),
     family="value_discrete",
     role="Delayed reward + combinatorial decisions + action masking showcase.",
-    summary="Tiny wave-based tower defense focused on build-phase planning and masked DQN.",
+    summary="Tiny wave-based tower defense with Fast, Heavy, and Area towers for masked DQN.",
     primary_algo_label="Masked Double DQN",
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),

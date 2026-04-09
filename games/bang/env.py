@@ -36,6 +36,7 @@ from core.match_tracker import MatchTracker
 from core.primitives import (
     draw_control_marker,
     draw_facing_indicator,
+    draw_status_square_icon,
     status_bar_layout,
     draw_time_pie_indicator,
     draw_two_tone_tile,
@@ -428,18 +429,14 @@ class Renderer:
         style = PLAYER_STYLES.get(player_id, {})
         fill_color = style.get("render_fill", COLOR_DEEP_TEAL)
         outline_color = style.get("render_outline", COLOR_AQUA)
-        bottom = center_y - size / 2.0
-        left = center_x - size / 2.0
-        arcade.draw_lbwh_rectangle_filled(left, bottom, size, size, outline_color)
-
         inset = max(1.0, round(CELL_INSET * (size / max(1.0, float(TILE_SIZE)))))
-        inner_size = max(1.0, size - 2.0 * inset)
-        arcade.draw_lbwh_rectangle_filled(
-            left + inset,
-            bottom + inset,
-            inner_size,
-            inner_size,
-            fill_color,
+        draw_status_square_icon(
+            center_x=float(center_x),
+            center_y=float(center_y),
+            size=float(size),
+            outer_color=outline_color,
+            inner_color=fill_color,
+            inset=float(inset),
         )
         if self.game.is_nn_controlled_player(player_id):
             marker_size = max(2.0, round(NN_CONTROL_MARKER_SIZE_PX * (size / max(1.0, float(TILE_SIZE)))))

@@ -40,11 +40,12 @@ def main() -> None:
     run_paths = prepared.run_paths
     algorithm = prepared.algorithm
 
+    level = 1 if spec.family == "search_play" else int(args.level)
     model_choice = "check" if str(args.model).strip().lower() == "checkpoint" else str(args.model).strip().lower()
-    model_path = resolve_play_model_path(run_paths, model_choice, int(args.level))
+    model_path = resolve_play_model_path(run_paths, model_choice, int(level))
     algorithm.load(str(model_path))
 
-    env = spec.make_env(mode="eval", render=bool(args.render), level=int(args.level))
+    env = spec.make_env(mode="eval", render=bool(args.render), level=int(level))
     try:
         log_run_context(
             "play-ai",
@@ -53,7 +54,7 @@ def main() -> None:
                 "algo": algo_id,
                 "model": model_path,
                 "episodes": int(args.episodes),
-                "level": int(args.level),
+                "level": int(level),
                 "render": bool(args.render),
             },
         )

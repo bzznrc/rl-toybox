@@ -242,7 +242,7 @@
       ]
     },
     {
-      "name": "Stealth - Play User",
+      "name": "Frogger - Play User",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -251,13 +251,13 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "stealth",
+        "frogger",
         "--level",
         "${input:playLevel}"
       ]
     },
     {
-      "name": "Stealth - Play AI",
+      "name": "Frogger - Play AI",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -266,14 +266,14 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "stealth",
+        "frogger",
         "--level",
         "${input:playLevel}",
         "--render"
       ]
     },
     {
-      "name": "Stealth - Train AI",
+      "name": "Frogger - Train AI",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -282,11 +282,53 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "stealth",
+        "frogger",
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",
         "${input:trainResumeLevel}"
+      ]
+    },
+    {
+      "name": "Osero - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "osero"
+      ]
+    },
+    {
+      "name": "Osero - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "osero",
+        "--render"
+      ]
+    },
+    {
+      "name": "Osero - Train AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "osero",
+        "--resume",
+        "${input:trainResumeMode}"
       ]
     }
   ],

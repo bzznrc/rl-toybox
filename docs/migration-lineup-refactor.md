@@ -7,13 +7,13 @@
   - `bang`
   - `tower`
   - `vroom`
-  - `stealth`
+  - `frogger`
   - `card`
-  - `othello`
+  - `osero`
   - `kick`
-- `peek` was retired from the active lineup and fully replaced by `stealth`.
 - `walk` was removed from the active repo structure.
 - `kick` remains present but is now explicitly marked paused / experimental.
+- The memory / partial-observability slot is now owned by `frogger`.
 - Shared RL code was reorganized toward:
   - `core/value_discrete/`
   - `core/actor_critic/`
@@ -22,11 +22,12 @@
 
 ## What Was Intentionally Not Done Yet
 
-- No `tower`, `card`, or `othello` implementations yet.
+- At the time of the refactor note, `tower`, `card`, and `osero` were still pending.
+- Current repo state has `tower` and `osero` implemented; `card` remains scaffolded.
 
 ## Compatibility Notes
 
 - Existing kept games were preserved as much as practical.
 - `vroom` now runs on the actor-critic / continuous-control branch with SAC-oriented defaults.
-- `stealth` is now the only active memory/stealth game in the repo.
+- `frogger` is now the active recurrent PPO / memory game in the repo.
 - Scaffold games still use placeholder envs where implementation has not started yet.

@@ -126,6 +126,22 @@ def build_algorithm(
         return SACAlgorithm(config)
 
     if algo_key == "search_play":
-        return PlaceholderAlgorithm(algo_id=algo_key, action_space=action_space)
+        from core.search_play.agent import SearchPlayAlgorithm, SearchPlayConfig
+
+        if not isinstance(action_space, Discrete):
+            raise TypeError("search_play requires Discrete action space.")
+        config = SearchPlayConfig(**dict(algo_config))
+        expected_action_dim = int(config.board_size) * int(config.board_size) + 1
+        if int(action_space.n) != expected_action_dim:
+            raise ValueError(
+                "search_play action dim does not match board size. "
+                f"Expected {expected_action_dim}, got {int(action_space.n)}."
+            )
+        if int(obs_dim) != int(config.board_size) * int(config.board_size):
+            raise ValueError(
+                "search_play observation dim does not match board size. "
+                f"Expected {int(config.board_size) * int(config.board_size)}, got {int(obs_dim)}."
+            )
+        return SearchPlayAlgorithm(config)
 
     raise KeyError(f"Unsupported algorithm '{algo_id}'.")

@@ -31,9 +31,9 @@ Per-game snapshots or scaffold notes live in `games/<game>/README.md`.
 | `bang` | Flagship discrete RL game | value-based / Rainbow-lite | active |
 | `tower` | Delayed reward + action masking showcase | value-based | active |
 | `vroom` | Continuous control showcase | actor-critic / SAC | active |
-| `stealth` | Memory / POMDP showcase | actor-critic / recurrent PPO direction | active |
+| `frogger` | Memory / POMDP showcase | actor-critic / recurrent PPO direction | active |
 | `card` | Stochastic hidden-info actor-critic game | actor-critic / A2C direction | scaffold |
-| `othello` | Planning + self-play capstone | search + self-play | scaffold |
+| `osero` | Planning + self-play capstone | search + self-play | active |
 | `kick` | Multi-agent CTDE experiment | MARL / CTDE | paused |
 
 ## 3) Repository Layout and Shared Responsibilities
@@ -56,7 +56,7 @@ Per-game snapshots or scaffold notes live in `games/<game>/README.md`.
   - shared PPO/A2C/recurrent PPO/SAC infrastructure
   - target home for shared rollout, policy, critic, encoder, and continuous-control helpers
 - `core/search_play/`
-  - search, self-play, and policy/value interfaces for `othello`
+  - compact MCTS, self-play training, and policy/value helpers for `osero`
 - `core/marl_ctde/`
   - paused/experimental CTDE helpers for `kick`
 - `core/io/`, `core/runners/`, and `core/logging_utils.py`
@@ -91,13 +91,13 @@ Per-game snapshots or scaffold notes live in `games/<game>/README.md`.
 
 ### `core/actor_critic/`
 
-- Used by: `vroom`, `stealth`, `card`
+- Used by: `vroom`, `frogger`, `card`
 - Contains: PPO, recurrent PPO support, SAC, shared actor-critic rollout machinery
 
 ### `core/search_play/`
 
-- Used by: `othello`
-- Contains: self-play and MCTS-oriented interfaces only for now
+- Used by: `osero`
+- Contains: compact MCTS, search-play training, and small policy/value helpers
 
 ### `core/marl_ctde/`
 

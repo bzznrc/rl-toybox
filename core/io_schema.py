@@ -44,6 +44,26 @@ def ordered_feature_vector(feature_names: Sequence[str], feature_values: Mapping
     return [float(feature_values[name]) for name in names]
 
 
+def row_major_grid_feature_names(rows: int, cols: int | None = None, *, prefix: str = "cell") -> list[str]:
+    row_count = max(0, int(rows))
+    col_count = row_count if cols is None else max(0, int(cols))
+    return [f"{prefix}_r{row}_c{col}" for row in range(row_count) for col in range(col_count)]
+
+
+def row_major_grid_action_names(
+    rows: int,
+    cols: int | None = None,
+    *,
+    prefix: str = "move",
+    include_pass: bool = False,
+    pass_name: str = "pass",
+) -> list[str]:
+    names = row_major_grid_feature_names(rows, cols, prefix=prefix)
+    if bool(include_pass):
+        names.append(str(pass_name))
+    return names
+
+
 def normalized_ray_first_hit(
     *,
     origin_x: float,

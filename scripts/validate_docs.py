@@ -8,15 +8,15 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-GAME_ORDER = ("snake", "bang", "tower", "vroom", "stealth", "card", "othello", "kick")
+GAME_ORDER = ("snake", "bang", "tower", "vroom", "frogger", "card", "osero", "kick")
 GAME_TITLES = {
     "snake": "Snake",
     "bang": "Bang",
     "tower": "Tower",
     "vroom": "Vroom",
-    "stealth": "Stealth",
+    "frogger": "Frogger",
     "card": "Card",
-    "othello": "Othello",
+    "osero": "Osero",
     "kick": "Kick",
 }
 GAME_README_HEADINGS = (

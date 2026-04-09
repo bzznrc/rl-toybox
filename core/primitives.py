@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import random
-from typing import Callable, TypeVar
+from typing import Callable, Iterable, TypeVar
 
 import arcade
 
@@ -144,6 +144,65 @@ def draw_two_tone_tile(
         inner_size,
         inner_color,
     )
+
+
+def draw_cell_union_outline(
+    window_controller: ArcadeWindowController,
+    *,
+    cells: Iterable[tuple[int, int]],
+    top_left_x: float,
+    top_left_y: float,
+    cell_size: float,
+    border_width: float,
+    color: tuple[int, int, int] | tuple[int, int, int, int],
+) -> None:
+    cell_set = {(int(col), int(row)) for col, row in cells}
+    if not cell_set:
+        return
+
+    size = float(cell_size)
+    border = max(1.0, float(border_width))
+
+    for col, row in cell_set:
+        left = float(top_left_x) + float(col) * size
+        top = float(top_left_y) + float(row) * size
+        top_open = (int(col), int(row) - 1) not in cell_set
+        bottom_open = (int(col), int(row) + 1) not in cell_set
+        left_open = (int(col) - 1, int(row)) not in cell_set
+        right_open = (int(col) + 1, int(row)) not in cell_set
+
+        if top_open:
+            arcade.draw_lbwh_rectangle_filled(
+                left,
+                float(window_controller.to_arcade_y(top + border)),
+                size,
+                border,
+                color,
+            )
+        if bottom_open:
+            arcade.draw_lbwh_rectangle_filled(
+                left,
+                float(window_controller.to_arcade_y(top + size)),
+                size,
+                border,
+                color,
+            )
+        if left_open:
+            arcade.draw_lbwh_rectangle_filled(
+                left,
+                float(window_controller.to_arcade_y(top + size)),
+                border,
+                size,
+                color,
+            )
+        if right_open:
+            arcade.draw_lbwh_rectangle_filled(
+                left + size - border,
+                float(window_controller.to_arcade_y(top + size)),
+                border,
+                size,
+                color,
+            )
 
 
 def draw_staggered_square_pattern(

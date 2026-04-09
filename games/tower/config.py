@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from core.arcade_style import DEFAULT_BOTTOM_BAR_HEIGHT
+from core.arcade_style import (
+    DEFAULT_BOTTOM_BAR_HEIGHT,
+    DEFAULT_GRID_COLUMNS,
+    DEFAULT_GRID_ROWS,
+    DEFAULT_TILE_SIZE,
+    screen_height,
+    screen_width,
+)
 from core.utils import env_flag, env_int
 
 
@@ -16,21 +23,21 @@ BB_HEIGHT = DEFAULT_BOTTOM_BAR_HEIGHT
 
 
 # ENV
-WORLD_WIDTH = 840
-WORLD_HEIGHT = 420
+WORLD_WIDTH = screen_width(DEFAULT_GRID_COLUMNS, DEFAULT_TILE_SIZE)
+WORLD_HEIGHT = DEFAULT_GRID_ROWS * DEFAULT_TILE_SIZE
 SCREEN_WIDTH = WORLD_WIDTH
-SCREEN_HEIGHT = WORLD_HEIGHT + BB_HEIGHT
+SCREEN_HEIGHT = screen_height(DEFAULT_GRID_ROWS, DEFAULT_TILE_SIZE, BB_HEIGHT)
 
-MAX_GOLD_NORMALIZER = 60.0
+MAX_CREDITS_NORMALIZER = 60.0
 MAX_LIVES_NORMALIZER = 10.0
 MAX_WAVE_COUNT_NORMALIZER = 20.0
 DECISION_BUDGET_NORMALIZER = 6.0
-WAVE_CLEAR_GOLD_BONUS = 2
+WAVE_CLEAR_CREDIT_BONUS = 6
 ENEMY_LEAK_DAMAGE = 1
 
 SLOT_NAMES = ("left", "upper", "mid", "lower", "right")
-TOWER_KINDS = ("arrow", "cannon", "tesla")
-ENEMY_KINDS = ("swarm", "armored", "flying")
+TOWER_KINDS = ("fast", "heavy", "area")
+ENEMY_KINDS = ("light", "armored", "flying")
 ENTRY_MODES = ("left", "right", "both")
 
 
@@ -42,7 +49,7 @@ INPUT_FEATURE_NAMES = [
     "run_actions_left_norm",
     "wave_entry_left",
     "wave_entry_right",
-    "wave_count_swarm_norm",
+    "wave_count_light_norm",
     "wave_count_armored_norm",
     "wave_count_flying_norm",
     "map_layout_id_norm",
@@ -59,21 +66,21 @@ INPUT_FEATURE_NAMES = [
 ]
 ACTION_NAMES = [
     "start_wave",
-    "build_arrow_left",
-    "build_arrow_upper",
-    "build_arrow_mid",
-    "build_arrow_lower",
-    "build_arrow_right",
-    "build_cannon_left",
-    "build_cannon_upper",
-    "build_cannon_mid",
-    "build_cannon_lower",
-    "build_cannon_right",
-    "build_tesla_left",
-    "build_tesla_upper",
-    "build_tesla_mid",
-    "build_tesla_lower",
-    "build_tesla_right",
+    "build_fast_left",
+    "build_fast_upper",
+    "build_fast_mid",
+    "build_fast_lower",
+    "build_fast_right",
+    "build_heavy_left",
+    "build_heavy_upper",
+    "build_heavy_mid",
+    "build_heavy_lower",
+    "build_heavy_right",
+    "build_area_left",
+    "build_area_upper",
+    "build_area_mid",
+    "build_area_lower",
+    "build_area_right",
     "upgrade_left",
     "upgrade_upper",
     "upgrade_mid",
@@ -103,24 +110,24 @@ CURRICULUM_PROMOTION = {
 
 LEVEL_SETTINGS = {
     1: {
-        "start_gold": 18,
+        "start_credits": 12,
         "start_lives": 10,
         "num_waves": 6,
-        "wave_scale": 0.98,
+        "wave_scale": 1.00,
         "decision_budget": 6,
     },
     2: {
-        "start_gold": 17,
+        "start_credits": 12,
         "start_lives": 10,
         "num_waves": 7,
-        "wave_scale": 1.08,
+        "wave_scale": 1.10,
         "decision_budget": 6,
     },
     3: {
-        "start_gold": 16,
+        "start_credits": 12,
         "start_lives": 10,
         "num_waves": 8,
-        "wave_scale": 1.18,
+        "wave_scale": 1.20,
         "decision_budget": 6,
     },
 }

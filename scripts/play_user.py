@@ -22,13 +22,14 @@ def main() -> None:
 
     spec = get_game_spec(args.game)
     render = not bool(args.headless)
-    env = spec.make_env(mode="human", render=render, level=int(args.level))
+    level = 1 if spec.family == "search_play" else int(args.level)
+    env = spec.make_env(mode="human", render=render, level=int(level))
 
     log_run_context(
         "play-user",
         {
             "game": spec.game_id,
-            "level": int(args.level),
+            "level": int(level),
             "render": render,
         },
     )

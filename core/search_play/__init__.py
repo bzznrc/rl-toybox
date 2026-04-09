@@ -1,5 +1,5 @@
-"""Planning and self-play scaffolding for capstone search-based games."""
+"""Planning and self-play helpers for capstone search-based games."""
 
-from core.search_play.interfaces import MCTSConfig, PolicyValueBatch
+from core.search_play.interfaces import MCTSConfig, PolicyValueBatch, ReplaySample, SearchPlayTrainConfig
 
-__all__ = ["MCTSConfig", "PolicyValueBatch"]
+__all__ = ["MCTSConfig", "PolicyValueBatch", "ReplaySample", "SearchPlayTrainConfig"]

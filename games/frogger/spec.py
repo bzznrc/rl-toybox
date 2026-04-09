@@ -1,4 +1,4 @@
-"""Stealth game spec."""
+"""Frogger game spec."""
 
 from __future__ import annotations
 
@@ -9,15 +9,15 @@ from core.game import (
     build_on_policy_train_config,
     build_recurrent_run_name,
 )
-from games.stealth import config
-from games.stealth.env import StealthEnv
+from games.frogger import config
+from games.frogger.env import FroggerEnv
 
 
 SPEC = GameSpec(
-    game_id="stealth",
-    display_name="Stealth",
+    game_id="frogger",
+    display_name="Frogger",
     default_algo="recurrent_ppo",
-    make_env=build_env_factory(StealthEnv),
+    make_env=build_env_factory(FroggerEnv),
     obs_dim=config.OBS_DIM,
     action_space=Discrete(config.ACT_DIM),
     run_name=build_recurrent_run_name(
@@ -29,7 +29,7 @@ SPEC = GameSpec(
     ),
     family="actor_critic",
     role="Partial observability and memory showcase.",
-    summary="Compact top-down stealth game: reach the exit without being seen.",
+    summary="Compact Frogger-style road crossing with local vision, fixed-per-lane traffic, and recurrent PPO-friendly memory demands.",
     primary_algo_label="Recurrent PPO",
     implementation_stage="implemented",
     algo_config={

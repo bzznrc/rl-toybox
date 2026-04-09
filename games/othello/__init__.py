@@ -1,1 +1,0 @@
-"""Othello game package."""

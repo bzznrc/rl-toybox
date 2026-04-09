@@ -10,6 +10,7 @@ import random
 import arcade
 import numpy as np
 
+from assets.paths import resolve_font_path
 from core.arcade_style import (
     COLOR_CORAL,
     COLOR_AQUA,
@@ -23,8 +24,10 @@ from core.arcade_style import (
     COLOR_LIGHT_NEUTRAL,
     COLOR_NAVY,
     COLOR_OCHRE,
+    COLOR_PURPLE,
     COLOR_SAND,
     COLOR_SLATE_GRAY,
+    COLOR_DEEP_PURPLE,
     DEFAULT_CELL_INSET,
     DEFAULT_TILE_SIZE,
 )
@@ -37,11 +40,12 @@ from core.curriculum import (
 from core.envs.base import Env
 from core.io_schema import clip_unit, ordered_feature_vector
 from core.primitives import (
+    draw_cell_union_outline,
     draw_facing_indicator,
     draw_two_tone_tile,
 )
 from core.rewards import RewardBreakdown
-from core.runtime import ArcadeFrameClock, ArcadeWindowController, TextCache
+from core.runtime import ArcadeFrameClock, ArcadeWindowController, TextCache, load_font_once
 from core.utils import resolve_play_level
 from games.tower import config
 
@@ -56,9 +60,9 @@ validate_curriculum_level_settings(
 SIDE_LEFT = "left"
 SIDE_RIGHT = "right"
 ENTRY_BOTH = "both"
-TOWER_KIND_TO_ID = {"arrow": 1.0, "cannon": 2.0, "tesla": 3.0}
+TOWER_KIND_TO_ID = {"fast": 1.0, "heavy": 2.0, "area": 3.0}
 SELL_REFUND_BY_LEVEL = {1: 0.90, 2: 0.75, 3: 0.60}
-SPAWN_GAPS = {"swarm": 9, "armored": 15, "flying": 11}
+SPAWN_GAPS = {"light": 8, "armored": 16, "flying": 10}
 
 WORLD_BG_TOP = (36, 39, 45)
 WORLD_BG_BOTTOM = COLOR_DARK_NEUTRAL
@@ -66,8 +70,8 @@ GROUND_PATH_OUTER = COLOR_FOG_GRAY
 GROUND_PATH_INNER = COLOR_SLATE_GRAY
 ENTRY_OUTLINE = COLOR_CORAL
 ENTRY_FILL = COLOR_BRICK_RED
-EXIT_OUTLINE = COLOR_LEAF_GREEN
-EXIT_FILL = COLOR_FOREST_GREEN
+EXIT_OUTLINE = COLOR_AQUA
+EXIT_FILL = COLOR_DEEP_TEAL
 SLOT_OUTLINE = COLOR_FOG_GRAY
 SLOT_FILL = COLOR_SLATE_GRAY
 EMPTY_SLOT_FILL = WORLD_BG_TOP
@@ -80,6 +84,36 @@ ENEMY_SIZE = float(TILE_SIZE)
 ENEMY_INSET = float(CELL_INSET)
 ENTRY_SIZE = float(TILE_SIZE * 2.0)
 TRACK_WIDTH_CELLS = 2
+MENU_FILL = COLOR_DARK_NEUTRAL + (128,)
+MENU_BORDER = COLOR_LIGHT_NEUTRAL + (128,)
+MENU_TEXT = COLOR_LIGHT_NEUTRAL + (128,)
+MENU_TEXT_DISABLED = COLOR_FOG_GRAY + (96,)
+MENU_ITEM_WIDTH = 84.0
+MENU_ITEM_HEIGHT = 20.0
+MENU_ITEM_GAP = 3.0
+UI_FONT_NAME = ("Roboto-Light", "Roboto Light", "Roboto", "Arial", "sans-serif")
+BLOCK_FONT_NAME = ("Roboto-Bold", "Roboto Bold", "Roboto", "Arial", "sans-serif")
+GRID_COLS = int(round(float(config.WORLD_WIDTH) / float(TILE_SIZE)))
+GRID_ROWS = int(round(float(config.WORLD_HEIGHT) / float(TILE_SIZE)))
+MAP_MARGIN_CELLS = 2
+CENTER_TRUNK_COL = GRID_COLS // 2 - TRACK_WIDTH_CELLS // 2
+ENTRY_MARKER_DEPTH_CELLS = max(2, TRACK_WIDTH_CELLS // 2)
+EXIT_MARKER_DEPTH_CELLS = max(2, TRACK_WIDTH_CELLS // 2)
+OUTER_MARKER_MARGIN_CELLS = ENTRY_MARKER_DEPTH_CELLS
+LEFT_ENTRY_COL = MAP_MARGIN_CELLS + OUTER_MARKER_MARGIN_CELLS
+RIGHT_ENTRY_COL = GRID_COLS - TRACK_WIDTH_CELLS - MAP_MARGIN_CELLS - OUTER_MARKER_MARGIN_CELLS
+EXIT_ROW = GRID_ROWS - TRACK_WIDTH_CELLS - MAP_MARGIN_CELLS - EXIT_MARKER_DEPTH_CELLS
+SPAWN_ROW = MAP_MARGIN_CELLS + OUTER_MARKER_MARGIN_CELLS + 4
+
+# Tower generation uses two compact handcrafted templates:
+# - Soft S Merge: mirrored inward sweeps that meet at the center trunk.
+# - Offset S: one side joins the center earlier while the other descends farther.
+# Both keep the same fixed endpoints and the same five stable slot ids:
+# left=left_corner, upper=left_shared, mid=center_trunk, lower=right_shared, right=right_corner.
+PATH_TEMPLATES = (
+    {"name": "Soft S Merge", "kind": "soft_s"},
+    {"name": "Offset S", "kind": "offset_s"},
+)
 
 
 def _distance(point_a: tuple[float, float], point_b: tuple[float, float]) -> float:
@@ -87,7 +121,10 @@ def _distance(point_a: tuple[float, float], point_b: tuple[float, float]) -> flo
 
 
 def _lane_point(left_col: int, top_row: int) -> tuple[float, float]:
-    return (float(left_col + 1) * TILE_SIZE, float(top_row + 1) * TILE_SIZE)
+    return (
+        (float(left_col) + float(TRACK_WIDTH_CELLS) * 0.5) * TILE_SIZE,
+        (float(top_row) + float(TRACK_WIDTH_CELLS) * 0.5) * TILE_SIZE,
+    )
 
 
 def _block_center(left_col: int, top_row: int) -> tuple[float, float]:
@@ -154,26 +191,56 @@ class LanePath:
             )
         return self.points[-1]
 
+    def tangent_at(self, distance_along: float) -> tuple[float, float]:
+        distance_value = float(max(0.0, min(float(distance_along), self.total_length)))
+        if distance_value <= 0.0:
+            start, end = self.points[0], self.points[1]
+        elif distance_value >= self.total_length:
+            start, end = self.points[-2], self.points[-1]
+        else:
+            start = self.points[0]
+            end = self.points[1]
+            for index, segment_length in enumerate(self.segment_lengths):
+                end_len = float(self.cumulative_lengths[index + 1])
+                if distance_value <= end_len or index == len(self.segment_lengths) - 1:
+                    start = self.points[index]
+                    end = self.points[index + 1]
+                    if segment_length > 1e-6:
+                        break
+        delta_x = float(end[0]) - float(start[0])
+        delta_y = float(end[1]) - float(start[1])
+        length = math.hypot(delta_x, delta_y)
+        if length <= 1e-6:
+            return (1.0, 0.0)
+        return (delta_x / length, delta_y / length)
+
 
 @dataclass(frozen=True)
 class LayoutSpec:
     layout_id: int
+    layout_norm: float
     name: str
     ground_paths: dict[str, LanePath]
     flying_paths: dict[str, LanePath]
     ground_rects: tuple[tuple[int, int, int, int], ...]
+    slot_cells: dict[str, tuple[int, int]]
+    slot_positions: dict[str, tuple[float, float]]
+    entry_cells: dict[str, tuple[int, int]]
+    entry_positions: dict[str, tuple[float, float]]
+    exit_cell: tuple[int, int]
+    exit_position: tuple[float, float]
 
 
 @dataclass(frozen=True)
 class WaveSpec:
     entry_mode: str
-    count_swarm: int
+    count_light: int
     count_armored: int
     count_flying: int
 
     def count_for(self, enemy_kind: str) -> int:
-        if enemy_kind == "swarm":
-            return int(self.count_swarm)
+        if enemy_kind == "light":
+            return int(self.count_light)
         if enemy_kind == "armored":
             return int(self.count_armored)
         if enemy_kind == "flying":
@@ -182,7 +249,7 @@ class WaveSpec:
 
     @property
     def total_count(self) -> int:
-        return int(self.count_swarm + self.count_armored + self.count_flying)
+        return int(self.count_light + self.count_armored + self.count_flying)
 
 
 @dataclass(frozen=True)
@@ -248,13 +315,21 @@ class EnemyState:
     armor: float
     bounty: int
     radius: float
+    lane_offset: float = 0.0
     distance_along: float = 0.0
     alive: bool = True
     leaked: bool = False
 
     @property
     def position(self) -> tuple[float, float]:
-        return self.path.position_at(float(self.distance_along))
+        center_x, center_y = self.path.position_at(float(self.distance_along))
+        tangent_x, tangent_y = self.path.tangent_at(float(self.distance_along))
+        normal_x = -float(tangent_y)
+        normal_y = float(tangent_x)
+        return (
+            float(center_x) + normal_x * float(self.lane_offset),
+            float(center_y) + normal_y * float(self.lane_offset),
+        )
 
     @property
     def progress_norm(self) -> float:
@@ -267,254 +342,357 @@ class AttackEffect:
     points: tuple[tuple[float, float], ...]
     ttl: int
     radius: float = 0.0
+    max_ttl: int = 0
+    delay_ticks: int = 0
 
 
-SLOT_CELLS = {
-    "left": (6, 6),
-    "upper": (16, 4),
-    "mid": (20, 9),
-    "lower": (16, 14),
-    "right": (34, 6),
-}
-SLOT_POSITIONS = {
-    slot_name: _block_center(*cell_top_left)
-    for slot_name, cell_top_left in SLOT_CELLS.items()
-}
-ENTRY_CELLS = {
-    SIDE_LEFT: (0, 8),
-    SIDE_RIGHT: (40, 8),
-}
-ENTRY_POSITIONS = {
-    side: _block_center(*cell_top_left)
-    for side, cell_top_left in ENTRY_CELLS.items()
-}
-EXIT_CELL = (18, 19)
-EXIT_POSITION = _block_center(*EXIT_CELL)
+def _compress_cells(cells: tuple[tuple[int, int], ...] | list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    compressed: list[tuple[int, int]] = []
+    for col, row in cells:
+        cell = (int(col), int(row))
+        if not compressed or cell != compressed[-1]:
+            compressed.append(cell)
+    return tuple(compressed)
 
-LAYOUTS = (
-    LayoutSpec(
-        layout_id=0,
-        name="High Merge",
+
+def _segment_rect(start_cell: tuple[int, int], end_cell: tuple[int, int]) -> tuple[int, int, int, int]:
+    start_col, start_row = (int(start_cell[0]), int(start_cell[1]))
+    end_col, end_row = (int(end_cell[0]), int(end_cell[1]))
+    if start_col == end_col:
+        return (
+            int(start_col),
+            min(int(start_row), int(end_row)),
+            int(TRACK_WIDTH_CELLS),
+            abs(int(end_row) - int(start_row)) + int(TRACK_WIDTH_CELLS),
+        )
+    if start_row == end_row:
+        return (
+            min(int(start_col), int(end_col)),
+            int(start_row),
+            abs(int(end_col) - int(start_col)) + int(TRACK_WIDTH_CELLS),
+            int(TRACK_WIDTH_CELLS),
+        )
+    raise ValueError("Tower paths must move orthogonally.")
+
+
+def _path_rects(*paths: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int, int, int], ...]:
+    rects: list[tuple[int, int, int, int]] = []
+    seen: set[tuple[int, int, int, int]] = set()
+    for path_cells in paths:
+        for start_cell, end_cell in zip(path_cells[:-1], path_cells[1:]):
+            if tuple(start_cell) == tuple(end_cell):
+                continue
+            rect = _segment_rect(tuple(start_cell), tuple(end_cell))
+            if rect not in seen:
+                seen.add(rect)
+                rects.append(rect)
+    return tuple(rects)
+
+
+def _lane_path_from_cells(path_cells: tuple[tuple[int, int], ...]) -> LanePath:
+    return LanePath(tuple(_lane_point(int(col), int(row)) for col, row in path_cells))
+
+
+def _slot_block_cells(cell_top_left: tuple[int, int]) -> set[tuple[int, int]]:
+    left_col, top_row = (int(cell_top_left[0]), int(cell_top_left[1]))
+    return {
+        (int(left_col), int(top_row)),
+        (int(left_col) + 1, int(top_row)),
+        (int(left_col), int(top_row) + 1),
+        (int(left_col) + 1, int(top_row) + 1),
+    }
+
+
+def _slot_touches_path(cell_top_left: tuple[int, int], path_cells: set[tuple[int, int]]) -> bool:
+    for col, row in _slot_block_cells(cell_top_left):
+        for delta_col, delta_row in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            if (int(col) + int(delta_col), int(row) + int(delta_row)) in path_cells:
+                return True
+    return False
+
+
+def _pick_option(rng: random.Random, values: tuple[int | str, ...]) -> int | str:
+    return values[int(rng.randrange(len(values)))]
+
+
+def _build_layout_spec(
+    *,
+    template_index: int,
+    template_name: str,
+    left_path_cells: tuple[tuple[int, int], ...],
+    right_path_cells: tuple[tuple[int, int], ...],
+    slot_cells: dict[str, tuple[int, int]],
+    entry_cells: dict[str, tuple[int, int]],
+    exit_cell: tuple[int, int],
+) -> LayoutSpec:
+    adjusted_slot_cells = {str(slot_name): (int(cell_top_left[0]), int(cell_top_left[1])) for slot_name, cell_top_left in slot_cells.items()}
+    mid_col, mid_row = adjusted_slot_cells["mid"]
+    while True:
+        mid_block = _slot_block_cells((int(mid_col), int(mid_row)))
+        overlaps_other_slot = False
+        for slot_name, cell_top_left in adjusted_slot_cells.items():
+            if str(slot_name) == "mid":
+                continue
+            if mid_block.intersection(_slot_block_cells(cell_top_left)):
+                overlaps_other_slot = True
+                break
+        if not overlaps_other_slot or int(mid_row) >= int(EXIT_ROW) - 4:
+            break
+        mid_row += 2
+    adjusted_slot_cells["mid"] = (int(mid_col), int(mid_row))
+
+    ground_rects = _path_rects(left_path_cells, right_path_cells)
+    path_cells = _rect_cells(ground_rects)
+    slot_blocks = {
+        str(slot_name): _slot_block_cells(cell_top_left)
+        for slot_name, cell_top_left in adjusted_slot_cells.items()
+    }
+    all_slot_cells: set[tuple[int, int]] = set()
+    for block_cells in slot_blocks.values():
+        if all_slot_cells.intersection(block_cells):
+            raise RuntimeError("Tower layout template made slots overlap each other.")
+        all_slot_cells.update(block_cells)
+    if any(path_cells.intersection(block_cells) for block_cells in slot_blocks.values()):
+        raise RuntimeError("Tower layout template placed a slot on the path.")
+    if not all(_slot_touches_path(cell_top_left, path_cells) for cell_top_left in slot_cells.values()):
+        raise RuntimeError("Tower layout template left a slot detached from the path.")
+
+    slot_positions = {
+        str(slot_name): _block_center(*cell_top_left)
+        for slot_name, cell_top_left in adjusted_slot_cells.items()
+    }
+    entry_positions = {
+        str(side): _lane_point(*cell_top_left)
+        for side, cell_top_left in entry_cells.items()
+    }
+
+    max_layout_code = float(max(1, len(PATH_TEMPLATES) - 1))
+    return LayoutSpec(
+        layout_id=int(template_index),
+        layout_norm=clip_unit(float(template_index) / float(max_layout_code)),
+        name=str(template_name),
         ground_paths={
-            SIDE_LEFT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_LEFT],
-                    _lane_point(8, 8),
-                    _lane_point(8, 6),
-                    _lane_point(18, 6),
-                    EXIT_POSITION,
-                )
-            ),
-            SIDE_RIGHT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_RIGHT],
-                    _lane_point(32, 8),
-                    _lane_point(32, 6),
-                    _lane_point(18, 6),
-                    EXIT_POSITION,
-                )
-            ),
+            SIDE_LEFT: _lane_path_from_cells(left_path_cells),
+            SIDE_RIGHT: _lane_path_from_cells(right_path_cells),
         },
         flying_paths={
-            SIDE_LEFT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_LEFT],
-                    _lane_point(8, 8),
-                    _lane_point(8, 6),
-                    _lane_point(18, 6),
-                    EXIT_POSITION,
-                )
-            ),
-            SIDE_RIGHT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_RIGHT],
-                    _lane_point(32, 8),
-                    _lane_point(32, 6),
-                    _lane_point(18, 6),
-                    EXIT_POSITION,
-                )
-            ),
+            SIDE_LEFT: _lane_path_from_cells(left_path_cells),
+            SIDE_RIGHT: _lane_path_from_cells(right_path_cells),
         },
-        ground_rects=(
-            (0, 8, 10, 2),
-            (8, 6, 2, 4),
-            (8, 6, 12, 2),
-            (18, 6, 2, 15),
-            (32, 8, 10, 2),
-            (32, 6, 2, 4),
-            (20, 6, 14, 2),
+        ground_rects=ground_rects,
+        slot_cells={str(slot_name): tuple(cell_top_left) for slot_name, cell_top_left in adjusted_slot_cells.items()},
+        slot_positions=slot_positions,
+        entry_cells={str(side): tuple(cell_top_left) for side, cell_top_left in entry_cells.items()},
+        entry_positions=entry_positions,
+        exit_cell=tuple(exit_cell),
+        exit_position=_lane_point(*exit_cell),
+    )
+
+
+def _generate_soft_s_layout(
+    rng: random.Random,
+    *,
+    template_index: int,
+    entry_cells: dict[str, tuple[int, int]],
+    exit_cell: tuple[int, int],
+) -> LayoutSpec:
+    # Template A: mirrored inward sweeps that meet at one shared center trunk.
+    left_turn_col = int(_pick_option(rng, (9, 10, 11, 12)))
+    right_turn_col = int(_pick_option(rng, (35, 36, 37, 38)))
+    merge_row = int(_pick_option(rng, (14, 15, 16)))
+    trunk_side = str(_pick_option(rng, ("left", "right")))
+
+    left_path_cells = _compress_cells(
+        (
+            entry_cells[SIDE_LEFT],
+            (int(left_turn_col), int(SPAWN_ROW)),
+            (int(left_turn_col), int(merge_row)),
+            (int(CENTER_TRUNK_COL), int(merge_row)),
+            exit_cell,
+        )
+    )
+    right_path_cells = _compress_cells(
+        (
+            entry_cells[SIDE_RIGHT],
+            (int(right_turn_col), int(SPAWN_ROW)),
+            (int(right_turn_col), int(merge_row)),
+            (int(CENTER_TRUNK_COL), int(merge_row)),
+            exit_cell,
+        )
+    )
+
+    left_shared_col = max(int(left_turn_col) + int(TRACK_WIDTH_CELLS) + 1, int(CENTER_TRUNK_COL) - 6)
+    right_shared_col = min(int(right_turn_col) - 3, int(CENTER_TRUNK_COL) + 2)
+    trunk_row = min(int(EXIT_ROW) - 4, int(merge_row) + int(_pick_option(rng, (5, 6))))
+    slot_cells = {
+        "left": (int(left_turn_col) + int(TRACK_WIDTH_CELLS), int(SPAWN_ROW) + int(TRACK_WIDTH_CELLS)),
+        "upper": (int(left_shared_col), int(merge_row) + int(TRACK_WIDTH_CELLS)),
+        "mid": (
+            int(CENTER_TRUNK_COL) - 2
+            if trunk_side == "left"
+            else int(CENTER_TRUNK_COL) + int(TRACK_WIDTH_CELLS),
+            int(trunk_row),
         ),
-    ),
-    LayoutSpec(
-        layout_id=1,
-        name="Split Rise",
-        ground_paths={
-            SIDE_LEFT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_LEFT],
-                    _lane_point(8, 8),
-                    _lane_point(8, 12),
-                    _lane_point(18, 12),
-                    EXIT_POSITION,
-                )
-            ),
-            SIDE_RIGHT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_RIGHT],
-                    _lane_point(32, 8),
-                    _lane_point(32, 4),
-                    _lane_point(18, 4),
-                    EXIT_POSITION,
-                )
-            ),
-        },
-        flying_paths={
-            SIDE_LEFT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_LEFT],
-                    _lane_point(8, 8),
-                    _lane_point(8, 12),
-                    _lane_point(18, 12),
-                    EXIT_POSITION,
-                )
-            ),
-            SIDE_RIGHT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_RIGHT],
-                    _lane_point(32, 8),
-                    _lane_point(32, 4),
-                    _lane_point(18, 4),
-                    EXIT_POSITION,
-                )
-            ),
-        },
-        ground_rects=(
-            (0, 8, 10, 2),
-            (8, 8, 2, 6),
-            (8, 12, 12, 2),
-            (18, 4, 2, 17),
-            (32, 8, 10, 2),
-            (32, 4, 2, 6),
-            (20, 4, 14, 2),
+        "lower": (int(right_shared_col), int(merge_row) + int(TRACK_WIDTH_CELLS)),
+        "right": (int(right_turn_col) - 2, int(SPAWN_ROW) + int(TRACK_WIDTH_CELLS)),
+    }
+    return _build_layout_spec(
+        template_index=int(template_index),
+        template_name="Soft S Merge",
+        left_path_cells=left_path_cells,
+        right_path_cells=right_path_cells,
+        slot_cells=slot_cells,
+        entry_cells=entry_cells,
+        exit_cell=exit_cell,
+    )
+
+
+def _generate_offset_s_layout(
+    rng: random.Random,
+    *,
+    template_index: int,
+    entry_cells: dict[str, tuple[int, int]],
+    exit_cell: tuple[int, int],
+) -> LayoutSpec:
+    # Template B: one side joins the center earlier while the other side descends farther.
+    early_side = str(_pick_option(rng, (SIDE_LEFT, SIDE_RIGHT)))
+    left_turn_col = int(_pick_option(rng, (10, 11, 12)))
+    right_turn_col = int(_pick_option(rng, (35, 36, 37)))
+    early_join_row = int(_pick_option(rng, (12, 13, 14)))
+    late_join_row = int(early_join_row + int(_pick_option(rng, (2, 3))))
+    left_join_row = int(early_join_row if early_side == SIDE_LEFT else late_join_row)
+    right_join_row = int(early_join_row if early_side == SIDE_RIGHT else late_join_row)
+    trunk_side = "right" if early_side == SIDE_LEFT else "left"
+
+    left_path_cells = _compress_cells(
+        (
+            entry_cells[SIDE_LEFT],
+            (int(left_turn_col), int(SPAWN_ROW)),
+            (int(left_turn_col), int(left_join_row)),
+            (int(CENTER_TRUNK_COL), int(left_join_row)),
+            exit_cell,
+        )
+    )
+    right_path_cells = _compress_cells(
+        (
+            entry_cells[SIDE_RIGHT],
+            (int(right_turn_col), int(SPAWN_ROW)),
+            (int(right_turn_col), int(right_join_row)),
+            (int(CENTER_TRUNK_COL), int(right_join_row)),
+            exit_cell,
+        )
+    )
+
+    left_shared_col = max(int(left_turn_col) + int(TRACK_WIDTH_CELLS) + 1, int(CENTER_TRUNK_COL) - 6)
+    right_shared_col = min(int(right_turn_col) - 3, int(CENTER_TRUNK_COL) + 2)
+    trunk_row = min(int(EXIT_ROW) - 4, int(max(left_join_row, right_join_row)) + int(_pick_option(rng, (4, 5))))
+    slot_cells = {
+        "left": (int(left_turn_col) + int(TRACK_WIDTH_CELLS), int(SPAWN_ROW) + int(TRACK_WIDTH_CELLS)),
+        "upper": (int(left_shared_col), int(left_join_row) + int(TRACK_WIDTH_CELLS)),
+        "mid": (
+            int(CENTER_TRUNK_COL) - 2
+            if trunk_side == "left"
+            else int(CENTER_TRUNK_COL) + int(TRACK_WIDTH_CELLS),
+            int(trunk_row),
         ),
-    ),
-    LayoutSpec(
-        layout_id=2,
-        name="Split Cross",
-        ground_paths={
-            SIDE_LEFT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_LEFT],
-                    _lane_point(8, 8),
-                    _lane_point(8, 6),
-                    _lane_point(18, 6),
-                    EXIT_POSITION,
-                )
-            ),
-            SIDE_RIGHT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_RIGHT],
-                    _lane_point(32, 8),
-                    _lane_point(32, 12),
-                    _lane_point(18, 12),
-                    EXIT_POSITION,
-                )
-            ),
-        },
-        flying_paths={
-            SIDE_LEFT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_LEFT],
-                    _lane_point(8, 8),
-                    _lane_point(8, 6),
-                    _lane_point(18, 6),
-                    EXIT_POSITION,
-                )
-            ),
-            SIDE_RIGHT: LanePath(
-                (
-                    ENTRY_POSITIONS[SIDE_RIGHT],
-                    _lane_point(32, 8),
-                    _lane_point(32, 12),
-                    _lane_point(18, 12),
-                    EXIT_POSITION,
-                )
-            ),
-        },
-        ground_rects=(
-            (0, 8, 10, 2),
-            (8, 6, 2, 4),
-            (8, 6, 12, 2),
-            (18, 6, 2, 15),
-            (32, 8, 10, 2),
-            (32, 8, 2, 6),
-            (20, 12, 14, 2),
-        ),
-    ),
-)
+        "lower": (int(right_shared_col), int(right_join_row) + int(TRACK_WIDTH_CELLS)),
+        "right": (int(right_turn_col) - 2, int(SPAWN_ROW) + int(TRACK_WIDTH_CELLS)),
+    }
+    return _build_layout_spec(
+        template_index=int(template_index),
+        template_name="Offset S",
+        left_path_cells=left_path_cells,
+        right_path_cells=right_path_cells,
+        slot_cells=slot_cells,
+        entry_cells=entry_cells,
+        exit_cell=exit_cell,
+    )
+
+
+def _generate_layout(rng: random.Random) -> LayoutSpec:
+    template_index = int(rng.randrange(len(PATH_TEMPLATES)))
+    template = dict(PATH_TEMPLATES[int(template_index)])
+    entry_cells = {
+        SIDE_LEFT: (int(LEFT_ENTRY_COL), int(SPAWN_ROW)),
+        SIDE_RIGHT: (int(RIGHT_ENTRY_COL), int(SPAWN_ROW)),
+    }
+    exit_cell = (int(CENTER_TRUNK_COL), int(EXIT_ROW))
+    if str(template["kind"]) == "soft_s":
+        return _generate_soft_s_layout(
+            rng,
+            template_index=int(template_index),
+            entry_cells=entry_cells,
+            exit_cell=exit_cell,
+        )
+    return _generate_offset_s_layout(
+        rng,
+        template_index=int(template_index),
+        entry_cells=entry_cells,
+        exit_cell=exit_cell,
+    )
 
 TOWER_PROFILES = {
-    "arrow": TowerProfile(
-        build_cost=7,
-        upgrade_costs=(6, 9),
+    "fast": TowerProfile(
+        build_cost=5,
+        upgrade_costs=(4, 7),
         level_stats=(
-            TowerStats(damage=1.10, cooldown_ticks=17, attack_range=150.0, armor_pierce=0.10),
-            TowerStats(damage=1.35, cooldown_ticks=15, attack_range=160.0, armor_pierce=0.15),
-            TowerStats(damage=1.70, cooldown_ticks=13, attack_range=170.0, armor_pierce=0.20),
+            TowerStats(damage=1.10, cooldown_ticks=13, attack_range=148.0, armor_pierce=0.05),
+            TowerStats(damage=1.35, cooldown_ticks=11, attack_range=156.0, armor_pierce=0.10),
+            TowerStats(damage=1.70, cooldown_ticks=9, attack_range=166.0, armor_pierce=0.15),
         ),
     ),
-    "cannon": TowerProfile(
-        build_cost=8,
-        upgrade_costs=(6, 10),
+    "heavy": TowerProfile(
+        build_cost=5,
+        upgrade_costs=(4, 7),
         level_stats=(
-            TowerStats(damage=2.90, cooldown_ticks=31, attack_range=132.0, armor_pierce=0.90, splash_radius=34.0),
-            TowerStats(damage=3.90, cooldown_ticks=28, attack_range=142.0, armor_pierce=1.20, splash_radius=42.0),
-            TowerStats(damage=5.20, cooldown_ticks=24, attack_range=152.0, armor_pierce=1.55, splash_radius=50.0),
+            TowerStats(damage=4.20, cooldown_ticks=30, attack_range=136.0, armor_pierce=1.05),
+            TowerStats(damage=5.60, cooldown_ticks=26, attack_range=144.0, armor_pierce=1.35),
+            TowerStats(damage=7.10, cooldown_ticks=22, attack_range=152.0, armor_pierce=1.70),
         ),
     ),
-    "tesla": TowerProfile(
-        build_cost=7,
-        upgrade_costs=(6, 9),
+    "area": TowerProfile(
+        build_cost=5,
+        upgrade_costs=(4, 7),
         level_stats=(
-            TowerStats(damage=0.85, cooldown_ticks=20, attack_range=142.0, armor_pierce=0.05, chain_count=2, chain_range=56.0),
-            TowerStats(damage=1.00, cooldown_ticks=18, attack_range=152.0, armor_pierce=0.10, chain_count=3, chain_range=62.0),
-            TowerStats(damage=1.20, cooldown_ticks=16, attack_range=162.0, armor_pierce=0.15, chain_count=4, chain_range=68.0),
+            TowerStats(damage=1.25, cooldown_ticks=20, attack_range=138.0, armor_pierce=0.05, splash_radius=30.0),
+            TowerStats(damage=1.50, cooldown_ticks=18, attack_range=146.0, armor_pierce=0.10, splash_radius=38.0),
+            TowerStats(damage=1.80, cooldown_ticks=16, attack_range=154.0, armor_pierce=0.15, splash_radius=46.0),
         ),
     ),
 }
 
 TOWER_DAMAGE_MULTIPLIERS = {
-    "arrow": {"swarm": 0.95, "armored": 0.45, "flying": 1.75},
-    "cannon": {"swarm": 0.70, "armored": 1.55, "flying": 0.0},
-    "tesla": {"swarm": 1.40, "armored": 0.80, "flying": 0.45},
+    "fast": {"light": 0.90, "armored": 0.45, "flying": 1.75},
+    "heavy": {"light": 0.60, "armored": 1.60, "flying": 0.70},
+    "area": {"light": 1.45, "armored": 0.80, "flying": 0.45},
 }
 
 ENEMY_PROFILES = {
-    "swarm": EnemyProfile(max_hp=2.20, speed=3.20, armor=0.00, bounty=1, radius=8.0),
-    "armored": EnemyProfile(max_hp=9.00, speed=1.55, armor=0.75, bounty=2, radius=10.0),
-    "flying": EnemyProfile(max_hp=3.00, speed=3.45, armor=0.10, bounty=1, radius=9.0),
+    "light": EnemyProfile(max_hp=2.30, speed=3.35, armor=0.00, bounty=0, radius=8.0),
+    "armored": EnemyProfile(max_hp=10.00, speed=1.55, armor=0.95, bounty=0, radius=10.0),
+    "flying": EnemyProfile(max_hp=3.20, speed=3.55, armor=0.15, bounty=0, radius=9.0),
 }
 
 WAVE_TEMPLATES = (
-    WaveSpec(entry_mode=SIDE_LEFT, count_swarm=6, count_armored=0, count_flying=0),
-    WaveSpec(entry_mode=SIDE_RIGHT, count_swarm=3, count_armored=0, count_flying=4),
-    WaveSpec(entry_mode=ENTRY_BOTH, count_swarm=7, count_armored=2, count_flying=0),
-    WaveSpec(entry_mode=SIDE_LEFT, count_swarm=2, count_armored=3, count_flying=2),
-    WaveSpec(entry_mode=SIDE_RIGHT, count_swarm=6, count_armored=2, count_flying=3),
-    WaveSpec(entry_mode=ENTRY_BOTH, count_swarm=8, count_armored=4, count_flying=2),
-    WaveSpec(entry_mode=SIDE_LEFT, count_swarm=4, count_armored=6, count_flying=4),
-    WaveSpec(entry_mode=ENTRY_BOTH, count_swarm=10, count_armored=5, count_flying=5),
+    WaveSpec(entry_mode=SIDE_LEFT, count_light=6, count_armored=0, count_flying=0),
+    WaveSpec(entry_mode=SIDE_RIGHT, count_light=3, count_armored=0, count_flying=4),
+    WaveSpec(entry_mode=ENTRY_BOTH, count_light=7, count_armored=2, count_flying=0),
+    WaveSpec(entry_mode=SIDE_LEFT, count_light=2, count_armored=3, count_flying=2),
+    WaveSpec(entry_mode=SIDE_RIGHT, count_light=6, count_armored=2, count_flying=3),
+    WaveSpec(entry_mode=ENTRY_BOTH, count_light=8, count_armored=4, count_flying=2),
+    WaveSpec(entry_mode=SIDE_LEFT, count_light=4, count_armored=6, count_flying=4),
+    WaveSpec(entry_mode=ENTRY_BOTH, count_light=10, count_armored=5, count_flying=5),
 )
 
 TOWER_COLORS = {
-    "arrow": (COLOR_AQUA, COLOR_DEEP_TEAL),
-    "cannon": (COLOR_SAND, COLOR_OCHRE),
-    "tesla": (COLOR_BLUE, COLOR_NAVY),
+    "fast": (COLOR_BLUE, COLOR_NAVY),
+    "heavy": (COLOR_SAND, COLOR_OCHRE),
+    "area": (COLOR_PURPLE, COLOR_DEEP_PURPLE),
 }
 ENEMY_COLORS = {
-    "swarm": (COLOR_BLUE, COLOR_NAVY),
+    "light": (COLOR_PURPLE, COLOR_DEEP_PURPLE),
     "armored": (COLOR_SAND, COLOR_OCHRE),
-    "flying": (COLOR_AQUA, COLOR_DEEP_TEAL),
+    "flying": (COLOR_BLUE, COLOR_NAVY),
 }
 
 
@@ -540,6 +718,8 @@ class TowerEnv(Env):
             vsync=False,
         )
         self._text_cache = TextCache(max_entries=512)
+        load_font_once(resolve_font_path("Roboto-Light.ttf"))
+        load_font_once(resolve_font_path("Roboto-Bold.ttf"))
 
         curriculum_config = build_curriculum_config(
             min_level=int(config.MIN_LEVEL),
@@ -566,17 +746,22 @@ class TowerEnv(Env):
         self._last_outcome = ""
         self._level_settings = dict(config.LEVEL_SETTINGS[int(self._current_level)])
         self._episode_counter = 0
+        self._session_seed = (
+            int(config.BASE_SEED)
+            if self.mode == "train"
+            else int(random.SystemRandom().randrange(1 << 61))
+        )
 
-        self.layout: LayoutSpec = LAYOUTS[0]
+        self.layout: LayoutSpec = _generate_layout(random.Random(int(self._session_seed)))
         self.wave_plan: list[WaveSpec] = []
         self.wave_index = 0
-        self.gold = 0
+        self.credits = 0
         self.lives = 0
         self.decision_budget = 0
         self.actions_remaining = 0
         self.slot_towers: dict[str, TowerState | None] = {slot_name: None for slot_name in config.SLOT_NAMES}
-        self._selected_slot_index = 0
-        self._selected_build_kind = "arrow"
+        self._menu_slot_name: str | None = None
+        self._hovered_slot_name: str | None = None
         self._wave_in_progress = False
         self._active_enemies: list[EnemyState] = []
         self._attack_effects: list[AttackEffect] = []
@@ -592,7 +777,7 @@ class TowerEnv(Env):
         self.decision_budget = int(self._level_settings["decision_budget"])
 
     def _episode_seed(self) -> int:
-        return int(config.BASE_SEED + self._episode_counter * 7919 + self._current_level * 101)
+        return int(self._session_seed + self._episode_counter * 7919 + self._current_level * 101)
 
     @staticmethod
     def _empty_reward_breakdown() -> dict[str, float]:
@@ -635,7 +820,7 @@ class TowerEnv(Env):
             plan.append(
                 WaveSpec(
                     entry_mode=entry_mode,
-                    count_swarm=int(counts["swarm"]),
+                    count_light=int(counts["light"]),
                     count_armored=int(counts["armored"]),
                     count_flying=int(counts["flying"]),
                 )
@@ -664,14 +849,16 @@ class TowerEnv(Env):
     def _build_observation(self) -> np.ndarray:
         wave = self._current_wave()
         feature_values = {
-            "run_gold_norm": clip_unit(float(self.gold) / float(config.MAX_GOLD_NORMALIZER)),
+            "run_gold_norm": clip_unit(float(self.credits) / float(config.MAX_CREDITS_NORMALIZER)),
             "run_lives_norm": clip_unit(float(self.lives) / float(config.MAX_LIVES_NORMALIZER)),
             "run_wave_norm": float(self._wave_number_norm()),
-            "run_actions_left_norm": clip_unit(float(self.actions_remaining) / float(max(1, self.decision_budget))),
+            "run_actions_left_norm": clip_unit(
+                float(self.actions_remaining) / float(config.DECISION_BUDGET_NORMALIZER)
+            ),
             "wave_entry_left": 1.0 if wave is not None and wave.entry_mode in {SIDE_LEFT, ENTRY_BOTH} else 0.0,
             "wave_entry_right": 1.0 if wave is not None and wave.entry_mode in {SIDE_RIGHT, ENTRY_BOTH} else 0.0,
-            "wave_count_swarm_norm": clip_unit(
-                float(0 if wave is None else wave.count_swarm) / float(config.MAX_WAVE_COUNT_NORMALIZER)
+            "wave_count_light_norm": clip_unit(
+                float(0 if wave is None else wave.count_light) / float(config.MAX_WAVE_COUNT_NORMALIZER)
             ),
             "wave_count_armored_norm": clip_unit(
                 float(0 if wave is None else wave.count_armored) / float(config.MAX_WAVE_COUNT_NORMALIZER)
@@ -679,11 +866,7 @@ class TowerEnv(Env):
             "wave_count_flying_norm": clip_unit(
                 float(0 if wave is None else wave.count_flying) / float(config.MAX_WAVE_COUNT_NORMALIZER)
             ),
-            "map_layout_id_norm": (
-                0.0
-                if len(LAYOUTS) <= 1
-                else clip_unit(float(self.layout.layout_id) / float(len(LAYOUTS) - 1))
-            ),
+            "map_layout_id_norm": float(self.layout.layout_norm),
         }
         for slot_name in config.SLOT_NAMES:
             tower_state = self.slot_towers[str(slot_name)]
@@ -698,15 +881,15 @@ class TowerEnv(Env):
     def reset(self) -> np.ndarray:
         self._apply_level_settings(int(self._current_level))
         rng = random.Random(self._episode_seed())
-        self.layout = LAYOUTS[int(rng.randrange(len(LAYOUTS)))]
+        self.layout = _generate_layout(rng)
         self.wave_plan = self._build_wave_plan(rng)
         self.wave_index = 0
-        self.gold = int(self._level_settings["start_gold"])
+        self.credits = int(self._level_settings["start_credits"])
         self.lives = int(self._level_settings["start_lives"])
         self.actions_remaining = int(self.decision_budget)
         self.slot_towers = {slot_name: None for slot_name in config.SLOT_NAMES}
-        self._selected_slot_index = 0
-        self._selected_build_kind = "arrow"
+        self._menu_slot_name = None
+        self._hovered_slot_name = None
         self._wave_in_progress = False
         self._active_enemies = []
         self._attack_effects = []
@@ -757,19 +940,18 @@ class TowerEnv(Env):
         mask[0] = True
         if int(self.actions_remaining) <= 0:
             return mask
-
         for slot_name in config.SLOT_NAMES:
             tower_state = self.slot_towers[str(slot_name)]
             if tower_state is None:
                 for tower_kind in config.TOWER_KINDS:
                     build_cost = int(TOWER_PROFILES[str(tower_kind)].build_cost)
-                    if int(self.gold) >= build_cost:
+                    if int(self.credits) >= build_cost:
                         mask[self._build_action_index(str(tower_kind), str(slot_name))] = True
                 continue
 
             if int(tower_state.level) < 3:
                 upgrade_cost = int(tower_state.profile.upgrade_cost_for_level(int(tower_state.level)))
-                if int(self.gold) >= upgrade_cost:
+                if int(self.credits) >= upgrade_cost:
                     mask[self._upgrade_action_index(str(slot_name))] = True
             mask[self._sell_action_index(str(slot_name))] = True
 
@@ -785,9 +967,6 @@ class TowerEnv(Env):
             return 0
         return int(valid_actions[0])
 
-    def _selected_slot_name(self) -> str:
-        return str(config.SLOT_NAMES[int(self._selected_slot_index)])
-
     def _sell_value(self, slot_name: str) -> int:
         tower_state = self.slot_towers[str(slot_name)]
         if tower_state is None:
@@ -797,7 +976,7 @@ class TowerEnv(Env):
 
     def _slot_name_at(self, mouse_x: float, mouse_y_arcade: float) -> str | None:
         mouse_y = float(self.window_controller.to_top_left_y(float(mouse_y_arcade)))
-        for slot_name, (center_x, center_y) in SLOT_POSITIONS.items():
+        for slot_name, (center_x, center_y) in self.layout.slot_positions.items():
             if (
                 abs(float(mouse_x) - float(center_x)) <= float(SLOT_SIZE) * 0.5
                 and abs(float(mouse_y) - float(center_y)) <= float(SLOT_SIZE) * 0.5
@@ -805,54 +984,81 @@ class TowerEnv(Env):
                 return str(slot_name)
         return None
 
+    def _update_hovered_slot(self) -> None:
+        mouse_position = self.window_controller.mouse_position()
+        if mouse_position is None:
+            self._hovered_slot_name = None
+            return
+        self._hovered_slot_name = self._slot_name_at(float(mouse_position[0]), float(mouse_position[1]))
+
+    def _menu_items_for_slot(self, slot_name: str) -> list[tuple[str, int, bool]]:
+        mask = self.get_action_mask()
+        tower_state = self.slot_towers[str(slot_name)]
+        if tower_state is None:
+            items = [
+                ("Fast", self._build_action_index("fast", str(slot_name))),
+                ("Heavy", self._build_action_index("heavy", str(slot_name))),
+                ("Area", self._build_action_index("area", str(slot_name))),
+            ]
+        else:
+            items = [
+                ("Upgrade", self._upgrade_action_index(str(slot_name))),
+                ("Sell", self._sell_action_index(str(slot_name))),
+            ]
+        return [(label, int(action_idx), bool(mask[int(action_idx)])) for label, action_idx in items]
+
+    def _menu_item_rects(self, slot_name: str) -> list[tuple[str, int, bool, tuple[float, float, float, float]]]:
+        items = self._menu_items_for_slot(str(slot_name))
+        if not items:
+            return []
+        slot_left = float(self.layout.slot_cells[str(slot_name)][0]) * TILE_SIZE
+        slot_top = float(self.layout.slot_cells[str(slot_name)][1]) * TILE_SIZE
+        total_height = float(len(items)) * MENU_ITEM_HEIGHT + float(max(0, len(items) - 1)) * MENU_ITEM_GAP
+        if slot_left + SLOT_SIZE + 6.0 + MENU_ITEM_WIDTH <= float(config.SCREEN_WIDTH) - 4.0:
+            menu_left = slot_left + SLOT_SIZE + 6.0
+        else:
+            menu_left = slot_left - MENU_ITEM_WIDTH - 6.0
+        menu_top = min(max(4.0, slot_top), float(config.WORLD_HEIGHT) - total_height - 4.0)
+        rects: list[tuple[str, int, bool, tuple[float, float, float, float]]] = []
+        for item_index, (label, action_idx, enabled) in enumerate(items):
+            top = menu_top + float(item_index) * (MENU_ITEM_HEIGHT + MENU_ITEM_GAP)
+            rects.append((label, int(action_idx), bool(enabled), (menu_left, top, MENU_ITEM_WIDTH, MENU_ITEM_HEIGHT)))
+        return rects
+
+    def _menu_action_at(self, mouse_x: float, mouse_y_arcade: float) -> tuple[int, bool] | None:
+        if self._menu_slot_name is None:
+            return None
+        mouse_y = float(self.window_controller.to_top_left_y(float(mouse_y_arcade)))
+        for _, action_idx, enabled, rect in self._menu_item_rects(str(self._menu_slot_name)):
+            left, top, width, height = rect
+            if left <= float(mouse_x) <= left + width and top <= float(mouse_y) <= top + height:
+                return int(action_idx), bool(enabled)
+        return None
+
     def _human_action(self) -> int | None:
-        for mouse_press in self.window_controller.consume_mouse_presses():
-            slot_name = self._slot_name_at(float(mouse_press.x), float(mouse_press.y))
-            if slot_name is None:
-                continue
-            self._selected_slot_index = int(config.SLOT_NAMES.index(str(slot_name)))
-            if int(mouse_press.button) == int(arcade.MOUSE_BUTTON_RIGHT):
-                return int(self._sell_action_index(str(slot_name)))
+        self._update_hovered_slot()
 
         for key in self.window_controller.consume_key_presses():
-            if key == arcade.key.LEFT:
-                self._selected_slot_index = (int(self._selected_slot_index) - 1) % len(config.SLOT_NAMES)
-                continue
-            if key == arcade.key.RIGHT:
-                self._selected_slot_index = (int(self._selected_slot_index) + 1) % len(config.SLOT_NAMES)
-                continue
-            if key in (arcade.key.KEY_1, arcade.key.NUM_1):
-                self._selected_slot_index = 0
-                continue
-            if key in (arcade.key.KEY_2, arcade.key.NUM_2):
-                self._selected_slot_index = 1
-                continue
-            if key in (arcade.key.KEY_3, arcade.key.NUM_3):
-                self._selected_slot_index = 2
-                continue
-            if key in (arcade.key.KEY_4, arcade.key.NUM_4):
-                self._selected_slot_index = 3
-                continue
-            if key in (arcade.key.KEY_5, arcade.key.NUM_5):
-                self._selected_slot_index = 4
-                continue
-            if key == arcade.key.A:
-                self._selected_build_kind = "arrow"
-                continue
-            if key == arcade.key.C:
-                self._selected_build_kind = "cannon"
-                continue
-            if key == arcade.key.T:
-                self._selected_build_kind = "tesla"
-                continue
-            if key == arcade.key.U:
-                return int(self._upgrade_action_index(self._selected_slot_name()))
-            if key in (arcade.key.DELETE, arcade.key.BACKSPACE):
-                return int(self._sell_action_index(self._selected_slot_name()))
             if key == arcade.key.SPACE:
-                return int(self._build_action_index(self._selected_build_kind, self._selected_slot_name()))
-            if key == arcade.key.ENTER:
+                self._menu_slot_name = None
                 return 0
+
+        for mouse_press in self.window_controller.consume_mouse_presses():
+            if int(mouse_press.button) != int(arcade.MOUSE_BUTTON_LEFT):
+                continue
+            menu_action = self._menu_action_at(float(mouse_press.x), float(mouse_press.y))
+            if menu_action is not None:
+                action_idx, enabled = menu_action
+                if enabled:
+                    self._menu_slot_name = None
+                    return int(action_idx)
+                return None
+
+            slot_name = self._slot_name_at(float(mouse_press.x), float(mouse_press.y))
+            if slot_name is None:
+                self._menu_slot_name = None
+                continue
+            self._menu_slot_name = str(slot_name)
         return None
 
     def _spawn_enemy(self, side: str, enemy_kind: str) -> EnemyState:
@@ -867,6 +1073,8 @@ class TowerEnv(Env):
             armor=float(profile.armor),
             bounty=int(profile.bounty),
             radius=float(profile.radius),
+            lane_offset=0.0,
+            distance_along=0.0,
         )
 
     def _split_wave_counts(self, wave: WaveSpec, enemy_kind: str) -> dict[str, int]:
@@ -885,7 +1093,7 @@ class TowerEnv(Env):
 
     def _build_spawn_schedule(self, wave: WaveSpec) -> list[tuple[int, str, str]]:
         side_queues: dict[str, deque[str]] = {SIDE_LEFT: deque(), SIDE_RIGHT: deque()}
-        for enemy_kind in ("swarm", "flying", "armored"):
+        for enemy_kind in ("light", "flying", "armored"):
             split_counts = self._split_wave_counts(wave, str(enemy_kind))
             for side in (SIDE_LEFT, SIDE_RIGHT):
                 for _ in range(max(0, int(split_counts[str(side)]))):
@@ -935,8 +1143,8 @@ class TowerEnv(Env):
             return True
         return False
 
-    def _attack_with_arrow(self, slot_name: str, tower_state: TowerState, enemies: list[EnemyState]) -> None:
-        slot_pos = SLOT_POSITIONS[str(slot_name)]
+    def _attack_with_fast(self, slot_name: str, tower_state: TowerState, enemies: list[EnemyState]) -> None:
+        slot_pos = self.layout.slot_positions[str(slot_name)]
         candidates = [
             enemy
             for enemy in enemies
@@ -948,17 +1156,23 @@ class TowerEnv(Env):
             candidates,
             key=lambda enemy: self._enemy_priority(enemy, preferred_kind="flying"),
         )
-        self._damage_enemy(target, tower_kind="arrow", tower_stats=tower_state.stats)
+        self._damage_enemy(target, tower_kind="fast", tower_stats=tower_state.stats)
         tower_state.cooldown_ticks = int(tower_state.stats.cooldown_ticks)
-        self._attack_effects.append(AttackEffect(kind="arrow", points=(slot_pos, target.position), ttl=4))
+        self._attack_effects.append(
+            AttackEffect(
+                kind="fast",
+                points=(slot_pos, target.position),
+                ttl=4,
+                max_ttl=4,
+            )
+        )
 
-    def _attack_with_cannon(self, slot_name: str, tower_state: TowerState, enemies: list[EnemyState]) -> None:
-        slot_pos = SLOT_POSITIONS[str(slot_name)]
+    def _attack_with_heavy(self, slot_name: str, tower_state: TowerState, enemies: list[EnemyState]) -> None:
+        slot_pos = self.layout.slot_positions[str(slot_name)]
         candidates = [
             enemy
             for enemy in enemies
             if enemy.alive
-            and str(enemy.kind) != "flying"
             and self._in_range(slot_pos, enemy, tower_state.stats.attack_range)
         ]
         if not candidates:
@@ -967,27 +1181,19 @@ class TowerEnv(Env):
             candidates,
             key=lambda enemy: self._enemy_priority(enemy, preferred_kind="armored"),
         )
-        blast_center = target.position
-        for enemy in enemies:
-            if not enemy.alive or str(enemy.kind) == "flying":
-                continue
-            distance_to_blast = _distance(blast_center, enemy.position)
-            if distance_to_blast > float(tower_state.stats.splash_radius) + float(enemy.radius):
-                continue
-            splash_scale = 1.0 if enemy is target else 0.65
-            self._damage_enemy(enemy, tower_kind="cannon", tower_stats=tower_state.stats, scale=float(splash_scale))
+        self._damage_enemy(target, tower_kind="heavy", tower_stats=tower_state.stats)
         tower_state.cooldown_ticks = int(tower_state.stats.cooldown_ticks)
         self._attack_effects.append(
             AttackEffect(
-                kind="cannon",
-                points=(slot_pos, blast_center),
-                ttl=6,
-                radius=float(tower_state.stats.splash_radius),
+                kind="heavy",
+                points=(slot_pos, target.position),
+                ttl=4,
+                max_ttl=4,
             )
         )
 
-    def _attack_with_tesla(self, slot_name: str, tower_state: TowerState, enemies: list[EnemyState]) -> None:
-        slot_pos = SLOT_POSITIONS[str(slot_name)]
+    def _attack_with_area(self, slot_name: str, tower_state: TowerState, enemies: list[EnemyState]) -> None:
+        slot_pos = self.layout.slot_positions[str(slot_name)]
         candidates = [
             enemy
             for enemy in enemies
@@ -995,38 +1201,39 @@ class TowerEnv(Env):
         ]
         if not candidates:
             return
-        primary = max(
+        target = max(
             candidates,
-            key=lambda enemy: self._enemy_priority(enemy, preferred_kind="swarm"),
+            key=lambda enemy: self._enemy_priority(enemy, preferred_kind="light"),
         )
-        chained_targets = [primary]
-        remaining = [enemy for enemy in candidates if enemy is not primary]
-        anchor = primary
-        while len(chained_targets) < int(tower_state.stats.chain_count) and remaining:
-            chain_candidates = [
-                enemy
-                for enemy in remaining
-                if _distance(anchor.position, enemy.position)
-                <= float(tower_state.stats.chain_range) + float(enemy.radius)
-            ]
-            if not chain_candidates:
-                break
-            nxt = max(
-                chain_candidates,
-                key=lambda enemy: self._enemy_priority(enemy, preferred_kind="swarm"),
-            )
-            chained_targets.append(nxt)
-            remaining.remove(nxt)
-            anchor = nxt
-
-        for chain_index, enemy in enumerate(chained_targets):
-            chain_scale = max(0.55, 1.0 - 0.18 * float(chain_index))
-            self._damage_enemy(enemy, tower_kind="tesla", tower_stats=tower_state.stats, scale=float(chain_scale))
-
-        effect_points = [slot_pos]
-        effect_points.extend(enemy.position for enemy in chained_targets)
+        blast_center = target.position
+        for enemy in enemies:
+            if not enemy.alive:
+                continue
+            distance_to_blast = _distance(blast_center, enemy.position)
+            if distance_to_blast > float(tower_state.stats.splash_radius) + float(enemy.radius):
+                continue
+            splash_scale = 1.0 if enemy is target else 0.70
+            self._damage_enemy(enemy, tower_kind="area", tower_stats=tower_state.stats, scale=float(splash_scale))
         tower_state.cooldown_ticks = int(tower_state.stats.cooldown_ticks)
-        self._attack_effects.append(AttackEffect(kind="tesla", points=tuple(effect_points), ttl=5))
+        self._attack_effects.append(
+            AttackEffect(
+                kind="area_flight",
+                points=(slot_pos, blast_center),
+                ttl=4,
+                max_ttl=4,
+                radius=5.0,
+            )
+        )
+        self._attack_effects.append(
+            AttackEffect(
+                kind="area_splash",
+                points=(blast_center,),
+                ttl=9,
+                max_ttl=9,
+                delay_ticks=3,
+                radius=float(tower_state.stats.splash_radius),
+            )
+        )
 
     def _tick_towers(self, enemies: list[EnemyState]) -> None:
         for slot_name in config.SLOT_NAMES:
@@ -1036,19 +1243,18 @@ class TowerEnv(Env):
             if int(tower_state.cooldown_ticks) > 0:
                 tower_state.cooldown_ticks = max(0, int(tower_state.cooldown_ticks) - 1)
                 continue
-            if str(tower_state.kind) == "arrow":
-                self._attack_with_arrow(str(slot_name), tower_state, enemies)
-            elif str(tower_state.kind) == "cannon":
-                self._attack_with_cannon(str(slot_name), tower_state, enemies)
+            if str(tower_state.kind) == "fast":
+                self._attack_with_fast(str(slot_name), tower_state, enemies)
+            elif str(tower_state.kind) == "heavy":
+                self._attack_with_heavy(str(slot_name), tower_state, enemies)
             else:
-                self._attack_with_tesla(str(slot_name), tower_state, enemies)
+                self._attack_with_area(str(slot_name), tower_state, enemies)
 
     def _collect_kills(self, enemies: list[EnemyState], reward_breakdown: dict[str, float]) -> None:
         for enemy in enemies:
             if enemy.alive or enemy.leaked:
                 continue
             reward_breakdown["reward_progress_kill"] += float(config.REWARD_PROGRESS_KILL)
-            self.gold += int(enemy.bounty)
             enemy.leaked = True
 
     def _move_enemies(self, enemies: list[EnemyState], reward_breakdown: dict[str, float]) -> None:
@@ -1065,6 +1271,10 @@ class TowerEnv(Env):
     def _trim_effects(self) -> None:
         next_effects: list[AttackEffect] = []
         for effect in self._attack_effects:
+            if int(effect.delay_ticks) > 0:
+                effect.delay_ticks = max(0, int(effect.delay_ticks) - 1)
+                next_effects.append(effect)
+                continue
             effect.ttl = max(0, int(effect.ttl) - 1)
             if int(effect.ttl) > 0:
                 next_effects.append(effect)
@@ -1107,7 +1317,7 @@ class TowerEnv(Env):
                 break
 
             if schedule_index >= len(spawn_schedule) and not self._active_enemies:
-                self.gold += int(config.WAVE_CLEAR_GOLD_BONUS)
+                self.credits += int(config.WAVE_CLEAR_CREDIT_BONUS)
                 reward_breakdown["reward_progress_wave_clear"] += float(config.REWARD_PROGRESS_WAVE_CLEAR)
                 self.wave_index += 1
                 if int(self.wave_index) >= len(self.wave_plan):
@@ -1129,9 +1339,9 @@ class TowerEnv(Env):
 
     def _build_tower(self, tower_kind: str, slot_name: str) -> None:
         profile = TOWER_PROFILES[str(tower_kind)]
-        if self.slot_towers[str(slot_name)] is not None or int(self.gold) < int(profile.build_cost):
+        if self.slot_towers[str(slot_name)] is not None or int(self.credits) < int(profile.build_cost):
             return
-        self.gold -= int(profile.build_cost)
+        self.credits -= int(profile.build_cost)
         self.slot_towers[str(slot_name)] = TowerState(
             kind=str(tower_kind),
             level=1,
@@ -1145,9 +1355,9 @@ class TowerEnv(Env):
         if tower_state is None:
             return
         upgrade_cost = int(tower_state.profile.upgrade_cost_for_level(int(tower_state.level)))
-        if int(self.gold) < int(upgrade_cost):
+        if int(self.credits) < int(upgrade_cost):
             return
-        self.gold -= int(upgrade_cost)
+        self.credits -= int(upgrade_cost)
         tower_state.level = min(3, int(tower_state.level) + 1)
         tower_state.total_spent += int(upgrade_cost)
         tower_state.cooldown_ticks = 0
@@ -1158,7 +1368,7 @@ class TowerEnv(Env):
         if tower_state is None:
             return
         refund = self._sell_value(str(slot_name))
-        self.gold += int(refund)
+        self.credits += int(refund)
         self.slot_towers[str(slot_name)] = None
         self.actions_remaining = max(0, int(self.actions_remaining) - 1)
 
@@ -1287,7 +1497,6 @@ class TowerEnv(Env):
 
     def _draw_paths(self) -> None:
         path_cells = _rect_cells(self.layout.ground_rects)
-        border_width = float(CELL_INSET)
         for col, row in path_cells:
             left, top, width, height = _block_rect(int(col), int(row), 1, 1)
             arcade.draw_lbwh_rectangle_filled(
@@ -1297,130 +1506,88 @@ class TowerEnv(Env):
                 float(height),
                 GROUND_PATH_INNER,
             )
-
-        for col, row in path_cells:
-            left, top, width, height = _block_rect(int(col), int(row), 1, 1)
-            top_open = (int(col), int(row) - 1) not in path_cells
-            bottom_open = (int(col), int(row) + 1) not in path_cells
-            left_open = (int(col) - 1, int(row)) not in path_cells
-            right_open = (int(col) + 1, int(row)) not in path_cells
-
-            if top_open:
-                arcade.draw_lbwh_rectangle_filled(
-                    float(left),
-                    float(self.window_controller.to_arcade_y(float(top) + border_width)),
-                    float(width),
-                    float(border_width),
-                    GROUND_PATH_OUTER,
-                )
-            if bottom_open:
-                arcade.draw_lbwh_rectangle_filled(
-                    float(left),
-                    float(self.window_controller.to_arcade_y(float(top) + float(height))),
-                    float(width),
-                    float(border_width),
-                    GROUND_PATH_OUTER,
-                )
-            if left_open:
-                arcade.draw_lbwh_rectangle_filled(
-                    float(left),
-                    float(self.window_controller.to_arcade_y(float(top) + float(height))),
-                    float(border_width),
-                    float(height),
-                    GROUND_PATH_OUTER,
-                )
-            if right_open:
-                arcade.draw_lbwh_rectangle_filled(
-                    float(left + float(width) - border_width),
-                    float(self.window_controller.to_arcade_y(float(top) + float(height))),
-                    float(border_width),
-                    float(height),
-                    GROUND_PATH_OUTER,
-                )
-            if top_open or left_open:
-                arcade.draw_lbwh_rectangle_filled(
-                    float(left),
-                    float(self.window_controller.to_arcade_y(float(top) + border_width)),
-                    float(border_width),
-                    float(border_width),
-                    GROUND_PATH_OUTER,
-                )
-            if top_open or right_open:
-                arcade.draw_lbwh_rectangle_filled(
-                    float(left + float(width) - border_width),
-                    float(self.window_controller.to_arcade_y(float(top) + border_width)),
-                    float(border_width),
-                    float(border_width),
-                    GROUND_PATH_OUTER,
-                )
-            if bottom_open or left_open:
-                arcade.draw_lbwh_rectangle_filled(
-                    float(left),
-                    float(self.window_controller.to_arcade_y(float(top) + float(height))),
-                    float(border_width),
-                    float(border_width),
-                    GROUND_PATH_OUTER,
-                )
-            if bottom_open or right_open:
-                arcade.draw_lbwh_rectangle_filled(
-                    float(left + float(width) - border_width),
-                    float(self.window_controller.to_arcade_y(float(top) + float(height))),
-                    float(border_width),
-                    float(border_width),
-                    GROUND_PATH_OUTER,
-                )
+        draw_cell_union_outline(
+            self.window_controller,
+            cells=path_cells,
+            top_left_x=0.0,
+            top_left_y=0.0,
+            cell_size=float(TILE_SIZE),
+            border_width=float(CELL_INSET),
+            color=GROUND_PATH_OUTER,
+        )
 
     def _draw_entries_and_exit(self) -> None:
-        for side, cell_top_left in ENTRY_CELLS.items():
-            x, y = ENTRY_POSITIONS[side]
+        for side, cell_top_left in self.layout.entry_cells.items():
             label = "L" if side == SIDE_LEFT else "R"
+            marker_left = int(cell_top_left[0]) - int(ENTRY_MARKER_DEPTH_CELLS) if side == SIDE_LEFT else int(cell_top_left[0]) + int(TRACK_WIDTH_CELLS)
+            marker_top = int(cell_top_left[1])
+            marker_rect = _block_rect(
+                int(marker_left),
+                int(marker_top),
+                int(ENTRY_MARKER_DEPTH_CELLS),
+                int(TRACK_WIDTH_CELLS),
+            )
+            label_x = float(marker_rect[0]) + float(marker_rect[2]) * 0.5
+            label_y = float(marker_rect[1]) + float(marker_rect[3]) * 0.5
             self._draw_block(
-                *_block_rect(int(cell_top_left[0]), int(cell_top_left[1]), TRACK_WIDTH_CELLS, TRACK_WIDTH_CELLS),
+                *marker_rect,
                 outer_color=ENTRY_OUTLINE,
                 inner_color=ENTRY_FILL,
             )
             self._text_cache.draw(
                 label,
-                x=float(x),
-                y=float(self.window_controller.to_arcade_y(float(y))),
+                x=float(label_x),
+                y=float(self.window_controller.to_arcade_y(float(label_y))),
                 color=COLOR_LIGHT_NEUTRAL,
-                font_size=10,
-                font_name=("Roboto", "Arial", "sans-serif"),
+                font_size=12,
+                font_name=BLOCK_FONT_NAME,
                 anchor_x="center",
                 anchor_y="center",
             )
-        exit_x, exit_y = EXIT_POSITION
+        exit_rect = _block_rect(
+            int(self.layout.exit_cell[0]),
+            int(self.layout.exit_cell[1]) + int(TRACK_WIDTH_CELLS),
+            int(TRACK_WIDTH_CELLS),
+            int(EXIT_MARKER_DEPTH_CELLS),
+        )
+        exit_label_x = float(exit_rect[0]) + float(exit_rect[2]) * 0.5
+        exit_label_y = float(exit_rect[1]) + float(exit_rect[3]) * 0.5
         self._draw_block(
-            *_block_rect(int(EXIT_CELL[0]), int(EXIT_CELL[1]), TRACK_WIDTH_CELLS, TRACK_WIDTH_CELLS),
+            *exit_rect,
             outer_color=EXIT_OUTLINE,
             inner_color=EXIT_FILL,
         )
         self._text_cache.draw(
             "E",
-            x=float(exit_x),
-            y=float(self.window_controller.to_arcade_y(float(exit_y))),
+            x=float(exit_label_x),
+            y=float(self.window_controller.to_arcade_y(float(exit_label_y))),
             color=COLOR_LIGHT_NEUTRAL,
-            font_size=10,
-            font_name=("Roboto", "Arial", "sans-serif"),
+            font_size=12,
+            font_name=BLOCK_FONT_NAME,
             anchor_x="center",
             anchor_y="center",
         )
 
     def _draw_slots(self) -> None:
-        tower_labels = {"arrow": "A", "cannon": "C", "tesla": "T"}
-        for slot_index, slot_name in enumerate(config.SLOT_NAMES):
-            x, y = SLOT_POSITIONS[str(slot_name)]
+        tower_labels = {"fast": "F", "heavy": "H", "area": "A"}
+        for slot_name in config.SLOT_NAMES:
+            x, y = self.layout.slot_positions[str(slot_name)]
             tower_state = self.slot_towers[str(slot_name)]
-            selected = int(slot_index) == int(self._selected_slot_index)
+            highlighted = str(slot_name) in {str(self._hovered_slot_name), str(self._menu_slot_name)}
             tower_outline, tower_fill = (SLOT_OUTLINE, SLOT_FILL)
             if tower_state is not None:
                 tower_outline, tower_fill = TOWER_COLORS[str(tower_state.kind)]
             if tower_state is None:
                 tower_fill = EMPTY_SLOT_FILL
-            if selected and self.mode == "human":
+            if highlighted and self.mode == "human":
                 tower_outline = SELECTED_SLOT_COLOR
             self._draw_block(
-                *_block_rect(int(SLOT_CELLS[str(slot_name)][0]), int(SLOT_CELLS[str(slot_name)][1]), 2, 2),
+                *_block_rect(
+                    int(self.layout.slot_cells[str(slot_name)][0]),
+                    int(self.layout.slot_cells[str(slot_name)][1]),
+                    2,
+                    2,
+                ),
                 outer_color=tower_outline,
                 inner_color=tower_fill,
                 inset=float(SLOT_INSET),
@@ -1433,9 +1600,40 @@ class TowerEnv(Env):
                 x=float(x),
                 y=float(self.window_controller.to_arcade_y(float(y))),
                 color=COLOR_LIGHT_NEUTRAL,
-                font_size=10,
-                font_name=("Roboto", "Arial", "sans-serif"),
+                font_size=12,
+                font_name=BLOCK_FONT_NAME,
                 anchor_x="center",
+                anchor_y="center",
+            )
+
+    def _draw_context_menu(self) -> None:
+        if self.mode != "human" or self._menu_slot_name is None or self._wave_in_progress or self._last_outcome:
+            return
+        for label, _, enabled, rect in self._menu_item_rects(str(self._menu_slot_name)):
+            left, top, width, height = rect
+            arcade.draw_lbwh_rectangle_filled(
+                float(left),
+                float(self.window_controller.to_arcade_y(float(top) + float(height))),
+                float(width),
+                float(height),
+                MENU_FILL,
+            )
+            arcade.draw_lbwh_rectangle_outline(
+                float(left),
+                float(self.window_controller.to_arcade_y(float(top) + float(height))),
+                float(width),
+                float(height),
+                MENU_BORDER,
+                1.0,
+            )
+            self._text_cache.draw(
+                str(label),
+                x=float(left) + 6.0,
+                y=float(self.window_controller.to_arcade_y(float(top) + float(height) * 0.5)),
+                color=MENU_TEXT if enabled else MENU_TEXT_DISABLED,
+                font_size=12,
+                font_name=UI_FONT_NAME,
+                anchor_x="left",
                 anchor_y="center",
             )
 
@@ -1465,39 +1663,52 @@ class TowerEnv(Env):
 
     def _draw_effects(self) -> None:
         for effect in self._attack_effects:
+            if int(effect.delay_ticks) > 0 or not effect.points:
+                continue
+            outer_color, _ = TOWER_COLORS.get(str(effect.kind).replace("_flight", "").replace("_splash", ""), (COLOR_LIGHT_NEUTRAL, COLOR_LIGHT_NEUTRAL))
+            max_ttl = max(1, int(effect.max_ttl) if int(effect.max_ttl) > 0 else int(effect.ttl))
+            progress = 1.0 - (float(effect.ttl) / float(max_ttl))
             if not effect.points:
                 continue
             screen_points = [
                 (float(x), float(self.window_controller.to_arcade_y(float(y))))
                 for x, y in effect.points
             ]
-            if str(effect.kind) == "arrow" and len(screen_points) >= 2:
+            if str(effect.kind) == "fast" and len(screen_points) >= 2:
+                start_x, start_y = screen_points[0]
+                end_x, end_y = screen_points[1]
+                shot_x = float(start_x + (end_x - start_x) * progress)
+                shot_y = float(start_y + (end_y - start_y) * progress)
+                arcade.draw_circle_filled(shot_x, shot_y, 5.0, outer_color)
+            elif str(effect.kind) == "heavy" and len(screen_points) >= 2:
+                start_x, start_y = screen_points[0]
+                end_x, end_y = screen_points[1]
                 arcade.draw_line(
-                    screen_points[0][0],
-                    screen_points[0][1],
-                    screen_points[1][0],
-                    screen_points[1][1],
-                    COLOR_AQUA,
-                    2.0,
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                    outer_color + (64,),
+                    5.0,
                 )
-            elif str(effect.kind) == "cannon" and len(screen_points) >= 2:
-                arcade.draw_line(
-                    screen_points[0][0],
-                    screen_points[0][1],
-                    screen_points[1][0],
-                    screen_points[1][1],
-                    COLOR_SAND,
-                    2.0,
-                )
+            elif str(effect.kind) == "area_flight" and len(screen_points) >= 2:
+                start_x, start_y = screen_points[0]
+                end_x, end_y = screen_points[1]
+                shot_x = float(start_x + (end_x - start_x) * progress)
+                shot_y = float(start_y + (end_y - start_y) * progress)
+                arcade.draw_circle_filled(shot_x, shot_y, 5.0, outer_color + (128,))
+            elif str(effect.kind) == "area_splash" and screen_points:
+                center_x, center_y = screen_points[0]
+                splash_radius = max(2.0, float(effect.radius) * progress)
+                splash_color = outer_color + (128,)
+                arcade.draw_circle_filled(center_x, center_y, splash_radius, splash_color)
                 arcade.draw_circle_outline(
-                    screen_points[1][0],
-                    screen_points[1][1],
-                    float(effect.radius),
-                    COLOR_SAND,
+                    center_x,
+                    center_y,
+                    splash_radius,
+                    splash_color,
                     2.0,
                 )
-            elif len(screen_points) >= 2:
-                arcade.draw_line_strip(screen_points, COLOR_BLUE, 2.0)
 
     def _draw_world(self) -> None:
         arcade.draw_lbwh_rectangle_filled(
@@ -1513,110 +1724,46 @@ class TowerEnv(Env):
         for enemy in self._active_enemies:
             self._draw_enemy(enemy)
         self._draw_effects()
-
-    def _draw_tower_table(self) -> None:
-        panel_width = 320.0
-        panel_height = 52.0
-        panel_left = float(config.SCREEN_WIDTH) - panel_width - 8.0
-        panel_bottom = float(config.BB_HEIGHT) + 8.0
-        panel_fill = COLOR_LIGHT_NEUTRAL + (24,)
-        panel_line = COLOR_LIGHT_NEUTRAL + (128,)
-        panel_text = COLOR_LIGHT_NEUTRAL + (128,)
-        header_y = panel_bottom + panel_height - 12.0
-        row_gap = 12.0
-        columns = (
-            ("Name", 8.0),
-            ("Cst", 76.0),
-            ("Dmg", 114.0),
-            ("Area", 156.0),
-            ("Rate", 206.0),
-            ("L2/L3", 258.0),
-        )
-
-        arcade.draw_lbwh_rectangle_filled(panel_left, panel_bottom, panel_width, panel_height, panel_fill)
-        arcade.draw_lbwh_rectangle_outline(panel_left, panel_bottom, panel_width, panel_height, panel_line, 1.0)
-
-        for header, offset_x in columns:
-            self._text_cache.draw(
-                header,
-                x=panel_left + offset_x,
-                y=header_y,
-                color=panel_text,
-                font_size=10,
-                font_name=("Roboto", "Arial", "sans-serif"),
-                anchor_x="left",
-                anchor_y="center",
-            )
-
-        tower_rows = (
-            ("Arrow", TOWER_PROFILES["arrow"], TOWER_PROFILES["arrow"].level_stats[0]),
-            ("Cannon", TOWER_PROFILES["cannon"], TOWER_PROFILES["cannon"].level_stats[0]),
-            ("Tesla", TOWER_PROFILES["tesla"], TOWER_PROFILES["tesla"].level_stats[0]),
-        )
-        for row_index, (name, profile, stats) in enumerate(tower_rows, start=1):
-            if float(stats.splash_radius) > 0.0:
-                area_text = f"{int(round(float(stats.splash_radius) / float(TILE_SIZE)))}r"
-            elif int(stats.chain_count) > 1:
-                area_text = f"x{int(stats.chain_count)}"
-            else:
-                area_text = "1"
-            row_y = header_y - float(row_index) * row_gap
-            values = (
-                name,
-                str(int(profile.build_cost)),
-                f"{float(stats.damage):.1f}",
-                area_text,
-                f"{30.0 / float(stats.cooldown_ticks):.1f}",
-                f"{int(profile.upgrade_costs[0])}/{int(profile.upgrade_costs[1])}",
-            )
-            for (_, offset_x), value in zip(columns, values):
-                self._text_cache.draw(
-                    str(value),
-                    x=panel_left + offset_x,
-                    y=row_y,
-                    color=panel_text,
-                    font_size=10,
-                    font_name=("Roboto", "Arial", "sans-serif"),
-                    anchor_x="left",
-                    anchor_y="center",
-                )
+        self._draw_context_menu()
 
     def _draw_hud(self) -> None:
         arcade.draw_lbwh_rectangle_filled(0, 0, config.SCREEN_WIDTH, config.BB_HEIGHT, COLOR_DARK_NEUTRAL)
-        sell_value = self._sell_value(self._selected_slot_name())
-        status_parts = [
-            f"Budget {int(self.gold)}",
-            f"Lives {int(self.lives)}",
+        wave = self._current_wave()
+        wave_label = "Done" if wave is None else f"{int(self.wave_index) + 1}/{len(self.wave_plan)}"
+        preview_entry = "-"
+        if wave is not None:
+            preview_entry = {
+                SIDE_LEFT: "Left",
+                SIDE_RIGHT: "Right",
+                ENTRY_BOTH: "Both",
+            }.get(str(wave.entry_mode), str(wave.entry_mode).title())
+        segments = [
+            f"Credits: {int(self.credits)}",
+            f"Lives: {int(self.lives)}",
+            f"Wave: {wave_label}",
+            f"NextWave: {preview_entry}",
+            f"Light: {0 if wave is None else int(wave.count_light)}",
+            f"Armored: {0 if wave is None else int(wave.count_armored)}",
+            f"Flying: {0 if wave is None else int(wave.count_flying)}",
         ]
-        if int(sell_value) > 0:
-            status_parts.append(f"Sell Value {int(sell_value)}")
+        if self._last_outcome:
+            segments.append(f"Status: {'Victory' if self._last_outcome == 'win' else 'Defeat'}")
         self._text_cache.draw(
-            "   ".join(status_parts),
+            " / ".join(segments),
             x=14.0,
-            y=float(config.BB_HEIGHT) - 16.0,
+            y=float(config.BB_HEIGHT) * 0.5,
             color=COLOR_LIGHT_NEUTRAL,
-            font_size=13,
-            font_name=("Roboto", "Arial", "sans-serif"),
+            font_size=10,
+            font_name=UI_FONT_NAME,
             anchor_x="left",
             anchor_y="center",
         )
-        self._draw_tower_table()
-        if self._last_outcome:
-            result_text = "Victory" if self._last_outcome == "win" else "Defeat"
-            self._text_cache.draw(
-                result_text,
-                x=float(config.SCREEN_WIDTH) - 286.0,
-                y=12.0,
-                color=COLOR_LIGHT_NEUTRAL,
-                font_size=11,
-                font_name=("Roboto", "Arial", "sans-serif"),
-                anchor_x="right",
-                anchor_y="center",
-            )
 
     def render(self) -> None:
         if self.window_controller.window is None:
             return
+        if self.mode == "human":
+            self._update_hovered_slot()
         self.window_controller.clear(COLOR_DARK_NEUTRAL)
         self._draw_world()
         self._draw_hud()

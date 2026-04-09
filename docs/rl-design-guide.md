@@ -116,9 +116,9 @@ When docs enumerate the active lineup, use:
 2. `bang`
 3. `tower`
 4. `vroom`
-5. `stealth`
+5. `frogger`
 6. `card`
-7. `othello`
+7. `osero`
 8. `kick`
 
 ### Required top-level section order

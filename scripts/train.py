@@ -17,6 +17,8 @@ from core.game import (
 from core.logging_utils import configure_logging, log_key_values, log_run_context
 from core.runners.off_policy import OffPolicyConfig, run_off_policy_training
 from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
+from core.search_play.interfaces import SearchPlayTrainConfig
+from core.search_play.trainer import run_search_play_training
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,6 +48,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--max-steps", type=int, default=None, help="Override off-policy max training steps")
+    parser.add_argument("--max-games", type=int, default=None, help="Override self-play game count")
     parser.add_argument("--max-iterations", type=int, default=None, help="Override on-policy iteration count")
     parser.add_argument("--checkpoint-every", type=int, default=None, help="Override checkpoint cadence")
     return parser.parse_args()
@@ -133,7 +136,21 @@ def main() -> None:
             },
         )
 
-        if is_on_policy_algo(algo_id):
+        if algo_id == "search_play":
+            train_config = dict(spec.train_config)
+            if args.max_games is not None:
+                train_config["max_games"] = int(args.max_games)
+            elif args.max_steps is not None:
+                train_config["max_games"] = int(args.max_steps)
+            if args.checkpoint_every is not None:
+                train_config["checkpoint_every_games"] = int(args.checkpoint_every)
+            metrics = run_search_play_training(
+                env,
+                algorithm,
+                run_paths,
+                SearchPlayTrainConfig(**train_config),
+            )
+        elif is_on_policy_algo(algo_id):
             train_config = dict(spec.train_config)
             if args.max_iterations is not None:
                 train_config["max_iterations"] = int(args.max_iterations)

@@ -33,9 +33,9 @@ ACTIVE_GAME_ORDER: tuple[str, ...] = (
     "bang",
     "tower",
     "vroom",
-    "stealth",
+    "frogger",
     "card",
-    "othello",
+    "osero",
     "kick",
 )
 
@@ -206,10 +206,10 @@ def _build_game_specs() -> dict[str, GameSpec]:
     # from each game spec without triggering a circular import.
     from games.bang.spec import SPEC as bang_spec
     from games.card.spec import SPEC as card_spec
+    from games.frogger.spec import SPEC as frogger_spec
     from games.kick.spec import SPEC as kick_spec
-    from games.othello.spec import SPEC as othello_spec
+    from games.osero.spec import SPEC as osero_spec
     from games.snake.spec import SPEC as snake_spec
-    from games.stealth.spec import SPEC as stealth_spec
     from games.tower.spec import SPEC as tower_spec
     from games.vroom.spec import SPEC as vroom_spec
 
@@ -218,9 +218,9 @@ def _build_game_specs() -> dict[str, GameSpec]:
         bang_spec,
         tower_spec,
         vroom_spec,
-        stealth_spec,
+        frogger_spec,
         card_spec,
-        othello_spec,
+        osero_spec,
         kick_spec,
     )
     return {spec.game_id: spec for spec in specs}

@@ -2,10 +2,6 @@
 
 Tiny wave-based tower defense built as the repo's masked-DQN showcase.
 
-## Clip
-
-No embedded clip yet.
-
 ## Algorithm / Network
 
 - Primary family: value-based discrete control
@@ -15,22 +11,66 @@ No embedded clip yet.
 - Observation size: `20`
 - Action count: `26`
 
+## Game Loop
+
+1. Preview the next wave.
+2. Build, upgrade, or sell during the build phase.
+3. Press `Space` to start the wave.
+4. The wave auto-simulates.
+5. Return to the next build phase.
+
+Tower never asks the agent to act per frame during the active wave.
+
+Each run picks one of two compact handcrafted map templates:
+
+- `Soft S Merge`: mirrored inward sweeps that meet at a shared center trunk
+- `Offset S`: one side joins the center earlier while the other descends farther before merging
+
+The five stable slot ids keep the same semantic roles across both templates:
+
+- `left`: left corner control
+- `upper`: left shared / merge coverage
+- `mid`: center trunk cleanup
+- `lower`: right shared / merge coverage
+- `right`: right corner control
+
 ## Controls (Human)
 
-- `1-5` or `Left/Right`: select `left`, `upper`, `mid`, `lower`, `right`
-- `Mouse Left`: select a slot
-- `Mouse Right`: sell the clicked slot
-- `A`: select Arrow as the active build blueprint
-- `C`: select Cannon as the active build blueprint
-- `T`: select Tesla as the active build blueprint
-- `Space`: allocate/place the selected tower type on the selected slot
-- `U`: upgrade the selected slot
-- `Delete` or `Backspace`: delete/sell the selected slot
-- `Enter`: start the previewed wave
+- `Mouse Left` on an empty slot: open a tiny build menu with `Fast`, `Heavy`, and `Area`
+- `Mouse Left` on an occupied slot: open a tiny action menu with `Upgrade` and `Sell`
+- `Mouse Left` on a menu item: apply that action if it is currently valid
+- `Mouse Left` elsewhere: close the current menu
+- `Space`: start the previewed wave
+
+The human UI is mouse-first and uses small contextual menus instead of keyboard navigation.
+
+The extra input is `run_actions_left_norm`, which exposes the remaining build-phase action budget to the policy.
+
+## Roles
+
+Enemies:
+
+- `Light`: fast, fragile pressure
+- `Armored`: slow, durable pressure
+- `Flying`: fast air pressure
+
+Towers:
+
+- `Fast`: fast single-target, strongest into `Flying`, weak into `Armored`
+- `Heavy`: slow hard-hitting single-target, strongest into `Armored`, weak into `Light`
+- `Area`: splash damage, strongest into `Light`, weak into `Flying`
+
+Each tower has levels `1` to `3`.
+
+Selling matters because wave entry side and enemy mix shift between waves, while the lane geometry and slot pressure shift between runs.
+
+Refunds:
+
+- level 1: `90%`
+- level 2: `75%`
+- level 3: `60%`
 
 ## Observation / Actions
-
-Tower uses a compact `20`-float observation. The extra feature beyond the original `19`-feature target is `run_actions_left_norm`, which keeps the build-phase action budget explicit for the agent.
 
 Canonical `INPUT_FEATURE_NAMES` order:
 
@@ -42,7 +82,7 @@ Canonical `INPUT_FEATURE_NAMES` order:
     "run_actions_left_norm",
     "wave_entry_left",
     "wave_entry_right",
-    "wave_count_swarm_norm",
+    "wave_count_light_norm",
     "wave_count_armored_norm",
     "wave_count_flying_norm",
     "map_layout_id_norm",
@@ -59,18 +99,18 @@ Canonical `INPUT_FEATURE_NAMES` order:
 ]
 ```
 
-- `tower_kind` encoding: `0=empty`, `1=arrow`, `2=cannon`, `3=tesla`
+- `tower_kind` encoding: `0=empty`, `1=fast`, `2=heavy`, `3=area`
 - `tower_level_norm`: `0.0` for empty, otherwise `level / 3`
-- `map_layout_id_norm` identifies which of the fixed-layout variants is active this run
+- `run_gold_norm` keeps its legacy feature name for compatibility, but the user-facing economy is shown as `Credits`
 
 The discrete action space is exactly `26` actions:
 
 ```python
 [
     "start_wave",
-    "build_arrow_left", "build_arrow_upper", "build_arrow_mid", "build_arrow_lower", "build_arrow_right",
-    "build_cannon_left", "build_cannon_upper", "build_cannon_mid", "build_cannon_lower", "build_cannon_right",
-    "build_tesla_left", "build_tesla_upper", "build_tesla_mid", "build_tesla_lower", "build_tesla_right",
+    "build_fast_left", "build_fast_upper", "build_fast_mid", "build_fast_lower", "build_fast_right",
+    "build_heavy_left", "build_heavy_upper", "build_heavy_mid", "build_heavy_lower", "build_heavy_right",
+    "build_area_left", "build_area_upper", "build_area_mid", "build_area_lower", "build_area_right",
     "upgrade_left", "upgrade_upper", "upgrade_mid", "upgrade_lower", "upgrade_right",
     "sell_left", "sell_upper", "sell_mid", "sell_lower", "sell_right",
 ]
@@ -80,35 +120,27 @@ Action masking is central:
 
 - invalid builds on occupied slots are masked
 - invalid upgrades on empty or level-3 slots are masked
-- invalid sell actions on empty slots are masked
-- actions that exceed current gold are masked
+- invalid sells on empty slots are masked
+- actions that exceed current credits are masked
 - once the build-phase action budget is exhausted, only `start_wave` remains valid
+- `start_wave` is only valid during build phases
 
-## Environment Notes
+## Economy / Balance
 
-- The map always uses `2` entry points, `1` shared exit, and the same `5` fixed slots for stable IO.
-- Each run samples one of `3` small layouts. The slot coordinates stay fixed; only the lane bends change.
-- Waves are previewed before the agent commits. `start_wave` simulates the entire wave internally; the agent never acts per frame.
-- Each build phase has a small action budget. That keeps planning meaningful and prevents endless build/sell loops.
+Tower uses one shared economy ladder across all tower types:
 
-Tower and enemy roles are intentionally asymmetric:
+- build cost: `5`
+- level 2 upgrade cost: `4`
+- level 3 upgrade cost: `7`
+- start credits: `12` at every curriculum level
+- wave clear credits: `+6` after every cleared wave
+- kill rewards do not grant credits, so the economy stays fixed from run to run
 
-- Arrow: fast single-target tower, strongest into `flying`, still weak into `armored`
-- Cannon: slow splash / armor-piercing tower, strongest into `armored`, cannot hit `flying`
-- Tesla: chain chip-damage tower, strongest into `swarm`, weak into `flying`
-- Swarm: fast, low-HP pressure that rewards chaining
-- Armored: slow, tanky lane pressure that rewards armor-breaking
-- Flying: fast direct pressure that rewards precise anti-air coverage
+This means each build phase roughly funds one new tower or one upgrade, while higher curriculum levels get harder through extra waves and stronger enemy counts rather than reduced income.
 
-Selling matters because lane pressure changes between `left`, `right`, and `both`, layout coverage shifts between runs, and the refund decays with commitment:
+## Rewards
 
-- level 1 refund: `90%`
-- level 2 refund: `75%`
-- level 3 refund: `60%`
-
-## Rewards (Training)
-
-Tower keeps a simple scalar reward with named internal components:
+Named internal reward components:
 
 - `reward_progress_kill = +0.05`
 - `reward_event_leak = -0.25`
@@ -118,19 +150,16 @@ Tower keeps a simple scalar reward with named internal components:
 
 Notes:
 
-- build / upgrade / sell actions do not get direct positive reward
-- the reward signal is returned on the wave-resolution transition after `start_wave`
+- build, upgrade, and sell actions do not get direct reward
+- masked invalid actions do not need separate penalties
 - episode totals are logged through the internal reward breakdown
 
-## Curriculum (Train)
+## Curriculum
 
-Tower uses the shared 3-level curriculum:
-
-- Level 1: `start_gold=18`, `start_lives=10`, `num_waves=6`, `wave_scale=0.92`
-- Level 2: `start_gold=17`, `start_lives=10`, `num_waves=7`, `wave_scale=1.00`
-- Level 3: `start_gold=16`, `start_lives=10`, `num_waves=8`, `wave_scale=1.10`
-
-All levels keep the same `6`-action build-phase budget and the same fixed action/feature taxonomy.
+- Level 1: `start_credits=12`, `start_lives=10`, `num_waves=6`, `wave_scale=1.00`
+- Level 2: `start_credits=12`, `start_lives=10`, `num_waves=7`, `wave_scale=1.10`
+- Level 3: `start_credits=12`, `start_lives=10`, `num_waves=8`, `wave_scale=1.20`
+- All levels use `decision_budget=6`
 
 ## Run Commands
 

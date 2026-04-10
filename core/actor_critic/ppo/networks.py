@@ -29,6 +29,7 @@ class ActorCritic(nn.Module):
         *,
         critic_obs_dim: int | None = None,
         critic_hidden_sizes: list[int] | None = None,
+        share_backbone: bool = False,
         action_type: str = "discrete",
         init_log_std: float = -0.5,
         min_log_std: float = -5.0,
@@ -39,9 +40,28 @@ class ActorCritic(nn.Module):
         if self.action_type not in {"discrete", "continuous"}:
             raise ValueError("PPO ActorCritic action_type must be 'discrete' or 'continuous'.")
 
-        actor_backbone, actor_out_dim = build_mlp(int(obs_dim), list(hidden_sizes))
-        self.actor_backbone = actor_backbone
-        self.policy_head = nn.Linear(actor_out_dim, int(action_dim))
+        critic_input_dim = int(obs_dim) if critic_obs_dim is None else int(critic_obs_dim)
+        self.share_backbone = bool(share_backbone)
+        if self.share_backbone and int(critic_input_dim) != int(obs_dim):
+            raise ValueError("Shared-backbone PPO requires critic_obs_dim to match obs_dim.")
+
+        self.shared_backbone: nn.Sequential | None
+        if self.share_backbone:
+            shared_backbone, shared_out_dim = build_mlp(int(obs_dim), list(hidden_sizes))
+            self.shared_backbone = shared_backbone
+            self.actor_backbone = nn.Identity()
+            self.critic_backbone = nn.Identity()
+            self.policy_head = nn.Linear(shared_out_dim, int(action_dim))
+            self.value_head = nn.Linear(shared_out_dim, 1)
+        else:
+            actor_backbone, actor_out_dim = build_mlp(int(obs_dim), list(hidden_sizes))
+            self.shared_backbone = None
+            self.actor_backbone = actor_backbone
+            self.policy_head = nn.Linear(actor_out_dim, int(action_dim))
+            critic_sizes = list(hidden_sizes) if critic_hidden_sizes is None else list(critic_hidden_sizes)
+            critic_backbone, critic_out_dim = build_mlp(critic_input_dim, critic_sizes)
+            self.critic_backbone = critic_backbone
+            self.value_head = nn.Linear(critic_out_dim, 1)
         self.log_std: nn.Parameter | None
         if self.action_type == "continuous":
             self.log_std = nn.Parameter(torch.full((int(action_dim),), float(init_log_std), dtype=torch.float32))
@@ -50,16 +70,13 @@ class ActorCritic(nn.Module):
         self.min_log_std = float(min_log_std)
         self.max_log_std = float(max_log_std)
 
-        critic_input_dim = int(obs_dim) if critic_obs_dim is None else int(critic_obs_dim)
-        critic_sizes = list(hidden_sizes) if critic_hidden_sizes is None else list(critic_hidden_sizes)
-        critic_backbone, critic_out_dim = build_mlp(critic_input_dim, critic_sizes)
-        self.critic_backbone = critic_backbone
-        self.value_head = nn.Linear(critic_out_dim, 1)
-
     def policy(self, obs: torch.Tensor) -> torch.Tensor:
         if obs.dim() == 1:
             obs = obs.unsqueeze(0)
-        features = self.actor_backbone(obs)
+        if self.shared_backbone is not None:
+            features = self.shared_backbone(obs)
+        else:
+            features = self.actor_backbone(obs)
         return self.policy_head(features)
 
     def policy_log_std(self) -> torch.Tensor:
@@ -70,7 +87,10 @@ class ActorCritic(nn.Module):
     def value(self, critic_obs: torch.Tensor) -> torch.Tensor:
         if critic_obs.dim() == 1:
             critic_obs = critic_obs.unsqueeze(0)
-        features = self.critic_backbone(critic_obs)
+        if self.shared_backbone is not None:
+            features = self.shared_backbone(critic_obs)
+        else:
+            features = self.critic_backbone(critic_obs)
         return self.value_head(features).squeeze(-1)
 
     def forward(
@@ -78,6 +98,13 @@ class ActorCritic(nn.Module):
         obs: torch.Tensor,
         critic_obs: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.shared_backbone is not None:
+            if obs.dim() == 1:
+                obs = obs.unsqueeze(0)
+            shared_features = self.shared_backbone(obs)
+            logits = self.policy_head(shared_features)
+            value = self.value_head(shared_features).squeeze(-1)
+            return logits, value
         logits = self.policy(obs)
         value_input = obs if critic_obs is None else critic_obs
         value = self.value(value_input)

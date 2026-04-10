@@ -5,7 +5,7 @@ A small RL playground organized around tiny games and a clearer algorithm taxono
 ## Overview
 
 - `core/value_discrete/` holds shared value-based infrastructure for `snake`, `bang`, and `tower`.
-- `core/actor_critic/` holds shared actor-critic infrastructure for `vroom`, `frogger`, and `card`.
+- `core/actor_critic/` holds shared actor-critic infrastructure for `vroom`, `frogger`, and `cardz`.
 - `core/search_play/` holds the compact MCTS, policy/value, and self-play pieces used by `osero`.
 - `core/marl_ctde/` isolates paused experimental multi-agent helpers for `kick`.
 - `core/game.py` owns the active lineup registry, role metadata, and shared run preparation.
@@ -54,7 +54,7 @@ python -m scripts.play_user --game bang
 | `tower` | Delayed reward + action masking showcase | value-based | active | Tiny wave-based tower defense built around masked build-phase planning | [games/tower/README.md](games/tower/README.md) |
 | `vroom` | Continuous control showcase | actor-critic | active | Continuous-control top-down racer with SAC-oriented defaults and compact vector observations | [games/vroom/README.md](games/vroom/README.md) |
 | `frogger` | Memory / POMDP showcase | actor-critic | active | Compact Frogger-style road crossing with recurrent PPO-friendly partial observability | [games/frogger/README.md](games/frogger/README.md) |
-| `card` | Simple stochastic hidden-info game | actor-critic | scaffold | New lightweight scaffold aimed at an A2C-style pass later | [games/card/README.md](games/card/README.md) |
+| `cardz` | Simple stochastic hidden-info game | actor-critic | active | Tiny 3-lane hidden-info card duel with masked actions and A2C-oriented defaults | [games/cardz/README.md](games/cardz/README.md) |
 | `osero` | Planning + self-play capstone | search + self-play | active | AlphaZero-lite Osero with flattened board IO, MCTS, and a small policy/value net | [games/osero/README.md](games/osero/README.md) |
 | `kick` | Paused multi-agent CTDE project | MARL / CTDE | paused | Kept in repo, but explicitly outside the main active ladder | [games/kick/README.md](games/kick/README.md) |
 
@@ -65,6 +65,6 @@ python -m scripts.play_user --game bang
 - `tower` -> masked Double DQN tower defense (`dqn`, `obs=20`, `act=26`, hidden `[64, 64]`)
 - `vroom` -> SAC continuous-control racer (`sac`, `obs=20`, `act=3`, hidden `[128, 128]`)
 - `frogger` -> recurrent PPO (`recurrent_ppo`, `obs=32`, `act=5`, encoder `[32]`, lstm `64`, heads `[32]`)
-- `card` -> A2C-style scaffold (`a2c`, `obs=14`, `act=4`, hidden `[64, 64]`)
+- `cardz` -> masked hidden-info lane-control card game (`a2c`, `obs=32`, `act=16`, shared trunk `[96, 96]`)
 - `osero` -> AlphaZero-lite Osero (`search_play`, default `6x6`, `obs=36`, `act=37`, trunk `[128, 128]`; `8x8` supported with `[128, 128, 128]`)
 - `kick` -> paused MAPPO-style PPO project (`ppo`, actor `[128, 128]`, critic `[256, 256]`)

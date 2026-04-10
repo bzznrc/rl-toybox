@@ -9,14 +9,14 @@
 ## Active Game Docs
 
 Canonical active lineup order across repo docs is:
-`snake`, `bang`, `tower`, `vroom`, `frogger`, `card`, `osero`, `kick`
+`snake`, `bang`, `tower`, `vroom`, `frogger`, `cardz`, `osero`, `kick`
 
 - [games/snake/README.md](../games/snake/README.md)
 - [games/bang/README.md](../games/bang/README.md)
 - [games/tower/README.md](../games/tower/README.md)
 - [games/vroom/README.md](../games/vroom/README.md)
 - [games/frogger/README.md](../games/frogger/README.md)
-- [games/card/README.md](../games/card/README.md)
+- [games/cardz/README.md](../games/cardz/README.md)
 - [games/osero/README.md](../games/osero/README.md)
 - [games/kick/README.md](../games/kick/README.md)
 

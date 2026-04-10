@@ -1,0 +1,1 @@
+"""Cardz game package."""

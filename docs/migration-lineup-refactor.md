@@ -8,7 +8,7 @@
   - `tower`
   - `vroom`
   - `frogger`
-  - `card`
+  - `cardz`
   - `osero`
   - `kick`
 - `walk` was removed from the active repo structure.
@@ -23,11 +23,11 @@
 ## What Was Intentionally Not Done Yet
 
 - At the time of the refactor note, `tower`, `card`, and `osero` were still pending.
-- Current repo state has `tower` and `osero` implemented; `card` remains scaffolded.
+- Current repo state has `tower`, `cardz`, and `osero` implemented.
 
 ## Compatibility Notes
 
 - Existing kept games were preserved as much as practical.
 - `vroom` now runs on the actor-critic / continuous-control branch with SAC-oriented defaults.
 - `frogger` is now the active recurrent PPO / memory game in the repo.
-- Scaffold games still use placeholder envs where implementation has not started yet.
+- The hidden-info actor-critic slot is now filled by `cardz`.

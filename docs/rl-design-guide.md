@@ -117,7 +117,7 @@ When docs enumerate the active lineup, use:
 3. `tower`
 4. `vroom`
 5. `frogger`
-6. `card`
+6. `cardz`
 7. `osero`
 8. `kick`
 
@@ -134,7 +134,7 @@ Each active `games/<game>/README.md` must use this top-level heading order:
 7. `Curriculum (Train)`
 8. `Run Commands`
 
-Scaffold games should keep the same section structure and clearly say what is placeholder.
+Games with no staged progression should still keep the same section structure and state that the curriculum is fixed.
 
 ## 9) Checklist for Environment Changes
 
@@ -144,5 +144,5 @@ Before merging environment changes:
 - [ ] Observation ordering and naming stay intentional.
 - [ ] Reward magnitudes remain balanced and interpretable.
 - [ ] Action masking is consistent when used.
-- [ ] Scaffold entries are still clearly marked as scaffolded.
+- [ ] README and docs still describe the implemented game accurately.
 - [ ] `python -m scripts.validate_docs` passes after README/doc edits.

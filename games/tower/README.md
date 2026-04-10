@@ -2,6 +2,10 @@
 
 Tiny wave-based tower defense built as the repo's masked-DQN showcase.
 
+## Clip
+
+No embedded clip yet.
+
 ## Algorithm / Network
 
 - Primary family: value-based discrete control
@@ -10,29 +14,6 @@ Tiny wave-based tower defense built as the repo's masked-DQN showcase.
 - Default hidden sizes: `[64, 64]`
 - Observation size: `20`
 - Action count: `26`
-
-## Game Loop
-
-1. Preview the next wave.
-2. Build, upgrade, or sell during the build phase.
-3. Press `Space` to start the wave.
-4. The wave auto-simulates.
-5. Return to the next build phase.
-
-Tower never asks the agent to act per frame during the active wave.
-
-Each run picks one of two compact handcrafted map templates:
-
-- `Soft S Merge`: mirrored inward sweeps that meet at a shared center trunk
-- `Offset S`: one side joins the center earlier while the other descends farther before merging
-
-The five stable slot ids keep the same semantic roles across both templates:
-
-- `left`: left corner control
-- `upper`: left shared / merge coverage
-- `mid`: center trunk cleanup
-- `lower`: right shared / merge coverage
-- `right`: right corner control
 
 ## Controls (Human)
 
@@ -43,32 +24,6 @@ The five stable slot ids keep the same semantic roles across both templates:
 - `Space`: start the previewed wave
 
 The human UI is mouse-first and uses small contextual menus instead of keyboard navigation.
-
-The extra input is `run_actions_left_norm`, which exposes the remaining build-phase action budget to the policy.
-
-## Roles
-
-Enemies:
-
-- `Light`: fast, fragile pressure
-- `Armored`: slow, durable pressure
-- `Flying`: fast air pressure
-
-Towers:
-
-- `Fast`: fast single-target, strongest into `Flying`, weak into `Armored`
-- `Heavy`: slow hard-hitting single-target, strongest into `Armored`, weak into `Light`
-- `Area`: splash damage, strongest into `Light`, weak into `Flying`
-
-Each tower has levels `1` to `3`.
-
-Selling matters because wave entry side and enemy mix shift between waves, while the lane geometry and slot pressure shift between runs.
-
-Refunds:
-
-- level 1: `90%`
-- level 2: `75%`
-- level 3: `60%`
 
 ## Observation / Actions
 
@@ -125,7 +80,56 @@ Action masking is central:
 - once the build-phase action budget is exhausted, only `start_wave` remains valid
 - `start_wave` is only valid during build phases
 
-## Economy / Balance
+## Environment Notes
+
+1. Preview the next wave.
+2. Build, upgrade, or sell during the build phase.
+3. Press `Space` to start the wave.
+4. The wave auto-simulates.
+5. Return to the next build phase.
+
+Tower never asks the agent to act per frame during the active wave.
+
+Each run picks one of two compact handcrafted map templates:
+
+- `Soft S Merge`: mirrored inward sweeps that meet at a shared center trunk
+- `Offset S`: one side joins the center earlier while the other descends farther before merging
+
+The five stable slot ids keep the same semantic roles across both templates:
+
+- `left`: left corner control
+- `upper`: left shared / merge coverage
+- `mid`: center trunk cleanup
+- `lower`: right shared / merge coverage
+- `right`: right corner control
+
+The extra input is `run_actions_left_norm`, which exposes the remaining build-phase action budget to the policy.
+
+### Roles
+
+Enemies:
+
+- `Light`: fast, fragile pressure
+- `Armored`: slow, durable pressure
+- `Flying`: fast air pressure
+
+Towers:
+
+- `Fast`: fast single-target, strongest into `Flying`, weak into `Armored`
+- `Heavy`: slow hard-hitting single-target, strongest into `Armored`, weak into `Light`
+- `Area`: splash damage, strongest into `Light`, weak into `Flying`
+
+Each tower has levels `1` to `3`.
+
+Selling matters because wave entry side and enemy mix shift between waves, while the lane geometry and slot pressure shift between runs.
+
+Refunds:
+
+- level 1: `90%`
+- level 2: `75%`
+- level 3: `60%`
+
+### Economy / Balance
 
 Tower uses one shared economy ladder across all tower types:
 
@@ -138,7 +142,7 @@ Tower uses one shared economy ladder across all tower types:
 
 This means each build phase roughly funds one new tower or one upgrade, while higher curriculum levels get harder through extra waves and stronger enemy counts rather than reduced income.
 
-## Rewards
+## Rewards (Training)
 
 Named internal reward components:
 
@@ -154,7 +158,7 @@ Notes:
 - masked invalid actions do not need separate penalties
 - episode totals are logged through the internal reward breakdown
 
-## Curriculum
+## Curriculum (Train)
 
 - Level 1: `start_credits=12`, `start_lives=10`, `num_waves=6`, `wave_scale=1.00`
 - Level 2: `start_credits=12`, `start_lives=10`, `num_waves=7`, `wave_scale=1.10`

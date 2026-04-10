@@ -21,7 +21,7 @@ Per-game snapshots or scaffold notes live in `games/<game>/README.md`.
 - Keep the lineup small, polished, and easy to understand.
 - Separate reusable RL systems from game-specific environment logic.
 - Present a coherent progression across RL families and tradeoffs.
-- Prefer lightweight scaffolds over half-built games when a full redesign is still pending.
+- Prefer compact, complete games over oversized systems.
 
 ## 2) Active Lineup
 
@@ -32,7 +32,7 @@ Per-game snapshots or scaffold notes live in `games/<game>/README.md`.
 | `tower` | Delayed reward + action masking showcase | value-based | active |
 | `vroom` | Continuous control showcase | actor-critic / SAC | active |
 | `frogger` | Memory / POMDP showcase | actor-critic / recurrent PPO direction | active |
-| `card` | Stochastic hidden-info actor-critic game | actor-critic / A2C direction | scaffold |
+| `cardz` | Stochastic hidden-info actor-critic game | actor-critic / A2C direction | active |
 | `osero` | Planning + self-play capstone | search + self-play | active |
 | `kick` | Multi-agent CTDE experiment | MARL / CTDE | paused |
 
@@ -41,7 +41,7 @@ Per-game snapshots or scaffold notes live in `games/<game>/README.md`.
 ### Folder layout
 
 - `games/<game_name>/`
-  - `env.py`: game-specific environment logic or a scaffold env entrypoint
+  - `env.py`: game-specific environment logic
   - `config.py`: declarative game knobs only
   - `spec.py`: `GameSpec` assembly and runtime defaults
   - `README.md`: current implementation snapshot or scaffold brief
@@ -73,14 +73,14 @@ Per-game snapshots or scaffold notes live in `games/<game>/README.md`.
 - Train-progress logs are throttled centrally in `core/logging_utils.py`.
 - Training emits a shared run-context header and stable episode/save lines.
 - PPO-style runs keep the extra optimizer metrics line.
-- Artifact output remains under `runs/<game>/...` even for scaffolded entries.
+- Artifact output remains under `runs/<game>/...`.
 
 ## 5) Model Saving and Run Naming
 
 - Save artifacts under `runs/<game>/`.
 - Filenames keep the existing `<algo>_<net>_L<level>_<kind>.pth` convention.
 - Existing kept games preserve their run tags where practical so older runs stay discoverable.
-- Scaffold games use lightweight placeholder run tags that can be replaced in later implementation passes.
+- Run tags should stay compact and reflect the active model shape.
 
 ## 6) RL Family Layout
 
@@ -91,7 +91,7 @@ Per-game snapshots or scaffold notes live in `games/<game>/README.md`.
 
 ### `core/actor_critic/`
 
-- Used by: `vroom`, `frogger`, `card`
+- Used by: `vroom`, `frogger`, `cardz`
 - Contains: PPO, recurrent PPO support, SAC, shared actor-critic rollout machinery
 
 ### `core/search_play/`

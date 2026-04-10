@@ -430,6 +430,9 @@ def draw_status_square_icon(
     outer_color: tuple[int, int, int] | tuple[int, int, int, int],
     inner_color: tuple[int, int, int] | tuple[int, int, int, int],
     inset: float,
+    packed: bool = False,
+    packed_marker_color: tuple[int, int, int] | tuple[int, int, int, int] | None = None,
+    packed_marker_size: float | None = None,
 ) -> None:
     bottom = center_y - size / 2.0
     left = center_x - size / 2.0
@@ -442,6 +445,16 @@ def draw_status_square_icon(
         inner_size,
         inner_color,
     )
+    if packed:
+        marker_color = outer_color if packed_marker_color is None else packed_marker_color
+        marker_size = max(2.0, float(packed_marker_size) if packed_marker_size is not None else round(float(size) * 0.3))
+        arcade.draw_lbwh_rectangle_filled(
+            center_x - marker_size / 2.0,
+            center_y - marker_size / 2.0,
+            marker_size,
+            marker_size,
+            marker_color,
+        )
 
 
 def draw_time_pie_indicator(

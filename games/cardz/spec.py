@@ -1,36 +1,34 @@
-"""Card scaffold spec."""
+"""Cardz game spec."""
 
 from __future__ import annotations
 
 from core.envs.spaces import Discrete
 from core.game import (
     GameSpec,
+    build_env_factory,
     build_hidden_run_name,
     build_on_policy_train_config,
-    build_scaffold_env_factory,
 )
-from games.card import config
+from games.cardz import config
+from games.cardz.env import CardzEnv
 
 
 SPEC = GameSpec(
-    game_id="card",
-    display_name="Card",
+    game_id="cardz",
+    display_name="Cardz",
     default_algo="a2c",
-    make_env=build_scaffold_env_factory(
-        game_id="card",
-        obs_dim=config.OBS_DIM,
-        note="Scaffold entry for the future stochastic hidden-information card game.",
-    ),
+    make_env=build_env_factory(CardzEnv),
     obs_dim=config.OBS_DIM,
     action_space=Discrete(config.ACT_DIM),
     run_name=build_hidden_run_name(config.HIDDEN_DIMENSIONS),
     family="actor_critic",
-    role="Simple stochastic hidden-information actor-critic game.",
-    summary="New scaffold for an A2C-style compact card game.",
+    role="Simple stochastic hidden-information actor-critic showcase.",
+    summary="Tiny 2-player 3-lane card duel with AB/BA turn order, ATK/BAN lane play, masked actions, and A2C-oriented defaults.",
     primary_algo_label="A2C",
-    implementation_stage="scaffold",
+    implementation_stage="implemented",
     algo_config={
         "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
+        "share_backbone": bool(config.SHARE_BACKBONE),
         "learning_rate": config.LEARNING_RATE,
         "gamma": config.GAMMA,
         "gae_lambda": config.GAE_LAMBDA,

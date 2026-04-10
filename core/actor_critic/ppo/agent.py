@@ -27,6 +27,7 @@ class PPOConfig:
     hidden_sizes: list[int]
     critic_hidden_sizes: list[int] | None = None
     critic_obs_dim: int | None = None
+    share_backbone: bool = False
     centralized_critic: bool = False
     critic_condition_on_agent_obs: bool = True
     learning_rate: float = 3e-4
@@ -144,6 +145,7 @@ class PPOAlgorithm(Algorithm):
                 config.hidden_sizes,
                 critic_obs_dim=int(self._critic_obs_dim),
                 critic_hidden_sizes=critic_hidden_sizes,
+                share_backbone=bool(config.share_backbone),
                 action_type=str(self._action_type),
                 init_log_std=float(config.init_log_std),
                 min_log_std=float(config.min_log_std),

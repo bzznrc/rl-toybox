@@ -8,14 +8,14 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-GAME_ORDER = ("snake", "bang", "tower", "vroom", "frogger", "card", "osero", "kick")
+GAME_ORDER = ("snake", "bang", "tower", "vroom", "frogger", "cardz", "osero", "kick")
 GAME_TITLES = {
     "snake": "Snake",
     "bang": "Bang",
     "tower": "Tower",
     "vroom": "Vroom",
     "frogger": "Frogger",
-    "card": "Card",
+    "cardz": "Cardz",
     "osero": "Osero",
     "kick": "Kick",
 }

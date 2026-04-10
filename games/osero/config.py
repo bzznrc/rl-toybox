@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from core.arcade_style import (
     DEFAULT_BOTTOM_BAR_HEIGHT as BB_HEIGHT,
     DEFAULT_GRID_COLUMNS,
@@ -11,14 +13,19 @@ from core.arcade_style import (
     screen_width,
 )
 from core.io_schema import row_major_grid_action_names, row_major_grid_feature_names
-from core.utils import env_flag, env_int
+from core.utils import env_flag
 
 
-SUPPORTED_BOARD_SIZES = (6, 8)
+SUPPORTED_BOARD_SIZES = (4, 6, 8)
 DEFAULT_BOARD_SIZE = 6
 
 
-def _resolve_board_size(raw_value: int) -> int:
+def _resolve_board_size(raw_value: object) -> int:
+    if isinstance(raw_value, str):
+        normalized = raw_value.strip().lower()
+        if "x" in normalized:
+            normalized = normalized.split("x", 1)[0].strip()
+        raw_value = normalized
     try:
         board_size = int(raw_value)
     except (TypeError, ValueError):
@@ -33,7 +40,9 @@ WINDOW_TITLE = "Osero"
 FPS = 18
 TRAINING_FPS = 0
 USE_GPU = env_flag("OSERO_USE_GPU", env_flag("OTHELLO_USE_GPU", False))
-BOARD_SIZE = _resolve_board_size(env_int("OSERO_BOARD_SIZE", env_int("OTHELLO_BOARD_SIZE", DEFAULT_BOARD_SIZE)))
+BOARD_SIZE = _resolve_board_size(
+    os.getenv("OSERO_BOARD_SIZE", os.getenv("OTHELLO_BOARD_SIZE", str(DEFAULT_BOARD_SIZE)))
+)
 
 
 # ENV
@@ -52,10 +61,12 @@ HOVER_OUTLINE_WIDTH = 3.0
 
 # IO
 INPUT_FEATURE_NAMES_BY_SIZE = {
+    4: row_major_grid_feature_names(4),
     6: row_major_grid_feature_names(6),
     8: row_major_grid_feature_names(8),
 }
 ACTION_NAMES_BY_SIZE = {
+    4: row_major_grid_action_names(4, include_pass=True),
     6: row_major_grid_action_names(6, include_pass=True),
     8: row_major_grid_action_names(8, include_pass=True),
 }
@@ -67,17 +78,20 @@ ACT_DIM = len(ACTION_NAMES)
 
 # MODEL / SEARCH
 POLICY_VALUE_HIDDEN_DIMENSIONS_BY_SIZE = {
-    6: (128, 128),
-    8: (128, 128, 128),
+    4: (64, 64),
+    6: (96, 96),
+    8: (128, 128),
 }
 POLICY_VALUE_HIDDEN_DIMENSIONS = tuple(POLICY_VALUE_HIDDEN_DIMENSIONS_BY_SIZE[int(BOARD_SIZE)])
 SIMULATIONS_PER_MOVE_BY_SIZE = {
+    4: 32,
     6: 48,
     8: 64,
 }
 SIMULATIONS_PER_MOVE = int(SIMULATIONS_PER_MOVE_BY_SIZE[int(BOARD_SIZE)])
 CPUCT = 1.25
 DIRICHLET_ALPHA_BY_SIZE = {
+    4: 0.5,
     6: 0.35,
     8: 0.25,
 }

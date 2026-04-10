@@ -20,6 +20,7 @@ TRAINING_FPS = 0
 USE_GPU = env_flag("CARDZ_USE_GPU", False)
 PPO_METRICS_LOG_ENABLED = True
 BASE_SEED = env_int("CARDZ_BASE_SEED", 2903)
+TURN_RESOLUTION_PAUSE_SECONDS = 2.5
 BB_HEIGHT = DEFAULT_BOTTOM_BAR_HEIGHT + 14
 
 
@@ -158,12 +159,30 @@ PASS_ACTION_INDEX = ACT_DIM - 1
 
 # CURRICULUM
 MIN_LEVEL = 1
-MAX_LEVEL = 1
-REWARD_ROLLING_WINDOW = 60
+MAX_LEVEL = 3
+REWARD_ROLLING_WINDOW = 100
 MIN_EPISODES_FOR_STATS = REWARD_ROLLING_WINDOW
+CURRICULUM_PROMOTION = {
+    "min_episodes_per_level": 200,
+    "check_window": 25,
+    "success_threshold": 0.60,
+    "consecutive_checks_required": 2,
+}
 LEVEL_SETTINGS = {
     1: {
         "entropy_coef": 0.015,
+        "opp_max_hand": 3,
+        "opp_random_move_prob": 0.75,
+    },
+    2: {
+        "entropy_coef": 0.010,
+        "opp_max_hand": 4,
+        "opp_random_move_prob": 0.35,
+    },
+    3: {
+        "entropy_coef": 0.005,
+        "opp_max_hand": 5,
+        "opp_random_move_prob": 0.10,
     },
 }
 

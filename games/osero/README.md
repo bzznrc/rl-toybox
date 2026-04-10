@@ -13,10 +13,11 @@ No embedded clip yet.
 - Search: lightweight PUCT MCTS with policy priors and value rollouts from the shared net
 - Training shape: self-play games -> MCTS visit-count policy targets + final outcome value targets
 - Default board: `6x6`
-- Supported boards: `6x6`, `8x8`
+- Supported boards: `4x4` (`easy`), `6x6`, `8x8`
 - Default network:
-  - `6x6`: input `36`, trunk `[128, 128]`, policy `37`, value `1`
-  - `8x8`: input `64`, trunk `[128, 128, 128]`, policy `65`, value `1`
+  - `4x4`: input `16`, trunk `[64, 64]`, policy `17`, value `1`
+  - `6x6`: input `36`, trunk `[96, 96]`, policy `37`, value `1`
+  - `8x8`: input `64`, trunk `[128, 128]`, policy `65`, value `1`
 
 ## Controls (Human)
 
@@ -36,11 +37,13 @@ No embedded clip yet.
 
 Canonical feature order comes from `INPUT_FEATURE_NAMES`:
 
+- `4x4`: `cell_r0_c0` through `cell_r3_c3` -> `16` inputs
 - `6x6`: `cell_r0_c0` through `cell_r5_c5` -> `36` inputs
 - `8x8`: `cell_r0_c0` through `cell_r7_c7` -> `64` inputs
 
 Action space is one action per board cell plus one pass action:
 
+- `4x4`: `16 + 1 = 17`
 - `6x6`: `36 + 1 = 37`
 - `8x8`: `64 + 1 = 65`
 
@@ -73,8 +76,16 @@ The search trainer mainly learns from:
 ## Curriculum (Train)
 
 - No environment curriculum is used.
-- The default recommended setup is `6x6` because it keeps search, replay, and model size small.
-- `8x8` is available through `OSERO_BOARD_SIZE=8` before running train/play commands.
+- `4x4` is the explicit `easy` board-size option and uses its own `16`-input / `[64, 64]` model.
+- The default recommended setup remains `6x6` because it keeps search, replay, and model size small while staying closer to standard play.
+- `4x4`, `6x6`, and `8x8` are separate board-size choices, not curriculum levels.
+- Choose the target board before running train/play commands:
+
+```bash
+OSERO_BOARD_SIZE=4 rl-toybox-train --game osero
+OSERO_BOARD_SIZE=6 rl-toybox-train --game osero
+OSERO_BOARD_SIZE=8 rl-toybox-train --game osero
+```
 
 ## Run Commands
 

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import arcade
 import numpy as np
 
-from assets.paths import resolve_font_path
 from core.arcade_style import (
     COLOR_AQUA,
     COLOR_BLUE,
@@ -40,7 +39,7 @@ from core.primitives import (
     status_bar_layout,
 )
 from core.rewards import RewardBreakdown
-from core.runtime import ArcadeFrameClock, ArcadeWindowController, load_font_once
+from core.runtime import ArcadeFrameClock, ArcadeWindowController
 from core.utils import resolve_play_level
 from games.frogger import config
 
@@ -60,13 +59,13 @@ ACTION_TO_DELTA = {
     int(config.ACTION_WAIT): (0, 0),
 }
 
-SAFE_ROW_OUTER = (64, 78, 71)
-SAFE_ROW_INNER = (47, 58, 52)
-ROAD_ROW_OUTER = (74, 78, 86)
-ROAD_ROW_INNER = (54, 58, 64)
-GOAL_ROW_OUTER = COLOR_LEAF_GREEN
-GOAL_ROW_INNER = COLOR_FOREST_GREEN
-LANE_DASH_COLOR = (189, 192, 196)
+SAFE_ROW_OUTER = COLOR_LEAF_GREEN
+SAFE_ROW_INNER = COLOR_FOREST_GREEN
+ROAD_ROW_OUTER = COLOR_SLATE_GRAY
+ROAD_ROW_INNER = COLOR_DARK_NEUTRAL
+GOAL_ROW_OUTER = COLOR_SAND
+GOAL_ROW_INNER = COLOR_OCHRE
+LANE_DASH_COLOR = COLOR_FOG_GRAY
 BOARD_OUTLINE_COLOR = COLOR_FOG_GRAY
 CAR_STYLE_DEFS = (
     {"name": "slow", "outer": COLOR_CORAL, "inner": COLOR_BRICK_RED, "speed": 0.36},
@@ -186,17 +185,6 @@ class FroggerEnv(Env):
             enabled=self.show_game,
             queue_input_events=False,
             vsync=False,
-        )
-        load_font_once(resolve_font_path("Roboto-Light.ttf"))
-        self._hud_text = arcade.Text(
-            text="",
-            x=14,
-            y=float(config.BB_HEIGHT) * 0.5,
-            color=COLOR_LIGHT_NEUTRAL,
-            font_size=10,
-            font_name=("Roboto-Light", "Roboto Light", "Roboto", "Arial", "sans-serif"),
-            anchor_x="left",
-            anchor_y="center",
         )
 
         self._lane_count = 1
@@ -773,6 +761,27 @@ class FroggerEnv(Env):
             center_x = start_x + icon_size / 2.0 + idx * (icon_size + icon_gap)
             self._draw_point_icon(center_x=center_x, center_y=center_y, size=icon_size, compressed=bool(is_compressed))
 
+    def _draw_clock_icon(self, center_x: float, center_y: float, size: float, remaining_ratio: float) -> None:
+        inset = max(1.0, round(float(config.CELL_INSET) * (size / max(1.0, float(config.FROG_SIZE_PX)))))
+        draw_status_square_icon(
+            center_x=float(center_x),
+            center_y=float(center_y),
+            size=float(size),
+            outer_color=COLOR_FOG_GRAY,
+            inner_color=COLOR_SLATE_GRAY,
+            inset=float(inset),
+        )
+        draw_time_pie_indicator(
+            center_x=float(center_x),
+            center_y=float(center_y),
+            radius=max(1.0, float(size) * 0.28),
+            border_width=max(1.0, float(inset) * 0.5),
+            remaining_ratio=float(remaining_ratio),
+            base_color=COLOR_DARK_NEUTRAL,
+            fill_color=COLOR_SAND,
+            outline_color=COLOR_LIGHT_NEUTRAL,
+        )
+
     def _draw_hud(self) -> None:
         arcade.draw_lbwh_rectangle_filled(0, 0, float(config.SCREEN_WIDTH), float(config.BB_HEIGHT), COLOR_DARK_NEUTRAL)
         layout = status_bar_layout(
@@ -781,25 +790,15 @@ class FroggerEnv(Env):
             tile_size=float(config.FROG_SIZE_PX),
             cell_inset=float(config.CELL_INSET),
             include_clock=True,
-            left_panel_width=210.0,
+            left_panel_width=0.0,
         )
         if layout.clock_center_x is not None:
-            draw_time_pie_indicator(
+            self._draw_clock_icon(
                 center_x=float(layout.clock_center_x),
                 center_y=float(layout.center_y),
-                radius=float(layout.clock_radius),
-                border_width=float(layout.clock_border_width),
+                size=self._status_icon_size(),
                 remaining_ratio=float(clip_unit(float(self.max_steps - self.steps) / float(max(1, self.max_steps)))),
-                base_color=COLOR_SLATE_GRAY,
-                fill_color=COLOR_FOG_GRAY,
-                outline_color=COLOR_FOG_GRAY,
             )
-        self._hud_text.text = (
-            f"Level {int(self._current_level)}  "
-            f"Lanes {int(self._lane_count)}  "
-            f"Status {self._status_label}"
-        )
-        self._hud_text.draw()
         self._draw_score_icons(
             left=float(layout.score_left),
             right=float(layout.score_right),

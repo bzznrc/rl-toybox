@@ -66,5 +66,5 @@ python -m scripts.play_user --game bang
 - `vroom` -> SAC continuous-control racer (`sac`, `obs=20`, `act=3`, hidden `[128, 128]`)
 - `frogger` -> recurrent PPO (`recurrent_ppo`, `obs=32`, `act=5`, encoder `[32]`, lstm `64`, heads `[32]`)
 - `cardz` -> masked hidden-info lane-control card game (`a2c`, `obs=32`, `act=16`, shared trunk `[96, 96]`)
-- `osero` -> AlphaZero-lite Osero (`search_play`, default `6x6`, `obs=36`, `act=37`, trunk `[128, 128]`; `8x8` supported with `[128, 128, 128]`)
+- `osero` -> AlphaZero-lite Osero (`search_play`, default `6x6`, `obs=36`, `act=37`, trunk `[96, 96]`; `8x8` supported with `[128, 128]`)
 - `kick` -> paused MAPPO-style PPO project (`ppo`, actor `[128, 128]`, critic `[256, 256]`)

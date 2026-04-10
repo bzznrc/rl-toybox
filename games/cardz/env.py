@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 
 import arcade
 import numpy as np
@@ -17,6 +18,12 @@ from core.arcade_style import (
     COLOR_FOG_GRAY,
     COLOR_LIGHT_NEUTRAL,
     COLOR_SLATE_GRAY,
+)
+from core.curriculum import (
+    ThreeLevelCurriculum,
+    advance_curriculum,
+    build_curriculum_config,
+    validate_curriculum_level_settings,
 )
 from core.envs.base import Env
 from core.io_schema import clip_signed, clip_unit, ordered_feature_vector
@@ -78,6 +85,14 @@ CARD_DEFS = {
 }
 CARD_DRAW_WEIGHTS = np.asarray(config.CARD_DRAW_WEIGHTS, dtype=np.float64)
 
+validate_curriculum_level_settings(
+    min_level=config.MIN_LEVEL,
+    max_level=config.MAX_LEVEL,
+    level_settings=config.LEVEL_SETTINGS,
+)
+
+OPPONENT_PASS_SCORE_THRESHOLD = 0.35
+
 
 class CardzEnv(Env):
     """Tiny 2-player hidden-info lane-control environment."""
@@ -92,15 +107,32 @@ class CardzEnv(Env):
         self.mode = str(mode)
         self.show_game = bool(render)
         self.log_ppo_metrics_line = bool(getattr(config, "PPO_METRICS_LOG_ENABLED", True))
-        self._current_level = resolve_play_level(
-            level=level,
-            min_level=config.MIN_LEVEL,
-            max_level=config.MAX_LEVEL,
-            default_level=1,
+        curriculum_config = build_curriculum_config(
+            min_level=int(config.MIN_LEVEL),
+            max_level=int(config.MAX_LEVEL),
+            promotion_settings=config.CURRICULUM_PROMOTION,
+        )
+        self._curriculum = (
+            ThreeLevelCurriculum(config=curriculum_config, level_settings=config.LEVEL_SETTINGS)
+            if self.mode == "train"
+            else None
+        )
+        self._current_level = (
+            int(self._curriculum.get_level())
+            if self._curriculum is not None
+            else resolve_play_level(
+                level=level,
+                min_level=config.MIN_LEVEL,
+                max_level=config.MAX_LEVEL,
+                default_level=3,
+            )
         )
         self._last_episode_level = int(self._current_level)
         self._last_episode_success = 0
         self._episode_counter = 0
+        self._level_entropy_coef = 0.0
+        self._opp_max_hand = int(config.MAX_HAND_SIZE)
+        self._opp_random_move_prob = 0.0
 
         self.frame_clock = ArcadeFrameClock()
         self.window_controller = ArcadeWindowController(
@@ -139,11 +171,13 @@ class CardzEnv(Env):
         self._last_action_text = "Match start"
         self._last_turn_text = ""
         self._last_obs = np.zeros((self.OBS_DIM,), dtype=np.float32)
+        self._turn_pause_active = False
         self._selected_hand_slot: int | None = None
         self._hover_hand_slot: int | None = None
         self._hover_lane: int | None = None
         self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
 
+        self._apply_level_settings(int(self._current_level))
         self.reset()
 
     @staticmethod
@@ -230,8 +264,39 @@ class CardzEnv(Env):
         return rects
 
     def get_entropy_coef_for_level(self, level: int | None = None) -> float | None:
-        del level
-        return float(config.LEVEL_SETTINGS[int(config.MIN_LEVEL)]["entropy_coef"])
+        if level is None or int(level) == int(self._current_level):
+            return float(self._level_entropy_coef)
+        settings = config.LEVEL_SETTINGS.get(int(level))
+        if settings is None:
+            raise ValueError(f"Unsupported level '{level}' for Cardz.")
+        if "entropy_coef" not in settings:
+            raise ValueError("Cardz LEVEL_SETTINGS entries must define 'entropy_coef'.")
+        return float(settings["entropy_coef"])
+
+    def _apply_level_settings(self, level: int) -> None:
+        settings = config.LEVEL_SETTINGS.get(int(level))
+        if settings is None:
+            raise ValueError(f"Unsupported level '{level}' for Cardz.")
+
+        if "entropy_coef" not in settings:
+            raise ValueError("Cardz LEVEL_SETTINGS entries must define 'entropy_coef'.")
+        if "opp_max_hand" not in settings:
+            raise ValueError("Cardz LEVEL_SETTINGS entries must define 'opp_max_hand'.")
+        if "opp_random_move_prob" not in settings:
+            raise ValueError("Cardz LEVEL_SETTINGS entries must define 'opp_random_move_prob'.")
+
+        opp_max_hand = max(1, min(int(config.MAX_HAND_SIZE), int(settings["opp_max_hand"])))
+        random_move_prob = float(max(0.0, min(1.0, float(settings["opp_random_move_prob"]))))
+
+        self._current_level = int(level)
+        self._level_entropy_coef = float(settings["entropy_coef"])
+        self._opp_max_hand = int(opp_max_hand)
+        self._opp_random_move_prob = float(random_move_prob)
+
+    def _hand_limit_for_player(self, player: int) -> int:
+        if int(player) == int(PLAYER_P2):
+            return int(self._opp_max_hand)
+        return int(config.MAX_HAND_SIZE)
 
     def _empty_reward_breakdown(self) -> dict[str, float]:
         return {str(name): 0.0 for name in self.REWARD_COMPONENT_ORDER}
@@ -242,7 +307,7 @@ class CardzEnv(Env):
 
     def _draw_card_to_hand(self, player: int) -> None:
         hand = self._hands[int(player)]
-        if len(hand) >= int(config.MAX_HAND_SIZE):
+        if len(hand) >= int(self._hand_limit_for_player(int(player))):
             return
         hand.append(self._sample_card())
 
@@ -265,6 +330,7 @@ class CardzEnv(Env):
         self._last_turn_points = (0, 0)
         self._last_action_text = "Match start"
         self._last_turn_text = ""
+        self._turn_pause_active = False
         self._selected_hand_slot = None
         self._hover_hand_slot = None
         self._hover_lane = None
@@ -280,7 +346,7 @@ class CardzEnv(Env):
 
     def _draw_end_of_turn_cards(self) -> None:
         for player in range(config.PLAYER_COUNT):
-            if len(self._hands[int(player)]) < int(config.MAX_HAND_SIZE):
+            if len(self._hands[int(player)]) < int(self._hand_limit_for_player(int(player))):
                 self._draw_card_to_hand(int(player))
 
     def reset(self) -> np.ndarray:
@@ -291,9 +357,11 @@ class CardzEnv(Env):
         self._opening_lead_player = int(self._rng.integers(0, int(config.PLAYER_COUNT)))
         self._episode_reward_components.reset()
         for player in range(config.PLAYER_COUNT):
-            for _ in range(int(config.STARTING_HAND_SIZE)):
+            hand_target = int(min(int(config.STARTING_HAND_SIZE), int(self._hand_limit_for_player(int(player)))))
+            for _ in range(hand_target):
                 self._draw_card_to_hand(int(player))
         self._begin_turn()
+        self._advance_opponent_until_player_turn(self._empty_reward_breakdown())
         self._last_obs = self._build_observation()
         if self.show_game:
             self.render()
@@ -319,16 +387,32 @@ class CardzEnv(Env):
             return 0
         return int(config.BAN_POWER)
 
+    def _lane_has_attack(self, player: int, lane: int) -> bool:
+        return int(self._temp_modifiers[int(player), int(lane)]) > 0
+
+    def _lane_attack_bonus(self, player: int, lane: int) -> int:
+        if not self._lane_has_attack(int(player), int(lane)):
+            return 0
+        return int(config.ATK_DELTA)
+
+    def _persistent_lane_total(self, player: int, lane: int) -> int:
+        return int(self._lane_unit_power(int(player), int(lane)) + self._lane_banner_bonus(int(player), int(lane)))
+
     def _lane_total(self, player: int, lane: int) -> int:
+        return int(self._persistent_lane_total(int(player), int(lane)) + self._lane_attack_bonus(int(player), int(lane)))
+
+    def _lane_margin(self, player: int, lane: int, *, include_temp: bool) -> int:
+        opponent = int(self._other_player(int(player)))
+        if include_temp:
+            return int(self._lane_total(int(player), int(lane)) - self._lane_total(int(opponent), int(lane)))
         return int(
-            self._lane_unit_power(int(player), int(lane))
-            + self._lane_banner_bonus(int(player), int(lane))
-            + self._temp_modifiers[int(player), int(lane)]
+            self._persistent_lane_total(int(player), int(lane))
+            - self._persistent_lane_total(int(opponent), int(lane))
         )
 
     def _build_observation(self) -> np.ndarray:
-        actor = int(self.current_player)
-        opponent = int(self._other_player(actor))
+        actor = int(PLAYER_P1)
+        opponent = int(PLAYER_P2)
         feature_values: dict[str, float] = {
             "turn_norm": float(clip_unit(float(self.turn) / float(config.TURN_NORMALIZER))),
             "energy_self_norm": float(clip_unit(float(self._energy[actor]) / float(config.ENERGY_NORMALIZER))),
@@ -384,9 +468,9 @@ class CardzEnv(Env):
         if card.kind == "unit":
             return self._lane_unit_count(int(player), int(lane)) < int(config.MAX_UNITS_PER_LANE)
         if card.key == "Atk":
-            return self._lane_unit_count(self._other_player(int(player)), int(lane)) > 0
+            return not self._lane_has_attack(int(player), int(lane))
         if card.key == "Ban":
-            return not self._lane_has_banner(int(player), int(lane))
+            return self._lane_unit_count(int(player), int(lane)) > 0 and not self._lane_has_banner(int(player), int(lane))
         return False
 
     def _has_any_play_action(self, player: int) -> bool:
@@ -401,12 +485,12 @@ class CardzEnv(Env):
                     return True
         return False
 
-    def get_action_mask(self, _obs: object | None = None) -> np.ndarray:
+    def _action_mask_for_player(self, player: int) -> np.ndarray:
         mask = np.zeros((self.ACT_DIM,), dtype=np.bool_)
         if self._done:
             return mask
 
-        actor = int(self.current_player)
+        actor = int(player)
         mask[int(config.PASS_ACTION_INDEX)] = True
         if bool(self._passed[actor]):
             return mask
@@ -419,6 +503,96 @@ class CardzEnv(Env):
                     action_idx = int(slot * config.NUM_LANES + lane)
                     mask[action_idx] = True
         return mask
+
+    def get_action_mask(self, _obs: object | None = None) -> np.ndarray:
+        return self._action_mask_for_player(int(PLAYER_P1))
+
+    def _legal_play_actions(self, player: int) -> np.ndarray:
+        mask = self._action_mask_for_player(int(player))
+        return np.flatnonzero(mask[: int(config.PASS_ACTION_INDEX)])
+
+    @staticmethod
+    def _lane_advantage_score(margin: int) -> float:
+        clipped_margin = max(-6, min(6, int(margin)))
+        if clipped_margin > 0:
+            return 1.0 + 0.35 * float(clipped_margin)
+        if clipped_margin == 0:
+            return 0.15
+        return -1.0 + 0.20 * float(clipped_margin)
+
+    def _heuristic_action_score(self, player: int, action_idx: int) -> float:
+        hand_slot, lane = self._decode_action(int(action_idx))
+        if hand_slot is None or lane is None:
+            return float("-inf")
+        card_key = self._card_in_slot(int(player), int(hand_slot))
+        if card_key is None:
+            return float("-inf")
+        card = CARD_DEFS[str(card_key)]
+        turns_after_current = max(0, int(config.MAX_TURNS) - int(self.turn))
+        turn_margin_before = int(self._lane_margin(int(player), int(lane), include_temp=True))
+        persistent_margin_before = int(self._lane_margin(int(player), int(lane), include_temp=False))
+        turn_margin_after = int(turn_margin_before)
+        persistent_margin_after = int(persistent_margin_before)
+
+        if card.kind == "unit":
+            turn_margin_after += int(card.power)
+            persistent_margin_after += int(card.power)
+        elif card.key == "Atk":
+            turn_margin_after += int(config.ATK_DELTA)
+        elif card.key == "Ban":
+            turn_margin_after += int(config.BAN_POWER)
+            persistent_margin_after += int(config.BAN_POWER)
+
+        immediate_delta = float(self._lane_advantage_score(turn_margin_after) - self._lane_advantage_score(turn_margin_before))
+        future_delta = float(
+            self._lane_advantage_score(persistent_margin_after)
+            - self._lane_advantage_score(persistent_margin_before)
+        )
+        score = 2.0 * immediate_delta + 0.60 * float(turns_after_current) * future_delta
+
+        if turn_margin_before <= 0 < turn_margin_after:
+            score += 2.0
+        elif turn_margin_before < 0 and turn_margin_after == 0:
+            score += 0.75
+
+        if card.kind == "unit":
+            if self._lane_unit_count(int(player), int(lane)) == 0:
+                score += 0.35
+            if self._lane_has_banner(int(player), int(lane)):
+                score += 0.40
+            if turn_margin_before > 2:
+                score -= 0.60
+        elif card.key == "Ban":
+            score += 0.20 * float(self._lane_unit_count(int(player), int(lane)))
+            if turn_margin_before >= 2:
+                score += 0.20
+        elif card.key == "Atk":
+            if turn_margin_before <= 0 < turn_margin_after:
+                score += 0.75
+            if persistent_margin_before < 0:
+                score += 0.20
+
+        score += 0.08 * float(card.value) - 0.12 * float(card.cost)
+        score += float(self._rng.random()) * 1e-3
+        return float(score)
+
+    def _select_scripted_action(self, player: int) -> int:
+        legal_play_actions = self._legal_play_actions(int(player))
+        if legal_play_actions.size <= 0:
+            return int(config.PASS_ACTION_INDEX)
+        if float(self._rng.random()) < float(self._opp_random_move_prob):
+            return int(self._rng.choice(legal_play_actions))
+
+        best_action = int(config.PASS_ACTION_INDEX)
+        best_score = float("-inf")
+        for action_idx in legal_play_actions.tolist():
+            score = float(self._heuristic_action_score(int(player), int(action_idx)))
+            if score > best_score:
+                best_score = float(score)
+                best_action = int(action_idx)
+        if best_score <= float(OPPONENT_PASS_SCORE_THRESHOLD):
+            return int(config.PASS_ACTION_INDEX)
+        return int(best_action)
 
     def _resolve_valid_action(self, action: object) -> int:
         mask = self.get_action_mask()
@@ -452,8 +626,7 @@ class CardzEnv(Env):
             self._lane_units[int(lane)][int(player)].append(str(card.key))
             self._persistent_power[int(player), int(lane)] += int(card.power)
         elif card.key == "Atk":
-            opponent = int(self._other_player(int(player)))
-            self._temp_modifiers[opponent, int(lane)] -= int(config.ATK_DELTA)
+            self._temp_modifiers[int(player), int(lane)] = int(config.ATK_DELTA)
         elif card.key == "Ban":
             self._lane_banners[int(player), int(lane)] = True
         self._last_action_text = self._play_action_text(int(player), str(card.key), int(lane))
@@ -478,28 +651,38 @@ class CardzEnv(Env):
     def _should_end_turn(self) -> bool:
         return bool(self._passed[int(PLAYER_P1)]) and bool(self._passed[int(PLAYER_P2)])
 
-    def _finish_turn(self, actor: int, reward_breakdown: dict[str, float]) -> None:
+    def _pause_before_turn_resolution(self) -> None:
+        if (not self.show_game) or float(config.TURN_RESOLUTION_PAUSE_SECONDS) <= 0.0:
+            return
+        self._turn_pause_active = True
+        deadline = float(time.monotonic()) + float(config.TURN_RESOLUTION_PAUSE_SECONDS)
+        try:
+            while float(time.monotonic()) < deadline:
+                self.window_controller.poll_events_or_raise()
+                self.render()
+                self.frame_clock.tick(config.FPS if self.show_game else config.TRAINING_FPS)
+        finally:
+            self._turn_pause_active = False
+
+    def _finish_turn(self, reward_breakdown: dict[str, float]) -> None:
+        self._pause_before_turn_resolution()
         turn_number = int(self.turn)
         points_p1, points_p2 = self._score_turn()
-        opponent = int(self._other_player(int(actor)))
-        progress_reward = (
-            float(self._last_turn_points[int(actor)]) * float(config.REWARD_PROGRESS_TURN_POINTS_PER_LANE)
-            - float(self._last_turn_points[int(opponent)]) * float(config.REWARD_PROGRESS_TURN_POINTS_PER_LANE)
-        )
+        progress_reward = float(points_p1 - points_p2) * float(config.REWARD_PROGRESS_TURN_POINTS_PER_LANE)
         reward_breakdown["reward_progress_turn_points"] += float(progress_reward)
         self._last_turn_text = f"T{turn_number} scored {points_p1}-{points_p2}"
 
         if int(self.turn) >= int(config.MAX_TURNS):
             self._done = True
-            self._terminal_actor = int(actor)
-            self.current_player = int(actor)
-            actor_score = int(self._scores[int(actor)])
-            opponent_score = int(self._scores[int(opponent)])
-            if actor_score > opponent_score:
-                self._winner = int(actor)
+            self._terminal_actor = int(PLAYER_P1)
+            self.current_player = int(PLAYER_P1)
+            p1_score = int(self._scores[int(PLAYER_P1)])
+            p2_score = int(self._scores[int(PLAYER_P2)])
+            if p1_score > p2_score:
+                self._winner = int(PLAYER_P1)
                 reward_breakdown["reward_terminal_match_win"] += float(config.REWARD_TERMINAL_MATCH_WIN)
-            elif actor_score < opponent_score:
-                self._winner = int(opponent)
+            elif p1_score < p2_score:
+                self._winner = int(PLAYER_P2)
                 reward_breakdown["reward_terminal_match_loss"] += float(config.REWARD_TERMINAL_MATCH_LOSS)
             else:
                 self._winner = None
@@ -517,13 +700,28 @@ class CardzEnv(Env):
             return
         self.current_player = int(actor)
 
-    def _info(self, actor: int | None, reward_breakdown: dict[str, float] | None) -> dict[str, object]:
-        actor_value = int(self._terminal_actor if actor is None else actor)
+    def _advance_opponent_until_player_turn(self, reward_breakdown: dict[str, float]) -> None:
+        while (not self._done) and int(self.current_player) == int(PLAYER_P2):
+            action_idx = int(self._select_scripted_action(int(PLAYER_P2)))
+            self._apply_action(int(action_idx), reward_breakdown)
+            if self.show_game:
+                self.render()
+                self.frame_clock.tick(config.FPS if self.show_game else config.TRAINING_FPS)
+
+    def _info(
+        self,
+        actor: int | None,
+        reward_breakdown: dict[str, float] | None,
+        *,
+        episode_level: int | None = None,
+        level_changed: bool = False,
+    ) -> dict[str, object]:
+        actor_value = int(PLAYER_P1 if actor is None else actor)
         opponent = int(self._other_player(actor_value))
         done = bool(self._done)
         info: dict[str, object] = {
-            "level": int(self._current_level),
-            "level_changed": False,
+            "level": int(self._current_level if episode_level is None else episode_level),
+            "level_changed": bool(level_changed),
             "turn": int(self.turn),
             "actor": int(actor_value),
             "actor_label": self._player_name(int(actor_value)),
@@ -551,12 +749,47 @@ class CardzEnv(Env):
             info["reward_components"] = self._episode_reward_components.totals()
         return info
 
-    def _apply_action(self, action_idx: int) -> tuple[np.ndarray, float, bool, dict[str, object]]:
+    def _settle_step(self, reward_breakdown: dict[str, float]) -> tuple[float, int, bool]:
+        reward = float(sum(float(value) for value in reward_breakdown.values()))
+        if self.mode != "human":
+            for key, value in reward_breakdown.items():
+                self._episode_reward_components.add(str(key), float(value))
+
+        episode_level = int(self._current_level)
+        level_changed = False
+        if self._done:
+            self._last_episode_level = int(episode_level)
+            self._last_episode_success = 1 if self._winner is not None and int(self._winner) == int(PLAYER_P1) else 0
+            if self._curriculum is not None:
+                self._current_level, level_changed = advance_curriculum(
+                    self._curriculum,
+                    success=int(self._last_episode_success),
+                    current_level=int(self._current_level),
+                    apply_level=self._apply_level_settings,
+                )
+            self.current_player = int(PLAYER_P1)
+
+        self._last_obs = self._build_observation()
+        return float(reward), int(episode_level), bool(level_changed)
+
+    def _complete_step_result(
+        self,
+        reward_breakdown: dict[str, float],
+    ) -> tuple[np.ndarray, float, bool, dict[str, object]]:
+        reward, episode_level, level_changed = self._settle_step(reward_breakdown)
+        info = self._info(
+            int(PLAYER_P1),
+            reward_breakdown,
+            episode_level=int(episode_level),
+            level_changed=bool(level_changed),
+        )
+        return np.asarray(self._last_obs, dtype=np.float32), float(reward), bool(self._done), info
+
+    def _apply_action(self, action_idx: int, reward_breakdown: dict[str, float]) -> None:
         actor = int(self.current_player)
-        self._terminal_actor = int(actor)
+        self._terminal_actor = int(PLAYER_P1)
         self._selected_hand_slot = None
 
-        reward_breakdown = self._empty_reward_breakdown()
         passed_this_action = bool(int(action_idx) == int(config.PASS_ACTION_INDEX))
         if int(action_idx) == int(config.PASS_ACTION_INDEX):
             self._passed[int(actor)] = True
@@ -572,21 +805,9 @@ class CardzEnv(Env):
         self._turn_has_acted[int(actor)] = True
 
         if self._should_end_turn():
-            self._finish_turn(int(actor), reward_breakdown)
+            self._finish_turn(reward_breakdown)
         elif passed_this_action and (not self._done):
             self._advance_after_pass(int(actor))
-
-        reward = float(sum(float(value) for value in reward_breakdown.values()))
-        if self.mode != "human":
-            for key, value in reward_breakdown.items():
-                self._episode_reward_components.add(str(key), float(value))
-        if self._done:
-            self._last_episode_level = int(self._current_level)
-            self._last_episode_success = 1 if self._winner is not None and int(self._winner) == int(actor) else 0
-
-        self._last_obs = self._build_observation()
-        info = self._info(int(actor), reward_breakdown)
-        return np.asarray(self._last_obs, dtype=np.float32), float(reward), bool(self._done), info
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         self.window_controller.poll_events_or_raise()
@@ -595,10 +816,17 @@ class CardzEnv(Env):
             return self._step_human()
 
         if self._done:
-            return np.asarray(self._last_obs, dtype=np.float32), 0.0, True, self._info(self._terminal_actor, None)
+            return np.asarray(self._last_obs, dtype=np.float32), 0.0, True, self._info(int(PLAYER_P1), None)
+
+        reward_breakdown = self._empty_reward_breakdown()
+        self._advance_opponent_until_player_turn(reward_breakdown)
+        if self._done:
+            return self._complete_step_result(reward_breakdown)
 
         action_idx = self._resolve_valid_action(action)
-        obs, reward, done, info = self._apply_action(int(action_idx))
+        self._apply_action(int(action_idx), reward_breakdown)
+        self._advance_opponent_until_player_turn(reward_breakdown)
+        obs, reward, done, info = self._complete_step_result(reward_breakdown)
         if self.show_game:
             self.render()
         self.frame_clock.tick(config.FPS if self.show_game else config.TRAINING_FPS)
@@ -676,7 +904,7 @@ class CardzEnv(Env):
                 continue
             slot = self._key_to_slot(int(key_code))
             if slot is not None:
-                if self._card_in_slot(int(self.current_player), int(slot)) is not None:
+                if self._card_in_slot(int(PLAYER_P1), int(slot)) is not None:
                     self._selected_hand_slot = None if self._selected_hand_slot == int(slot) else int(slot)
                 continue
             lane = self._key_to_lane(int(key_code))
@@ -693,7 +921,7 @@ class CardzEnv(Env):
                 if not self._point_in_rect(mouse_x, mouse_y, rect):
                     continue
                 clicked_hand = True
-                if self._card_in_slot(int(self.current_player), int(slot)) is not None:
+                if self._card_in_slot(int(PLAYER_P1), int(slot)) is not None:
                     self._selected_hand_slot = None if self._selected_hand_slot == int(slot) else int(slot)
                 break
             if clicked_hand:
@@ -715,19 +943,27 @@ class CardzEnv(Env):
                 return self.reset(), 0.0, False, {"level": int(self._current_level)}
         self.render()
         self.frame_clock.tick(config.FPS if self.show_game else config.TRAINING_FPS)
-        return np.asarray(self._last_obs, dtype=np.float32), 0.0, False, self._info(self._terminal_actor, None)
+        return np.asarray(self._last_obs, dtype=np.float32), 0.0, False, self._info(int(PLAYER_P1), None)
 
     def _step_human(self) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         if self._done:
+            return self._handle_human_terminal()
+
+        reward_breakdown = self._empty_reward_breakdown()
+        self._advance_opponent_until_player_turn(reward_breakdown)
+        if self._done:
+            self._settle_step(reward_breakdown)
             return self._handle_human_terminal()
 
         action_idx = self._consume_human_action()
         if action_idx is None:
             self.render()
             self.frame_clock.tick(config.FPS if self.show_game else config.TRAINING_FPS)
-            return np.asarray(self._last_obs, dtype=np.float32), 0.0, False, self._info(self.current_player, None)
+            return np.asarray(self._last_obs, dtype=np.float32), 0.0, False, self._info(int(PLAYER_P1), None)
 
-        obs, _, done, info = self._apply_action(int(action_idx))
+        self._apply_action(int(action_idx), reward_breakdown)
+        self._advance_opponent_until_player_turn(reward_breakdown)
+        obs, _, done, info = self._complete_step_result(reward_breakdown)
         if done:
             return self._handle_human_terminal()
         self.render()
@@ -830,7 +1066,7 @@ class CardzEnv(Env):
         if card.kind == "unit":
             return str(int(card.power))
         if card.key == "Atk":
-            return f"-{int(config.ATK_DELTA)}"
+            return f"+{int(config.ATK_DELTA)}"
         if card.key == "Ban":
             return f"+{int(config.BAN_POWER)}"
         return str(int(card.value))
@@ -867,6 +1103,40 @@ class CardzEnv(Env):
             inner_color=PLAYER_INNERS[int(player)],
             inset=FRAME_INSET,
         )
+
+    def _attack_marker_rects(self, lane_rect: Rect, player: int) -> tuple[Rect, Rect]:
+        left_slot_rect = self._unit_slot_rect(lane_rect, int(player), 0)
+        right_slot_rect = self._unit_slot_rect(lane_rect, int(player), 1)
+        size = float(config.BANNER_MARKER_SIZE)
+        if int(player) == int(PLAYER_P2):
+            top = float(left_slot_rect.bottom) + float(config.BANNER_MARKER_GAP)
+        else:
+            top = float(left_slot_rect.top) - float(config.BANNER_MARKER_GAP) - size
+        return (
+            Rect(
+                left=float(left_slot_rect.right) - size,
+                top=float(top),
+                width=size,
+                height=size,
+            ),
+            Rect(
+                left=float(right_slot_rect.left),
+                top=float(top),
+                width=size,
+                height=size,
+            ),
+        )
+
+    def _draw_attack_markers(self, lane: int, player: int, lane_rect: Rect) -> None:
+        if not self._lane_has_attack(int(player), int(lane)):
+            return
+        for marker_rect in self._attack_marker_rects(lane_rect, int(player)):
+            self._draw_panel(
+                marker_rect,
+                outer_color=PLAYER_OUTERS[int(player)],
+                inner_color=PLAYER_INNERS[int(player)],
+                inset=FRAME_INSET,
+            )
 
     def _draw_card_face(
         self,
@@ -968,35 +1238,12 @@ class CardzEnv(Env):
         elif self._hover_lane == int(lane):
             self._draw_outline(rect, ACTIVE_OUTLINE, line_width=OUTLINE_WIDTH)
 
-        p1_temp = int(self._temp_modifiers[int(PLAYER_P1), int(lane)])
-        p2_temp = int(self._temp_modifiers[int(PLAYER_P2), int(lane)])
-
-        if int(p2_temp) != 0:
-            self._text.draw(
-                f"{p2_temp:+d}",
-                x=float(rect.right) - 16.0,
-                y=float(self.window_controller.to_arcade_y(float(rect.top) + 30.0)),
-                color=PLAYER_OUTERS[int(PLAYER_P2)],
-                font_size=11,
-                font_name=config.UI_FONT_NAME,
-                anchor_x="right",
-                anchor_y="center",
-            )
-        if int(p1_temp) != 0:
-            self._text.draw(
-                f"{p1_temp:+d}",
-                x=float(rect.right) - 16.0,
-                y=float(self.window_controller.to_arcade_y(float(rect.bottom) - 30.0)),
-                color=PLAYER_OUTERS[int(PLAYER_P1)],
-                font_size=11,
-                font_name=config.UI_FONT_NAME,
-                anchor_x="right",
-                anchor_y="center",
-            )
         self._draw_lane_unit_slots(int(lane), int(PLAYER_P2), rect)
         self._draw_banner_marker(int(lane), int(PLAYER_P2), rect)
+        self._draw_attack_markers(int(lane), int(PLAYER_P2), rect)
         self._draw_lane_unit_slots(int(lane), int(PLAYER_P1), rect)
         self._draw_banner_marker(int(lane), int(PLAYER_P1), rect)
+        self._draw_attack_markers(int(lane), int(PLAYER_P1), rect)
 
     def _slot_has_any_valid_lane(self, slot: int) -> bool:
         mask = self.get_action_mask()
@@ -1005,7 +1252,7 @@ class CardzEnv(Env):
         return bool(np.any(mask[start:end]))
 
     def _draw_hand_card(self, slot: int, rect: Rect) -> None:
-        actor = int(self.current_player)
+        actor = int(PLAYER_P1)
         card_key = self._card_in_slot(int(actor), int(slot))
         outer_color = PLAYER_OUTERS[int(actor)]
         inner_color = PLAYER_INNERS[int(actor)]
@@ -1049,6 +1296,12 @@ class CardzEnv(Env):
                 f"Result: {result}  "
                 f"Score: {int(self._scores[int(PLAYER_P1)])}/{int(self._scores[int(PLAYER_P2)])}  "
                 "Enter restart"
+            )
+        if self._turn_pause_active:
+            return (
+                f"Turn: {int(self.turn)}/{int(config.MAX_TURNS)}  "
+                "Resolving turn...  "
+                f"Score: {int(self._scores[int(PLAYER_P1)])}/{int(self._scores[int(PLAYER_P2)])}"
             )
         turn_cap = min(int(config.MAX_TURNS), max(1, int(self.turn)))
         return (

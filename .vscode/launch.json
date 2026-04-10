@@ -345,6 +345,9 @@
       "module": "scripts.play_user",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "env": {
+        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
+      },
       "args": [
         "--game",
         "osero"
@@ -358,6 +361,9 @@
       "module": "scripts.play_ai",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "env": {
+        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
+      },
       "args": [
         "--game",
         "osero",
@@ -372,6 +378,9 @@
       "module": "scripts.train",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "env": {
+        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
+      },
       "args": [
         "--game",
         "osero",
@@ -390,6 +399,17 @@
         "1",
         "2",
         "3"
+      ]
+    },
+    {
+      "id": "oseroBoardSize",
+      "type": "pickString",
+      "description": "Osero board size",
+      "default": "6x6",
+      "options": [
+        "4x4",
+        "6x6",
+        "8x8"
       ]
     },
     {

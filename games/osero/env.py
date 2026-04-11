@@ -17,7 +17,14 @@ from core.arcade_style import (
     COLOR_SLATE_GRAY,
 )
 from core.envs.base import Env
-from core.primitives import draw_status_square_icon, draw_two_tone_tile, status_icon_size
+from core.primitives import (
+    draw_status_bar,
+    draw_status_icon_row,
+    status_icon_inset,
+    draw_status_square_icon,
+    draw_two_tone_tile,
+    status_icon_size,
+)
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
 from games.osero import config
 from games.osero.rules import (
@@ -388,19 +395,33 @@ class OseroEnv(Env):
             size=float(size),
             outer_color=outer_color,
             inner_color=inner_color,
-            inset=max(1.0, round(float(size) * 0.18)),
+            inset=float(status_icon_inset(float(self._board_layout.tile_size) * float(config.STONE_INSET_RATIO))),
         )
 
     def _draw_hud(self) -> None:
-        arcade.draw_lbwh_rectangle_filled(0, 0, float(config.SCREEN_WIDTH), float(config.BB_HEIGHT), COLOR_DARK_NEUTRAL)
+        layout = draw_status_bar(
+            width=float(config.SCREEN_WIDTH),
+            bottom_bar_height=float(config.BB_HEIGHT),
+            tile_size=float(self._board_layout.tile_size),
+            cell_inset=float(config.STONE_INSET_RATIO * self._board_layout.tile_size),
+            include_clock=False,
+        )
         stone = int(self._state.current_player) if not self._done else int(self._last_winner)
-        if stone != STONE_EMPTY:
-            self._draw_player_icon(
-                stone,
-                center_x=float(config.SCREEN_WIDTH) * 0.5,
-                center_y=float(config.BB_HEIGHT) * 0.5,
-                size=float(status_icon_size(float(config.BB_HEIGHT), float(self._board_layout.tile_size))),
-            )
+        if stone == STONE_EMPTY:
+            return
+        draw_status_icon_row(
+            left=float(layout.score_left),
+            right=float(layout.score_right),
+            center_y=float(layout.center_y),
+            icon_size=float(status_icon_size(float(config.BB_HEIGHT), float(self._board_layout.tile_size))),
+            items=[stone],
+            draw_item=lambda stone_value, center_x, row_center_y, size: self._draw_player_icon(
+                int(stone_value),
+                float(center_x),
+                float(row_center_y),
+                float(size),
+            ),
+        )
 
     def render(self) -> None:
         if self.window_controller.window is None:

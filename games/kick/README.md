@@ -1,41 +1,40 @@
 # Kick
 
-Arcade-style top-down football with shared-team MAPPO training (CTDE): one shared actor for all LEFT players, centralized critic during training.
-This project is intentionally paused / experimental in the new lineup.
+Top-down football environment with a shared LEFT-team policy and a centralized critic during training. `kick` is currently paused as an experimental branch, but the environment and documentation remain in the repo because it exercises the multi-agent and CTDE pieces more directly than the other games.
 
 ## Clip
 
-No embedded clip yet.
+No demo clip published yet.
 
-## Algorithm / Network
+## Default Algorithm / Network
 
-- Algo: PPO with MAPPO-style training (shared/decentralized actor + centralized critic)
+- Algorithm: PPO with MAPPO-style training
 - Actor MLP: `[128, 128]`
 - Critic MLP: `[256, 256]`
 - Actor output: `Discrete(12)` logits per LEFT player
-- Critic input (per agent): centralized state + that agent's local observation
+- Critic input: centralized state plus local agent context
 
 ## Controls (Human)
 
-- Move: `W/A/S/D` (diagonals via combinations, for example `W` + `D`)
-- Shoot: hold/release `Space` (low/mid/high by hold time)
-- Human mode keeps player switching behavior; RL mode controls all LEFT players each step.
+- Move: `W/A/S/D`
+- Shoot: hold/release `Space` for low, mid, or high kicks
+- Human mode keeps automatic player switching behavior
+- Rendered overlays: `X` toggles the formation/zone target ghosts during `play-user` and `play-ai`
 
 ## Observation / Actions
 
 - Observation:
-  - RL mode (`train` / `eval`): `(N_left, 48)` where each row is one LEFT-player feature vector.
-  - Human mode: single `(48,)` vector for the currently controlled player.
-- Feature blocks (ordered):
+  - RL mode (`train` / `eval`): `(N_left, 48)` where each row is one LEFT-player feature vector
+  - Human mode: single `(48,)` vector for the currently controlled player
+- Feature blocks:
   - `SELF` (9): `self_vx self_vy self_theta_cos self_theta_sin self_has_ball self_role self_role_lane self_stamina self_stamina_delta`
   - `BALL` (7): `tgt_dx tgt_dy tgt_rel_angle_sin tgt_rel_angle_cos tgt_dvx tgt_dvy tgt_owner_team`
   - `GOAL (opponent)` (4): `goal_dx goal_dy goal_rel_angle_sin goal_rel_angle_cos`
   - `GOAL (own)` (4): `own_goal_dx own_goal_dy own_goal_rel_angle_sin own_goal_rel_angle_cos`
   - `OWN 1..3` (12): `own{k}_{dx,dy,dvx,dvy}`
   - `OPP 1..3` (12): `opp{k}_{dx,dy,dvx,dvy}`
-- Nearest own/opp selection is deterministic and stable: sorted by `(distance, player.slot_index)`.
+- Nearest teammate/opponent selection is deterministic: sort by `(distance, player.slot_index)`
 - Actions: `Discrete(12)` (`ACTION_NAMES`, ordered)
-  - RL mode expects one action per LEFT player each step: `(N_left,)`
   - `0 stay`
   - `1 move_n`
   - `2 move_ne`
@@ -49,79 +48,64 @@ No embedded clip yet.
   - `10 kick_mid`
   - `11 kick_high`
 
+In RL mode the environment expects one action per LEFT player each step.
+
 ## Environment Notes
 
-### Possession Semantics
+### Possession and Credit Assignment
 
-- Physical owner:
-  - `ball_owner_team`, `ball_owner_id` (stable slot id) from `ball_owner` (or `None` when free/in flight)
-- Effective possession team:
-  - `possession_team = ball_owner_team if owned else last_touch_team`
-- Formation/zone phase uses effective possession (prevents snapping while ball is in flight).
-- Progress shaping is based on physical ball motion and credited to a responsible LEFT player:
-  - controlled ball: current LEFT owner
-  - free ball after LEFT touch: `last_touch_player_id`
-- Centralized critic state is fixed-size and team-size robust:
-  - padded `central_obs` for up to `MAX_LEFT_PLAYERS=11`
-  - `central_mask` marks present/padded LEFT slots
+- Physical owner comes from `ball_owner`.
+- Effective possession uses `ball_owner_team` when owned and `last_touch_team` when the ball is free.
+- Formation/zone behavior uses effective possession so the team shape does not snap while the ball is airborne.
+- Progress shaping is credited to the responsible LEFT player:
+  - current LEFT owner while controlled
+  - `last_touch_player_id` after a LEFT touch while the ball is free
+
+### Centralized Critic State
+
+- The centralized state is fixed-size and robust to team-size changes.
+- It pads observations up to `MAX_LEFT_PLAYERS=11`.
+- `central_mask` distinguishes present players from padded slots.
 
 ### Action Masking
 
-- If `self_has_ball == 0`, `kick_low/mid/high` are invalid.
-- Masking is applied in both training and eval.
-- Eval policy selection uses masked argmax, so invalid kicks are not chosen.
+- If `self_has_ball == 0`, `kick_low`, `kick_mid`, and `kick_high` are invalid.
+- Masking is applied in both training and evaluation.
+- Eval uses masked action selection, so invalid kicks are not chosen.
 
 ### Step Contract
 
-- `env.step(...)` returns scalar team reward (`float`, sum of per-player rewards).
-- Per-player rewards are always in `info["reward_vec"]` with length `N_left`.
-- Reward breakdown in `info["reward_breakdown"]` contains realized step contributions by component key.
+- `env.step(...)` returns a scalar team reward.
+- Per-player rewards are always exposed in `info["reward_vec"]`.
+- Realized step contributions are exposed in `info["reward_breakdown"]`.
 
-### PPO Debug Line
+### Diagnostics
 
-- After each episode line, training prints one extra tab-separated PPO line:
-  - `> PPO	PolicyLoss: ...	ValueLoss: ...	Entropy: ...	ApproxKl: ...	ClipFrac: ...`
-- Before the first PPO update, these fields print as `n/a`.
-
-### Sanity Flag
-
-- `KICK_DEBUG_SANITY=1` enables quick runtime checks for:
-  - RL obs shape `(N_left, 48)`
-  - stable nearest ordering for own/opp blocks
-  - masked invalid-kick prevention in eval
-  - GK-catch turnover exclusion
-  - scalar step reward + `reward_vec` length
+- Training prints PPO diagnostics after episodes.
+- `KICK_DEBUG_SANITY=1` enables runtime checks for observation shape, masked invalid kicks, GK-catch exclusions, and reward-vector consistency.
 
 ## Rewards (Training)
 
-Realized components logged as `G C T A P Z`:
+Logged reward codes are `G C T A P Z`:
 
-- `G` outcome score: total `+10.0` normalized per player (`+10 / n_left` each).
-- `C` outcome concede: total `-5.0` normalized per player (`-5 / n_left` each).
-- `T` turnover: `-0.25` to the responsible LEFT player when possession changes LEFT -> RIGHT and RIGHT becomes physical owner.
-  - Opponent GK catch in/near their box is excluded.
-- `A` pass: `+0.25` to passer when a LEFT kick is next physically controlled by a different LEFT player.
-- `P` progress (dense, player-specific):
-  - `delta = prog_next - prog_prev` using ball depth toward opponent goal
-  - `rP = 2.0 * clamp(delta, -0.01, +0.01)`
-  - credited to responsible LEFT player (owner, or last toucher while free)
-  - progress baseline resets on true RIGHT possession/reset, not LEFT -> free -> LEFT flight.
-- `Z` zone discipline (per-player, no team averaging before assignment):
-  - `d_i = normalized distance to role anchor (depth + lane)`
-  - `excess = max(0, d_i - 0.05)`
-  - `rZ_i = -0.01 * (excess^2)`
+- `G`: team score bonus, total `+10.0`, normalized across LEFT players
+- `C`: team concede penalty, total `-5.0`, normalized across LEFT players
+- `T`: turnover penalty for the responsible LEFT player
+- `A`: pass reward for the passer when a LEFT teammate receives the kick
+- `P`: dense ball-progress shaping toward the opponent goal
+- `Z`: zone-discipline penalty based on distance from the role anchor
 
 ## Curriculum (Train)
 
-- Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
-- Promotion settings live in `games/kick/config.py` under `CURRICULUM_PROMOTION`.
-- LEFT team stays at 11 RL-controlled players.
-- Opponent scaling by level:
-  - Level 1: `11v3` (`RM, LM, LCS`)
-  - Level 2: `11v7` (`GK, LB, RB, RM, LM, LCS, RCS`)
-  - Level 3: `11v11` (`GK, LB, LCB, RCB, RB, LM, LCM, RCM, RM, LCS, RCS`)
+- Shared 3-level curriculum progression from `core/curriculum.py`
+- Promotion settings live in `games/kick/config.py` under `CURRICULUM_PROMOTION`
+- LEFT always stays at `11` RL-controlled players
+- Opponent scaling:
+  - Level 1: `11v3`
+  - Level 2: `11v7`
+  - Level 3: `11v11`
 
-Success per episode is `1` when LEFT scores more than it concedes, else `0`.
+An episode counts as a success if LEFT scores more than it concedes.
 
 ## Run Commands
 
@@ -134,4 +118,4 @@ python -m scripts.play_ai --game kick --model best --render
 python -m scripts.play_user --game kick
 ```
 
-Check `games/kick/config.py` for full PPO/MAPPO settings and curriculum parameters.
+See `games/kick/config.py` and `games/kick/env.py` for the full PPO, CTDE, reward, and curriculum settings.

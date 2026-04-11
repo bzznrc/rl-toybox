@@ -1,29 +1,27 @@
 # Tower
 
-Tiny wave-based tower defense built as the repo's masked-DQN showcase.
+Wave-based tower defense built around build-phase planning, action masking, and delayed rewards. `tower` is the repo's clearest example of a value-based game where the policy acts at decision points instead of every frame.
 
 ## Clip
 
-No embedded clip yet.
+No demo clip published yet.
 
-## Algorithm / Network
+## Default Algorithm / Network
 
-- Primary family: value-based discrete control
+- Algorithm family: value-based discrete control
 - Default algorithm: `dqn`
-- Recommended runtime shape: masked Double DQN with dueling head
-- Default hidden sizes: `[64, 64]`
+- Recommended runtime shape: masked Double DQN with a dueling head
+- Hidden sizes: `[64, 64]`
 - Observation size: `20`
 - Action count: `26`
 
 ## Controls (Human)
 
-- `Mouse Left` on an empty slot: open a tiny build menu with `Fast`, `Heavy`, and `Area`
-- `Mouse Left` on an occupied slot: open a tiny action menu with `Upgrade` and `Sell`
-- `Mouse Left` on a menu item: apply that action if it is currently valid
-- `Mouse Left` elsewhere: close the current menu
+- `Mouse Left` on an empty slot: open a menu with `Fast`, `Heavy`, and `Area`
+- `Mouse Left` on an occupied slot: open a menu with `Upgrade` and `Sell`
+- `Mouse Left` on a menu item: apply it if valid
+- `Mouse Left` elsewhere: close the active menu
 - `Space`: start the previewed wave
-
-The human UI is mouse-first and uses small contextual menus instead of keyboard navigation.
 
 ## Observation / Actions
 
@@ -56,9 +54,9 @@ Canonical `INPUT_FEATURE_NAMES` order:
 
 - `tower_kind` encoding: `0=empty`, `1=fast`, `2=heavy`, `3=area`
 - `tower_level_norm`: `0.0` for empty, otherwise `level / 3`
-- `run_gold_norm` keeps its legacy feature name for compatibility, but the user-facing economy is shown as `Credits`
+- `run_gold_norm` is the legacy feature name; the UI surfaces the same value as `Credits`
 
-The discrete action space is exactly `26` actions:
+Action space:
 
 ```python
 [
@@ -71,39 +69,32 @@ The discrete action space is exactly `26` actions:
 ]
 ```
 
-Action masking is central:
-
-- invalid builds on occupied slots are masked
-- invalid upgrades on empty or level-3 slots are masked
-- invalid sells on empty slots are masked
-- actions that exceed current credits are masked
-- once the build-phase action budget is exhausted, only `start_wave` remains valid
-- `start_wave` is only valid during build phases
+Action masking is central: invalid builds, upgrades, sells, and unaffordable actions are masked, and `start_wave` is only valid during build phases.
 
 ## Environment Notes
 
+The gameplay loop is:
+
 1. Preview the next wave.
 2. Build, upgrade, or sell during the build phase.
-3. Press `Space` to start the wave.
-4. The wave auto-simulates.
+3. Start the wave.
+4. Let the wave auto-simulate.
 5. Return to the next build phase.
 
-Tower never asks the agent to act per frame during the active wave.
+The policy never acts during the live wave itself.
 
-Each run picks one of two compact handcrafted map templates:
+Each run picks one of two handcrafted layouts:
 
-- `Soft S Merge`: mirrored inward sweeps that meet at a shared center trunk
-- `Offset S`: one side joins the center earlier while the other descends farther before merging
+- `Soft S Merge`
+- `Offset S`
 
-The five stable slot ids keep the same semantic roles across both templates:
+The five slot ids keep the same semantic roles across both layouts:
 
-- `left`: left corner control
-- `upper`: left shared / merge coverage
-- `mid`: center trunk cleanup
-- `lower`: right shared / merge coverage
-- `right`: right corner control
-
-The extra input is `run_actions_left_norm`, which exposes the remaining build-phase action budget to the policy.
+- `left`
+- `upper`
+- `mid`
+- `lower`
+- `right`
 
 ### Roles
 
@@ -115,36 +106,28 @@ Enemies:
 
 Towers:
 
-- `Fast`: fast single-target, strongest into `Flying`, weak into `Armored`
-- `Heavy`: slow hard-hitting single-target, strongest into `Armored`, weak into `Light`
-- `Area`: splash damage, strongest into `Light`, weak into `Flying`
+- `Fast`: strongest into `Flying`, weakest into `Armored`
+- `Heavy`: strongest into `Armored`, weakest into `Light`
+- `Area`: strongest into `Light`, weakest into `Flying`
 
 Each tower has levels `1` to `3`.
 
-Selling matters because wave entry side and enemy mix shift between waves, while the lane geometry and slot pressure shift between runs.
+### Economy
 
-Refunds:
+- Build cost: `5`
+- Level 2 upgrade cost: `4`
+- Level 3 upgrade cost: `7`
+- Start credits: `12`
+- Wave-clear credits: `+6`
+- Kills do not grant credits
 
-- level 1: `90%`
-- level 2: `75%`
-- level 3: `60%`
+Sell refund rates:
 
-### Economy / Balance
-
-Tower uses one shared economy ladder across all tower types:
-
-- build cost: `5`
-- level 2 upgrade cost: `4`
-- level 3 upgrade cost: `7`
-- start credits: `12` at every curriculum level
-- wave clear credits: `+6` after every cleared wave
-- kill rewards do not grant credits, so the economy stays fixed from run to run
-
-This means each build phase roughly funds one new tower or one upgrade, while higher curriculum levels get harder through extra waves and stronger enemy counts rather than reduced income.
+- Level 1: `90%`
+- Level 2: `75%`
+- Level 3: `60%`
 
 ## Rewards (Training)
-
-Named internal reward components:
 
 - `reward_progress_kill = +0.05`
 - `reward_event_leak = -0.25`
@@ -152,11 +135,7 @@ Named internal reward components:
 - `reward_terminal_win = +2.00`
 - `reward_terminal_loss = -2.00`
 
-Notes:
-
-- build, upgrade, and sell actions do not get direct reward
-- masked invalid actions do not need separate penalties
-- episode totals are logged through the internal reward breakdown
+Build, upgrade, and sell actions do not receive direct reward. Episode totals are logged through the internal reward breakdown.
 
 ## Curriculum (Train)
 
@@ -175,3 +154,5 @@ python -m scripts.train --game tower
 python -m scripts.play_ai --game tower --model best --render
 python -m scripts.play_user --game tower
 ```
+
+See `games/tower/config.py` and `games/tower/env.py` for the full wave plan, reward constants, and map-layout logic.

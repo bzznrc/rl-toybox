@@ -10,7 +10,7 @@ import numpy as np
 
 from core.algorithms.base import Algorithm
 from core.io.runs import RunPaths, write_metrics
-from core.logging_utils import log_key_values, log_save_line
+from core.logging_utils import log_save_line, log_search_play_game_line
 from core.search_play.interfaces import SearchPlayTrainConfig
 from games.osero.rules import STONE_BLACK, STONE_EMPTY, STONE_WHITE
 
@@ -125,21 +125,24 @@ def run_search_play_training(
             algorithm.save(str(checkpoint_path))
             log_save_line(kind="check", level=1, at=f"game {int(game_index)}", path=checkpoint_path)
 
-        log_key_values(
-            "rl_toybox.train",
-            {
-                "Game": int(game_index),
-                "Moves": int(episode_steps),
-                "Winner": _winner_label(winner_value),
-                "BWin": float(mean(black_results_window)) if black_results_window else 0.0,
-                "Draw": float(mean(draw_results_window)) if draw_results_window else 0.0,
-                "ALen": float(mean(length_window)) if length_window else 0.0,
-                "Loss": None if rolling_loss is None else float(rolling_loss),
-                "PLoss": aggregated_metrics.get("policy_loss"),
-                "VLoss": aggregated_metrics.get("value_loss"),
-            },
-            prefix="SelfPlay",
-            key_value_separator=":",
+        log_search_play_game_line(
+            game=int(game_index),
+            moves=int(episode_steps),
+            winner=_winner_label(winner_value),
+            black_win_rate=float(mean(black_results_window)) if black_results_window else None,
+            draw_rate=float(mean(draw_results_window)) if draw_results_window else None,
+            avg_length=float(mean(length_window)) if length_window else None,
+            loss=None if rolling_loss is None else float(rolling_loss),
+            policy_loss=(
+                float(aggregated_metrics["policy_loss"])
+                if "policy_loss" in aggregated_metrics
+                else None
+            ),
+            value_loss=(
+                float(aggregated_metrics["value_loss"])
+                if "value_loss" in aggregated_metrics
+                else None
+            ),
         )
 
     checkpoint_path = run_paths.model_path(level=1, kind="check")

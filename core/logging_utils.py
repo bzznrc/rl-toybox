@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 import logging
 from pathlib import Path
+import re
 from threading import Lock
 import time
 from typing import Any, Mapping
@@ -133,6 +134,29 @@ def _format_component_value(value: float) -> str:
     return text
 
 
+def _compact_reward_component_code(code: object) -> str:
+    code_text = str(code).strip()
+    if not code_text:
+        return "?"
+
+    if len(code_text) <= 2 and code_text.upper() == code_text and code_text.replace("_", "").isalnum():
+        return code_text
+
+    tokens = [token for token in re.split(r"[^A-Za-z0-9]+", code_text) if token]
+    if not tokens:
+        compact = "".join(ch for ch in code_text if ch.isalnum()).upper()
+        return compact[:2] or "?"
+
+    if len(tokens) > 1 and tokens[0].lower() == "reward":
+        tokens = tokens[1:]
+
+    if not tokens:
+        return "R"
+    if len(tokens) == 1:
+        return tokens[0][:2].upper()
+    return f"{tokens[0][0]}{tokens[-1][0]}".upper()
+
+
 def format_reward_components(components: Mapping[str, object] | None) -> str | None:
     if not isinstance(components, Mapping) or not components:
         return None
@@ -143,7 +167,7 @@ def format_reward_components(components: Mapping[str, object] | None) -> str | N
             value = float(raw_value)
         except (TypeError, ValueError):
             continue
-        parts.append(f"{str(code)}:{_format_component_value(value)}")
+        parts.append(f"{_compact_reward_component_code(code)}:{_format_component_value(value)}")
 
     if not parts:
         return None
@@ -180,6 +204,55 @@ def log_episode_line(
         f"S:{success_value:>1}",
         f"AS:{avg_success_text:>5}",
     ]
+    line = "\t".join(segments) + "\t"
+    if reward_components:
+        line += str(reward_components)
+    logging.getLogger("rl_toybox.train").info(line)
+
+
+def log_on_policy_episode_line(
+    *,
+    episode: int,
+    level: int,
+    ep_len: int,
+    reward: float,
+    avg_reward: float | None,
+    best_avg: float | None,
+    success: int,
+    avg_success: float | None,
+    best_avg_label: str = "BR",
+    policy_loss: float | None = None,
+    value_loss: float | None = None,
+    entropy: float | None = None,
+    approx_kl: float | None = None,
+    clip_frac: float | None = None,
+    reward_components: str | None = None,
+) -> None:
+    avg_reward_text = "n/a" if avg_reward is None else f"{float(avg_reward):.2f}"
+    best_reward_text = "n/a" if best_avg is None else f"{float(best_avg):.2f}"
+    avg_success_text = "n/a" if avg_success is None else f"{float(avg_success):.2f}"
+    success_value = 1 if int(success) > 0 else 0
+    segments = [
+        f"Ep:{int(episode):>5}",
+        f"Lv:{int(level):>1}",
+        f"Len:{int(ep_len):>5}",
+        f"R:{float(reward):>8.2f}",
+        f"AR:{avg_reward_text:>8}",
+        f"{str(best_avg_label)}:{best_reward_text:>8}",
+        f"S:{success_value:>1}",
+        f"AS:{avg_success_text:>5}",
+    ]
+    if policy_loss is not None:
+        segments.append(f"PL:{float(policy_loss):>7.3f}")
+    if value_loss is not None:
+        segments.append(f"VL:{float(value_loss):>7.3f}")
+    if entropy is not None:
+        segments.append(f"Ent:{float(entropy):>7.3f}")
+    if approx_kl is not None:
+        segments.append(f"KL:{float(approx_kl):>7.3f}")
+    if clip_frac is not None:
+        segments.append(f"CF:{float(clip_frac):>7.3f}")
+
     line = "\t".join(segments) + "\t"
     if reward_components:
         line += str(reward_components)
@@ -231,6 +304,34 @@ def log_iteration_line(
         },
         key_value_separator=":",
     )
+
+
+def log_search_play_game_line(
+    *,
+    game: int,
+    moves: int,
+    winner: str,
+    black_win_rate: float | None,
+    draw_rate: float | None,
+    avg_length: float | None,
+    loss: float | None,
+    policy_loss: float | None = None,
+    value_loss: float | None = None,
+) -> None:
+    segments = [
+        f"Game:{int(game):>5}",
+        f"Len:{int(moves):>5}",
+        f"W:{str(winner):>5}",
+        f"BW:{'n/a' if black_win_rate is None else f'{float(black_win_rate):.2f}':>5}",
+        f"DR:{'n/a' if draw_rate is None else f'{float(draw_rate):.2f}':>5}",
+        f"AL:{'n/a' if avg_length is None else f'{float(avg_length):.1f}':>6}",
+        f"L:{'n/a' if loss is None else f'{float(loss):.3f}':>7}",
+    ]
+    if policy_loss is not None:
+        segments.append(f"PL:{float(policy_loss):>7.3f}")
+    if value_loss is not None:
+        segments.append(f"VL:{float(value_loss):>7.3f}")
+    logging.getLogger("rl_toybox.train").info("\t".join(segments))
 
 
 def log_save_line(

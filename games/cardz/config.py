@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from core.arcade_style import (
     DEFAULT_BOTTOM_BAR_HEIGHT,
+    GAME_TITLE_FONT_NAME,
+    GAME_UI_FONT_NAME,
     DEFAULT_GRID_COLUMNS,
     DEFAULT_GRID_ROWS,
     DEFAULT_TILE_SIZE,
@@ -21,7 +23,7 @@ USE_GPU = env_flag("CARDZ_USE_GPU", False)
 PPO_METRICS_LOG_ENABLED = True
 BASE_SEED = env_int("CARDZ_BASE_SEED", 2903)
 TURN_RESOLUTION_PAUSE_SECONDS = 2.5
-BB_HEIGHT = DEFAULT_BOTTOM_BAR_HEIGHT + 14
+BB_HEIGHT = DEFAULT_BOTTOM_BAR_HEIGHT
 
 
 # ENV
@@ -39,7 +41,7 @@ MAX_UNITS_PER_LANE = 2
 
 CARD_DRAW_ORDER = ("U1", "U2", "U3", "Atk", "Ban")
 CARD_DRAW_WEIGHTS = (0.30, 0.20, 0.15, 0.175, 0.175)
-CARD_TYPE_IDS = {
+CARD_IDS = {
     "U1": 1.0,
     "U2": 2.0,
     "U3": 3.0,
@@ -82,8 +84,7 @@ ENERGY_NORMALIZER = float(MAX_TURNS)
 MATCH_SCORE_NORMALIZER = float(NUM_LANES * MAX_TURNS)
 LANE_POWER_NORMALIZER = 18.0
 LANE_COUNT_NORMALIZER = float(MAX_UNITS_PER_LANE)
-CARD_COST_NORMALIZER = 3.0
-CARD_VALUE_NORMALIZER = 4.0
+HAND_COUNT_NORMALIZER = float(MAX_HAND_SIZE)
 
 SCORE_TRACK_SLOTS = 4
 SCORE_TRACK_GAP = 6.0
@@ -108,44 +109,46 @@ BANNER_MARKER_SIZE = 18.0
 BANNER_MARKER_GAP = 10.0
 HAND_TOP = WORLD_HEIGHT - 118.0
 
-UI_FONT_NAME = ("Roboto-Light", "Roboto Light", "Roboto", "Arial", "sans-serif")
-TITLE_FONT_NAME = ("Roboto-Bold", "Roboto Bold", "Roboto", "Arial", "sans-serif")
+UI_FONT_NAME = GAME_UI_FONT_NAME
+TITLE_FONT_NAME = GAME_TITLE_FONT_NAME
 
 
 # IO
+# Compact public-information P1 view:
+# - public global state
+# - per-lane public board state for both players
+# - P1 hand card ids only
 INPUT_FEATURE_NAMES = [
     "turn_norm",
-    "energy_self_norm",
-    "energy_opp_norm",
-    "score_self_norm",
-    "score_opp_norm",
-    "lane_0_power_self_norm",
-    "lane_0_power_opp_norm",
-    "lane_0_count_self_norm",
-    "lane_0_count_opp_norm",
-    "lane_1_power_self_norm",
-    "lane_1_power_opp_norm",
-    "lane_1_count_self_norm",
-    "lane_1_count_opp_norm",
-    "lane_2_power_self_norm",
-    "lane_2_power_opp_norm",
-    "lane_2_count_self_norm",
-    "lane_2_count_opp_norm",
-    "hand_0_type",
-    "hand_0_cost_norm",
-    "hand_0_value_norm",
-    "hand_1_type",
-    "hand_1_cost_norm",
-    "hand_1_value_norm",
-    "hand_2_type",
-    "hand_2_cost_norm",
-    "hand_2_value_norm",
-    "hand_3_type",
-    "hand_3_cost_norm",
-    "hand_3_value_norm",
-    "hand_4_type",
-    "hand_4_cost_norm",
-    "hand_4_value_norm",
+    "energy_p1_norm",
+    "energy_p2_norm",
+    "score_p1_norm",
+    "score_p2_norm",
+    "hand_count_p2_norm",
+    "phase_code",
+    "lane_0_power_p1_norm",
+    "lane_0_power_p2_norm",
+    "lane_0_unit_count_p1_norm",
+    "lane_0_unit_count_p2_norm",
+    "lane_0_status_p1",
+    "lane_0_status_p2",
+    "lane_1_power_p1_norm",
+    "lane_1_power_p2_norm",
+    "lane_1_unit_count_p1_norm",
+    "lane_1_unit_count_p2_norm",
+    "lane_1_status_p1",
+    "lane_1_status_p2",
+    "lane_2_power_p1_norm",
+    "lane_2_power_p2_norm",
+    "lane_2_unit_count_p1_norm",
+    "lane_2_unit_count_p2_norm",
+    "lane_2_status_p1",
+    "lane_2_status_p2",
+    "hand_0_card_id",
+    "hand_1_card_id",
+    "hand_2_card_id",
+    "hand_3_card_id",
+    "hand_4_card_id",
 ]
 ACTION_NAMES = [
     f"play_hand_{slot}_lane_{lane}"
@@ -201,7 +204,8 @@ REWARD_COMPONENT_NAMES = (
 
 
 # TRAINING
-HIDDEN_DIMENSIONS = [96, 96]
+# Default compact A2C trunk: 30 -> 64 -> 64, then actor/critic heads.
+HIDDEN_DIMENSIONS = [64, 64]
 SHARE_BACKBONE = True
 
 MAX_TRAINING_ITERATIONS = 8000

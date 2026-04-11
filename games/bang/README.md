@@ -1,22 +1,22 @@
 # Bang
 
-Top-down arena shooter focused on movement, aiming, and timing shots under pressure.
+Top-down arena shooter focused on movement, aiming, line of sight, and timing shots under pressure. Among the value-based games in the repo, `bang` is the most combat-oriented and the closest to a full arcade-style duel.
 
 ## Clip
 
 [![Bang Demo](../../media/bang-demo.gif)](../../media/bang-demo.mp4)
 
-## Algorithm / Network
+## Default Algorithm / Network
 
-- Algo: enhanced DQN (double + dueling + prioritized replay)
+- Algorithm: DQN with double Q-learning, dueling heads, and prioritized replay
 - Hidden sizes: `[64, 64]`
 
 ## Controls (Human)
 
-- Move: `W/A/S/D` (`move_up/move_left/move_down/move_right`)
-- Aim: left/right arrows (`aim_left/aim_right`)
-- Shoot: `Space` (`shoot`)
-- If no movement key is pressed in a frame, movement becomes `move_stop`.
+- Move: `W/A/S/D`
+- Aim: left/right arrows
+- Shoot: `Space`
+- If no movement key is held for a frame, movement intent becomes `move_stop`
 
 ## Observation / Actions
 
@@ -55,43 +55,35 @@ Top-down arena shooter focused on movement, aiming, and timing shots under press
   - `6 aim_right`
   - `7 shoot`
 
-Ray notes:
-- `ray_*` are normalized free-space-before-hit values in `[0,1]`.
-- `0.0` means the ray is blocked immediately.
-- `1.0` means no hit within ray range.
-- Hits include arena walls and obstacles.
+Ray features are normalized free-space-before-hit values in `[0, 1]`. Hits include arena walls and square obstacles.
 
 ## Environment Notes
 
-### Scripted Enemies
+- Scripted enemies retain the same target-selection and shot-error model used by earlier versions of the game.
+- Enemy movement comes from a small local planner rather than random move attempts.
+- Each replan scores relative move options such as hold, advance, retreat, strafe, and diagonal flank variants.
+- The planner prioritizes:
+  - regaining line of sight around cover
+  - holding a useful engagement distance around `SAFE_RADIUS`
+  - strafing when already in a favorable position
+  - avoiding oscillation around recently visited cells
+- `enemy_reposition_bias` is the main difficulty knob for enemy movement pressure.
 
-- Scripted enemies keep the current target-selection and shot-error model.
-- Movement is driven by a small local planner instead of random move attempts.
-- Each replan scores a small set of relative moves: hold, advance, retreat, strafe, and diagonal flank variants.
-- The planner prefers:
-  - regaining line of sight around obstacles
-  - holding a useful distance band around `SAFE_RADIUS`
-  - strafing when already in a good engagement position
-  - avoiding recently visited positions so enemies do not oscillate behind cover
-- `enemy_reposition_bias` is the main movement difficulty knob.
-  - Lower values make enemies less forceful about flanking cover.
-  - Higher values make them push harder to regain line of sight.
-
-Success per episode is `1` on win, else `0`.
+An episode counts as a success when the player wins the match.
 
 ## Rewards (Training)
 
-- Outcome `REWARD_WIN`: `+10` on match win.
-- Outcome `PENALTY_LOSE`: `-5` on match loss.
-- Event `REWARD_KILL`: `+2` per enemy elimination.
-- Engagement shaping: `r_eng = clip(0.5 * (Phi_eng_next - Phi_eng_prev), -0.25, +0.25)`, `Phi_eng = (1 if tgt_in_los else 0) - tgt_dist_norm`.
-- Hazard shaping: `r_haz = clip(0.5 * (Phi_haz_next - Phi_haz_prev), -0.25, +0.25)`, `Phi_haz = haz_dist_norm - 1.5 * haz_in_trajectory`.
-- Step `PENALTY_STEP`: `-0.005` every training step.
+- `REWARD_WIN = +10.0` on match win
+- `PENALTY_LOSE = -5.0` on match loss
+- `REWARD_KILL = +2.0` per enemy elimination
+- Engagement shaping: `clip(0.5 * (Phi_eng_next - Phi_eng_prev), -0.25, +0.25)` where `Phi_eng = (1 if tgt_in_los else 0) - tgt_dist_norm`
+- Hazard shaping: `clip(0.5 * (Phi_haz_next - Phi_haz_prev), -0.25, +0.25)` where `Phi_haz = haz_dist_norm - 1.5 * haz_in_trajectory`
+- `PENALTY_STEP = -0.005` every training step
 
 ## Curriculum (Train)
 
-- Shared 3-level curriculum progression (`core/curriculum.py`) is used in train mode.
-- Promotion settings live in `games/bang/config.py` under `CURRICULUM_PROMOTION`.
+- Shared 3-level curriculum progression from `core/curriculum.py`
+- Promotion settings live in `games/bang/config.py` under `CURRICULUM_PROMOTION`
 - Levels:
   - Level 1: `2` players, `4` obstacles, enemy reposition bias `0.25`, enemy shoot probability `0.025`
   - Level 2: `2` players, `8` obstacles, enemy reposition bias `0.60`, enemy shoot probability `0.05`
@@ -108,4 +100,4 @@ python -m scripts.play_ai --game bang --model best --render
 python -m scripts.play_user --game bang
 ```
 
-Check `games/bang/config.py` for full hyperparameters.
+See `games/bang/config.py` for the full reward constants, curriculum settings, and DQN hyperparameters.

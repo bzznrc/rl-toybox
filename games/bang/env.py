@@ -36,9 +36,11 @@ from core.match_tracker import MatchTracker
 from core.primitives import (
     draw_control_marker,
     draw_facing_indicator,
+    draw_status_bar,
+    draw_status_clock,
+    draw_status_icon_row,
+    status_icon_inset,
     draw_status_square_icon,
-    status_bar_layout,
-    draw_time_pie_indicator,
     draw_two_tone_tile,
     spawn_connected_random_walk_shapes,
     status_icon_size,
@@ -359,21 +361,17 @@ class Renderer:
         self.window_controller.flip()
 
     def _draw_status_bar(self) -> None:
-        arcade.draw_lbwh_rectangle_filled(0, 0, self.width, BB_HEIGHT, COLOR_DARK_NEUTRAL)
-        bar_layout = status_bar_layout(
+        bar_layout = draw_status_bar(
             width=float(self.width),
             bottom_bar_height=float(BB_HEIGHT),
             tile_size=float(TILE_SIZE),
             cell_inset=float(CELL_INSET),
             include_clock=True,
         )
-        if bar_layout.clock_center_x is not None:
-            self._draw_time_indicator(
-                center_x=float(bar_layout.clock_center_x),
-                center_y=float(bar_layout.center_y),
-                radius=float(bar_layout.clock_radius),
-                border_width=float(bar_layout.clock_border_width),
-            )
+        draw_status_clock(
+            layout=bar_layout,
+            remaining_ratio=float(self._remaining_time_ratio()),
+        )
         self._draw_winner_history(
             float(bar_layout.score_left),
             float(bar_layout.score_right),
@@ -383,53 +381,33 @@ class Renderer:
     def _remaining_time_ratio(self) -> float:
         return float(self.game.match_tracker.remaining_time_ratio(int(self.game.frame_count)))
 
-    def _draw_time_indicator(self, center_x: float, center_y: float, radius: float, border_width: float) -> None:
-        draw_time_pie_indicator(
-            center_x=float(center_x),
-            center_y=float(center_y),
-            radius=float(radius),
-            border_width=float(border_width),
-            remaining_ratio=float(self._remaining_time_ratio()),
-            base_color=COLOR_SLATE_GRAY,
-            fill_color=COLOR_FOG_GRAY,
-            outline_color=COLOR_FOG_GRAY,
-            num_segments=96,
-        )
-
     @staticmethod
     def _status_icon_size() -> float:
         return status_icon_size(float(BB_HEIGHT), float(TILE_SIZE))
 
     def _draw_winner_history(self, left: float, right: float, center_y: float) -> None:
-        available_width = max(0.0, float(right) - float(left))
-        if available_width <= 0.0:
-            return
-
         icon_size = self._status_icon_size()
-        icon_gap = 6.0
-        if icon_size <= 0.0:
-            return
-        max_icons = int((available_width + icon_gap) // (icon_size + icon_gap))
-        if max_icons <= 0:
-            return
+        winners = list(self.game.win_history)
 
-        winners = self.game.win_history[-max_icons:]
-        if not winners:
-            return
-
-        total_width = len(winners) * icon_size + max(0, len(winners) - 1) * icon_gap
-        start_x = float(left) + (available_width - total_width) / 2.0
-        for idx, player_id in enumerate(winners):
-            center_x = start_x + icon_size / 2.0 + idx * (icon_size + icon_gap)
+        def _draw_history_item(player_id: str | None, center_x: float, row_center_y: float, size: float) -> None:
             if player_id is None:
-                continue
-            self._draw_player_icon(player_id, center_x, center_y, icon_size)
+                return
+            self._draw_player_icon(str(player_id), float(center_x), float(row_center_y), float(size))
+
+        draw_status_icon_row(
+            left=float(left),
+            right=float(right),
+            center_y=float(center_y),
+            icon_size=float(icon_size),
+            items=winners,
+            draw_item=_draw_history_item,
+        )
 
     def _draw_player_icon(self, player_id: str, center_x: float, center_y: float, size: float) -> None:
         style = PLAYER_STYLES.get(player_id, {})
         fill_color = style.get("render_fill", COLOR_DEEP_TEAL)
         outline_color = style.get("render_outline", COLOR_AQUA)
-        inset = max(1.0, round(CELL_INSET * (size / max(1.0, float(TILE_SIZE)))))
+        inset = status_icon_inset(float(CELL_INSET))
         draw_status_square_icon(
             center_x=float(center_x),
             center_y=float(center_y),

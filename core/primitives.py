@@ -5,13 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import random
-from typing import Callable, Iterable, TypeVar
+from typing import Callable, Iterable, Sequence, TypeVar
 
 import arcade
 
-from core.runtime import ArcadeWindowController
+from core.arcade_style import COLOR_DARK_NEUTRAL, COLOR_FOG_GRAY, COLOR_SLATE_GRAY
+from core.arcade_style import DEFAULT_STATUS_BAR_FONT_SIZE, INTER_FONT_NAME
+from core.runtime import ArcadeWindowController, TextCache
 
 T = TypeVar("T")
+StatusTextEntry = tuple[str, object]
+STATUS_ICON_GAP = 6.0
+STATUS_CLOCK_BASE_COLOR = COLOR_SLATE_GRAY
+STATUS_CLOCK_FILL_COLOR = COLOR_FOG_GRAY
+STATUS_CLOCK_OUTLINE_COLOR = COLOR_FOG_GRAY
 
 
 def resolve_circle_collisions(
@@ -355,6 +362,10 @@ def status_icon_size(bottom_bar_height: float, tile_size: float) -> float:
     return max(12.0, min(float(bottom_bar_height - 8.0), float(tile_size)))
 
 
+def status_icon_inset(cell_inset: float) -> float:
+    return max(1.0, round(float(cell_inset)))
+
+
 @dataclass(frozen=True)
 class StatusBarLayout:
     center_y: float
@@ -420,6 +431,151 @@ def status_bar_layout(
         clock_radius=indicator_radius if bool(include_clock) else 0.0,
         clock_border_width=indicator_border,
     )
+
+
+def draw_status_bar(
+    *,
+    width: float,
+    bottom_bar_height: float,
+    tile_size: float,
+    cell_inset: float,
+    background_color: tuple[int, int, int] | tuple[int, int, int, int] = COLOR_DARK_NEUTRAL,
+    left_padding: float = 8.0,
+    right_padding: float = 10.0,
+    center_gap: float = 14.0,
+    left_panel_width: float = 0.0,
+    include_clock: bool = True,
+    text_cache: TextCache | None = None,
+    left_text_entries: Sequence[StatusTextEntry] | None = None,
+    text_color: tuple[int, int, int] | tuple[int, int, int, int] = COLOR_FOG_GRAY,
+    text_inset_x: float = 0.0,
+) -> StatusBarLayout:
+    arcade.draw_lbwh_rectangle_filled(
+        0,
+        0,
+        float(width),
+        float(bottom_bar_height),
+        background_color,
+    )
+    layout = status_bar_layout(
+        width=float(width),
+        bottom_bar_height=float(bottom_bar_height),
+        tile_size=float(tile_size),
+        cell_inset=float(cell_inset),
+        left_padding=float(left_padding),
+        right_padding=float(right_padding),
+        center_gap=float(center_gap),
+        left_panel_width=float(left_panel_width),
+        include_clock=bool(include_clock),
+    )
+    if text_cache is not None and left_text_entries is not None:
+        draw_status_left_text(
+            text_cache,
+            layout=layout,
+            entries=left_text_entries,
+            color=text_color,
+            inset_x=float(text_inset_x),
+        )
+    return layout
+
+
+def draw_status_icon_row(
+    *,
+    left: float,
+    right: float,
+    center_y: float,
+    icon_size: float,
+    items: Sequence[T],
+    draw_item: Callable[[T, float, float, float], None],
+    gap: float = STATUS_ICON_GAP,
+) -> None:
+    available_width = max(0.0, float(right) - float(left))
+    size = max(0.0, float(icon_size))
+    icon_gap = max(0.0, float(gap))
+    if available_width <= 0.0 or size <= 0.0:
+        return
+
+    item_list = list(items)
+    if not item_list:
+        return
+
+    max_icons = int((available_width + icon_gap) // (size + icon_gap))
+    if max_icons <= 0:
+        return
+
+    visible_items = item_list[-max_icons:]
+    total_width = len(visible_items) * size + max(0, len(visible_items) - 1) * icon_gap
+    start_x = float(left) + (available_width - total_width) * 0.5
+    for idx, item in enumerate(visible_items):
+        center_x = start_x + size * 0.5 + idx * (size + icon_gap)
+        draw_item(item, float(center_x), float(center_y), float(size))
+
+
+def draw_status_clock(
+    *,
+    layout: StatusBarLayout,
+    remaining_ratio: float,
+    num_segments: int = 96,
+) -> None:
+    if layout.clock_center_x is None or float(layout.clock_radius) <= 0.0:
+        return
+    draw_time_pie_indicator(
+        center_x=float(layout.clock_center_x),
+        center_y=float(layout.center_y),
+        radius=float(layout.clock_radius),
+        border_width=float(layout.clock_border_width),
+        remaining_ratio=float(remaining_ratio),
+        base_color=STATUS_CLOCK_BASE_COLOR,
+        fill_color=STATUS_CLOCK_FILL_COLOR,
+        outline_color=STATUS_CLOCK_OUTLINE_COLOR,
+        num_segments=int(num_segments),
+    )
+
+
+def format_status_text_entries(entries: Sequence[StatusTextEntry]) -> str:
+    parts: list[str] = []
+    for key, value in entries:
+        parts.append(f"{str(key)}: {str(value)}")
+    return "\t".join(parts)
+
+
+def draw_status_left_text(
+    text_cache: TextCache,
+    *,
+    layout: StatusBarLayout,
+    entries: Sequence[StatusTextEntry],
+    color: tuple[int, int, int] | tuple[int, int, int, int],
+    font_size: int | float = DEFAULT_STATUS_BAR_FONT_SIZE,
+    font_name: str | Iterable[str] = INTER_FONT_NAME,
+    inset_x: float = 0.0,
+    tab_gap_px: float | None = None,
+) -> None:
+    if float(layout.left_panel_right) <= float(layout.left_panel_left):
+        return
+    x = float(layout.left_panel_left) + float(inset_x)
+    y = float(layout.center_y) - 1.0
+    right = float(layout.left_panel_right)
+    gap = max(12.0, float(tab_gap_px) if tab_gap_px is not None else float(font_size) * 2.5)
+
+    for key, value in entries:
+        segment = f"{str(key)}: {str(value)}"
+        text_obj = text_cache.get_text(
+            text=segment,
+            color=color,
+            font_size=float(font_size),
+            font_name=font_name,
+            anchor_x="left",
+            anchor_y="center",
+        )
+        segment_width = float(getattr(text_obj, "content_width", 0.0))
+        if x + segment_width > right and x > float(layout.left_panel_left) + float(inset_x):
+            break
+        text_obj.x = float(x)
+        text_obj.y = float(y)
+        text_obj.draw()
+        x += segment_width + gap
+        if x >= right:
+            break
 
 
 def draw_status_square_icon(

@@ -528,12 +528,17 @@ def build_track_geometry(
         "bottom": str(template_choices[int(rng.integers(0, len(template_choices)))]),
     }
 
-    max_inset_guard = max(0.0, float(bell_amplitude_max_px), float(s_amplitude_max_px))
-    margin = float(padding_px) + float(half_width) + max_inset_guard + 2.0
-    left = margin
-    right = float(width) - margin
-    top = margin
-    bottom = float(height) - margin
+    # Only the long top/bottom sides can bow outward, so reserve bend margin on
+    # the specific long side that actually selected an outward-capable template.
+    margin_x = float(padding_px) + float(half_width) + 2.0
+    top_guard = float(s_amplitude_max_px) if str(long_side_templates.get("top", "straight")) == "s_curve" else 0.0
+    bottom_guard = (
+        float(s_amplitude_max_px) if str(long_side_templates.get("bottom", "straight")) == "s_curve" else 0.0
+    )
+    left = float(margin_x)
+    right = float(width) - float(margin_x)
+    top = float(padding_px) + float(half_width) + float(top_guard) + 2.0
+    bottom = float(height) - (float(padding_px) + float(half_width) + float(bottom_guard) + 2.0)
     if right <= left + 120.0 or bottom <= top + 120.0:
         raise RuntimeError("Track bounds too small after padding and width constraints.")
 

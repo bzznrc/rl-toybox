@@ -14,8 +14,7 @@ from core.envs.base import Env
 from core.io.runs import RunPaths, write_metrics
 from core.logging_utils import (
     format_reward_components,
-    log_episode_line,
-    log_ppo_metrics_line,
+    log_on_policy_episode_line,
     log_save_line,
     should_emit_train_progress_log,
 )
@@ -296,7 +295,9 @@ def run_on_policy_training(
                 components_text = format_reward_components(info.get("reward_components"))
                 best_avg_for_level = best_avg_reward_by_level.get(int(episode_level))
                 if should_emit_train_progress_log("on_policy_progress"):
-                    log_episode_line(
+                    cached_metrics = last_ppo_update_metrics or {}
+                    include_policy_metrics = _should_log_ppo_metrics_line(env)
+                    log_on_policy_episode_line(
                         episode=int(total_episodes),
                         level=int(episode_level),
                         ep_len=int(episode_steps),
@@ -307,41 +308,36 @@ def run_on_policy_training(
                             if stats_ready_level and best_avg_for_level is not None
                             else None
                         ),
-                        epsilon=None,
                         success=int(episode_success),
                         avg_success=avg_success_ep,
                         best_avg_label=f"BR{int(episode_level)}",
+                        policy_loss=(
+                            float(cached_metrics["policy_loss"])
+                            if include_policy_metrics and "policy_loss" in cached_metrics
+                            else None
+                        ),
+                        value_loss=(
+                            float(cached_metrics["value_loss"])
+                            if include_policy_metrics and "value_loss" in cached_metrics
+                            else None
+                        ),
+                        entropy=(
+                            float(cached_metrics["entropy"])
+                            if include_policy_metrics and "entropy" in cached_metrics
+                            else None
+                        ),
+                        approx_kl=(
+                            float(cached_metrics["approx_kl"])
+                            if include_policy_metrics and "approx_kl" in cached_metrics
+                            else None
+                        ),
+                        clip_frac=(
+                            float(cached_metrics["clip_frac"])
+                            if include_policy_metrics and "clip_frac" in cached_metrics
+                            else None
+                        ),
                         reward_components=components_text,
                     )
-                    cached_metrics = last_ppo_update_metrics or {}
-                    if _should_log_ppo_metrics_line(env):
-                        log_ppo_metrics_line(
-                            policy_loss=(
-                                float(cached_metrics["policy_loss"])
-                                if "policy_loss" in cached_metrics
-                                else None
-                            ),
-                            value_loss=(
-                                float(cached_metrics["value_loss"])
-                                if "value_loss" in cached_metrics
-                                else None
-                            ),
-                            entropy=(
-                                float(cached_metrics["entropy"])
-                                if "entropy" in cached_metrics
-                                else None
-                            ),
-                            approx_kl=(
-                                float(cached_metrics["approx_kl"])
-                                if "approx_kl" in cached_metrics
-                                else None
-                            ),
-                            clip_frac=(
-                                float(cached_metrics["clip_frac"])
-                                if "clip_frac" in cached_metrics
-                                else None
-                            ),
-                        )
                 obs = env.reset()
                 _reset_policy_state(algorithm)
                 episode_reward = 0.0

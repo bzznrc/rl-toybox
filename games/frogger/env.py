@@ -33,10 +33,13 @@ from core.envs.base import Env
 from core.io_schema import clip_unit
 from core.match_tracker import compact_count_to_icons
 from core.primitives import (
+    draw_status_bar,
+    draw_status_clock,
+    draw_status_icon_row,
+    status_icon_inset,
     draw_status_square_icon,
-    draw_time_pie_indicator,
     draw_two_tone_tile,
-    status_bar_layout,
+    status_icon_size,
 )
 from core.rewards import RewardBreakdown
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
@@ -715,13 +718,14 @@ class FroggerEnv(Env):
 
     @staticmethod
     def _status_icon_size() -> float:
-        return max(12.0, min(float(config.BB_HEIGHT - 8), float(config.FROG_SIZE_PX)))
+        return status_icon_size(float(config.BB_HEIGHT), float(config.FROG_SIZE_PX))
 
     def _score_icons(self) -> list[bool]:
         return compact_count_to_icons(int(self.score), pack_size=int(config.POINT_ICON_PACK_SIZE))
 
     def _draw_point_icon(self, center_x: float, center_y: float, size: float, compressed: bool = False) -> None:
-        inset = max(1.0, round(float(config.CELL_INSET) * (size / max(1.0, float(config.FROG_SIZE_PX)))))
+        inset = status_icon_inset(float(config.CELL_INSET))
+        marker_size = max(2.0, size * 0.26)
         draw_status_square_icon(
             center_x=float(center_x),
             center_y=float(center_y),
@@ -729,62 +733,30 @@ class FroggerEnv(Env):
             outer_color=COLOR_AQUA,
             inner_color=COLOR_DEEP_TEAL,
             inset=float(inset),
+            packed=bool(compressed),
+            packed_marker_color=COLOR_LIGHT_NEUTRAL,
+            packed_marker_size=float(marker_size),
         )
-        if compressed:
-            marker_size = max(2.0, size * 0.26)
-            arcade.draw_lbwh_rectangle_filled(
-                center_x - marker_size / 2.0,
-                center_y - marker_size / 2.0,
-                marker_size,
-                marker_size,
-                COLOR_LIGHT_NEUTRAL,
-            )
 
     def _draw_score_icons(self, left: float, right: float, center_y: float) -> None:
-        available_width = max(0.0, float(right) - float(left))
-        if available_width <= 0.0:
-            return
-
         icon_size = self._status_icon_size()
-        icon_gap = 6.0
-        max_icons = int((available_width + icon_gap) // (icon_size + icon_gap))
-        if max_icons <= 0:
-            return
-
         icons = self._score_icons()
-        if not icons:
-            return
-        icons = icons[-max_icons:]
-        total_width = len(icons) * icon_size + max(0, len(icons) - 1) * icon_gap
-        start_x = float(left) + (available_width - total_width) / 2.0
-        for idx, is_compressed in enumerate(icons):
-            center_x = start_x + icon_size / 2.0 + idx * (icon_size + icon_gap)
-            self._draw_point_icon(center_x=center_x, center_y=center_y, size=icon_size, compressed=bool(is_compressed))
-
-    def _draw_clock_icon(self, center_x: float, center_y: float, size: float, remaining_ratio: float) -> None:
-        inset = max(1.0, round(float(config.CELL_INSET) * (size / max(1.0, float(config.FROG_SIZE_PX)))))
-        draw_status_square_icon(
-            center_x=float(center_x),
+        draw_status_icon_row(
+            left=float(left),
+            right=float(right),
             center_y=float(center_y),
-            size=float(size),
-            outer_color=COLOR_FOG_GRAY,
-            inner_color=COLOR_SLATE_GRAY,
-            inset=float(inset),
-        )
-        draw_time_pie_indicator(
-            center_x=float(center_x),
-            center_y=float(center_y),
-            radius=max(1.0, float(size) * 0.28),
-            border_width=max(1.0, float(inset) * 0.5),
-            remaining_ratio=float(remaining_ratio),
-            base_color=COLOR_DARK_NEUTRAL,
-            fill_color=COLOR_SAND,
-            outline_color=COLOR_LIGHT_NEUTRAL,
+            icon_size=float(icon_size),
+            items=icons,
+            draw_item=lambda is_compressed, center_x, row_center_y, size: self._draw_point_icon(
+                center_x=float(center_x),
+                center_y=float(row_center_y),
+                size=float(size),
+                compressed=bool(is_compressed),
+            ),
         )
 
     def _draw_hud(self) -> None:
-        arcade.draw_lbwh_rectangle_filled(0, 0, float(config.SCREEN_WIDTH), float(config.BB_HEIGHT), COLOR_DARK_NEUTRAL)
-        layout = status_bar_layout(
+        layout = draw_status_bar(
             width=float(config.SCREEN_WIDTH),
             bottom_bar_height=float(config.BB_HEIGHT),
             tile_size=float(config.FROG_SIZE_PX),
@@ -792,13 +764,10 @@ class FroggerEnv(Env):
             include_clock=True,
             left_panel_width=0.0,
         )
-        if layout.clock_center_x is not None:
-            self._draw_clock_icon(
-                center_x=float(layout.clock_center_x),
-                center_y=float(layout.center_y),
-                size=self._status_icon_size(),
-                remaining_ratio=float(clip_unit(float(self.max_steps - self.steps) / float(max(1, self.max_steps)))),
-            )
+        draw_status_clock(
+            layout=layout,
+            remaining_ratio=float(clip_unit(float(self.max_steps - self.steps) / float(max(1, self.max_steps)))),
+        )
         self._draw_score_icons(
             left=float(layout.score_left),
             right=float(layout.score_right),

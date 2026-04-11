@@ -10,6 +10,7 @@ import time
 import arcade
 import numpy as np
 
+from assets.paths import resolve_font_path
 from core.arcade_style import (
     COLOR_AQUA,
     COLOR_BRICK_RED,
@@ -19,6 +20,7 @@ from core.arcade_style import (
     COLOR_FOG_GRAY,
     COLOR_LIGHT_NEUTRAL,
     COLOR_SLATE_GRAY,
+    INTER_FONT_FILE,
 )
 from core.curriculum import (
     ThreeLevelCurriculum,
@@ -32,15 +34,17 @@ from core.match_tracker import MatchTracker
 from core.primitives import (
     draw_control_marker,
     draw_facing_indicator,
+    draw_status_bar,
+    draw_status_clock,
+    draw_status_icon_row,
+    status_icon_inset,
     draw_status_square_icon,
-    draw_time_pie_indicator,
     draw_two_tone_tile,
     resolve_circle_collisions,
-    status_bar_layout,
     status_icon_size,
 )
 from core.rewards import RewardBreakdown
-from core.runtime import ArcadeFrameClock, ArcadeWindowController
+from core.runtime import ArcadeFrameClock, ArcadeWindowController, TextCache, load_font_once
 from core.utils import resolve_play_level
 from games.kick.config import (
     ACTION_NAMES as KICK_ACTION_NAMES,
@@ -250,6 +254,8 @@ class KickEnv(Env):
             queue_input_events=False,
             vsync=False,
         )
+        load_font_once(resolve_font_path(INTER_FONT_FILE))
+        self._text_cache = TextCache()
 
         self.pitch_top = 0.0
         self.pitch_bottom = float(SCREEN_HEIGHT - BB_HEIGHT)
@@ -331,6 +337,7 @@ class KickEnv(Env):
         self.last_action_index = self.ACTION_STAY
         self.show_bottom_reward_breakdown = bool(SHOW_BOTTOM_REWARD_BREAKDOWN)
         self.show_zone_target_clones = bool(SHOW_ZONE_TARGET_CLONES)
+        self._prev_overlay_toggle_down = False
         self.zone_target_clone_alpha = int(np.clip(int(ZONE_TARGET_CLONE_ALPHA), 0, 255))
 
         self._goal_scored_team: str | None = None
@@ -344,7 +351,6 @@ class KickEnv(Env):
         self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
         self._display_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
         self._display_step_components = {code: 0.0 for code in self.REWARD_COMPONENT_ORDER}
-        self._display_reward_line_text = self._format_display_reward_line(self._display_step_components)
         self._display_reward_last_update_time = 0.0
 
         self._apply_level_change(int(self._current_level))
@@ -1898,6 +1904,18 @@ class KickEnv(Env):
         key = self._z_anchor_player_key(player)
         return float(self._z_anchor_y.get(key, target_y))
 
+    def _can_toggle_visual_overlay(self) -> bool:
+        return bool(self.show_game and self.mode in {"human", "eval"})
+
+    def _update_visual_overlay_toggle(self) -> None:
+        if not self._can_toggle_visual_overlay():
+            self._prev_overlay_toggle_down = False
+            return
+        toggle_down = bool(self.window_controller.is_key_down(arcade.key.X))
+        if toggle_down and not self._prev_overlay_toggle_down:
+            self.show_zone_target_clones = not bool(self.show_zone_target_clones)
+        self._prev_overlay_toggle_down = bool(toggle_down)
+
     def _should_draw_zone_target_clones(self) -> bool:
         return bool(self.show_zone_target_clones and self.show_game and self.mode != "train")
 
@@ -2242,7 +2260,6 @@ class KickEnv(Env):
         self._episode_reward_components.reset()
         self._display_reward_components.reset()
         self._display_step_components = self._display_reward_components.totals()
-        self._display_reward_line_text = self._format_display_reward_line(self._display_step_components)
         self._display_reward_last_update_time = 0.0
         self.freeze_frames = 0
         self.controlled_index = int(self._default_controlled_index())
@@ -2369,7 +2386,7 @@ class KickEnv(Env):
 
     def _draw_team_icon(self, team: str, center_x: float, center_y: float, size: float) -> None:
         outline_color, fill_color = self._team_color_pair(team)
-        inset = max(1.0, round(CELL_INSET * (size / max(1.0, float(TILE_SIZE)))))
+        inset = status_icon_inset(float(CELL_INSET))
         draw_status_square_icon(
             center_x=float(center_x),
             center_y=float(center_y),
@@ -2382,43 +2399,39 @@ class KickEnv(Env):
     def _remaining_time_ratio(self) -> float:
         return float(self.match_tracker.remaining_time_ratio(int(self.steps)))
 
-    def _draw_time_indicator(self, center_x: float, center_y: float, radius: float, border_width: float) -> None:
-        draw_time_pie_indicator(
-            center_x=float(center_x),
-            center_y=float(center_y),
-            radius=float(radius),
-            border_width=float(border_width),
-            remaining_ratio=float(self._remaining_time_ratio()),
-            base_color=COLOR_SLATE_GRAY,
-            fill_color=COLOR_FOG_GRAY,
-            outline_color=COLOR_FOG_GRAY,
-            num_segments=96,
-        )
-
     def _draw_goal_icons(self, left: float, right: float, center_y: float) -> None:
-        available_width = max(0.0, float(right) - float(left))
-        if available_width <= 0.0:
-            return
-
         icon_size = self._status_icon_size()
         icon_gap = 6.0
+        available_width = max(0.0, float(right) - float(left))
+        half_width = max(0.0, (available_width - icon_gap) * 0.5)
         center_x = float(left) + available_width * 0.5
-        max_per_team = int(((available_width * 0.5) - icon_gap) // (icon_size + icon_gap))
-        if max_per_team <= 0:
-            return
 
-        left_count = min(int(self.left_score), max_per_team)
-        right_count = min(int(self.right_score), max_per_team)
-        left_total_width = left_count * icon_size + max(0, left_count - 1) * icon_gap
-        left_start_x = center_x - (icon_gap * 0.5) - left_total_width
-        for idx in range(left_count):
-            icon_center_x = left_start_x + icon_size * 0.5 + idx * (icon_size + icon_gap)
-            self._draw_team_icon(self.TEAM_LEFT, icon_center_x, center_y, icon_size)
-
-        right_start_x = center_x + icon_gap * 0.5
-        for idx in range(right_count):
-            icon_center_x = right_start_x + icon_size * 0.5 + idx * (icon_size + icon_gap)
-            self._draw_team_icon(self.TEAM_RIGHT, icon_center_x, center_y, icon_size)
+        draw_status_icon_row(
+            left=float(center_x - half_width - icon_gap * 0.5),
+            right=float(center_x - icon_gap * 0.5),
+            center_y=float(center_y),
+            icon_size=float(icon_size),
+            items=[self.TEAM_LEFT] * max(0, int(self.left_score)),
+            draw_item=lambda team, icon_center_x, row_center_y, size: self._draw_team_icon(
+                str(team),
+                float(icon_center_x),
+                float(row_center_y),
+                float(size),
+            ),
+        )
+        draw_status_icon_row(
+            left=float(center_x + icon_gap * 0.5),
+            right=float(center_x + icon_gap * 0.5 + half_width),
+            center_y=float(center_y),
+            icon_size=float(icon_size),
+            items=[self.TEAM_RIGHT] * max(0, int(self.right_score)),
+            draw_item=lambda team, icon_center_x, row_center_y, size: self._draw_team_icon(
+                str(team),
+                float(icon_center_x),
+                float(row_center_y),
+                float(size),
+            ),
+        )
 
     @staticmethod
     def _format_reward_component_value(code: str, value: float) -> str:
@@ -2427,12 +2440,16 @@ class KickEnv(Env):
             return f"{rounded:+.0f}"
         return f"{rounded:+.2f}"
 
-    def _format_display_reward_line(self, values_by_code: dict[str, float]) -> str:
-        body = " ".join(
-            f"{code}:{self._format_reward_component_value(code, float(values_by_code.get(code, 0.0)))}"
+    def _display_reward_entries(self) -> list[tuple[str, str]]:
+        if not self._should_draw_bottom_reward_breakdown():
+            return []
+        return [
+            (
+                str(code),
+                self._format_reward_component_value(code, float(self._display_step_components.get(code, 0.0))),
+            )
             for code in self.REWARD_COMPONENT_ORDER
-        )
-        return body
+        ]
 
     def _should_draw_bottom_reward_breakdown(self) -> bool:
         return bool(self.show_bottom_reward_breakdown and self.show_game)
@@ -2441,28 +2458,6 @@ class KickEnv(Env):
         if not self._should_draw_bottom_reward_breakdown():
             return 0.0
         return float(np.clip(float(SCREEN_WIDTH) * 0.34, 240.0, 360.0))
-
-    def _draw_bottom_reward_breakdown(self, left: float, right: float) -> None:
-        if not self._should_draw_bottom_reward_breakdown():
-            return
-        if float(right) <= float(left):
-            return
-
-        text_line = str(self._display_reward_line_text)
-        font_size = max(8.0, min(10.0, float(BB_HEIGHT) * 0.32))
-        panel_width = max(0.0, float(right) - float(left))
-        max_chars = max(8, int(panel_width / max(1.0, font_size * 0.58)))
-        if len(text_line) > max_chars:
-            text_line = f"{text_line[: max(0, max_chars - 3)]}..."
-        arcade.draw_text(
-            text_line,
-            float(left),
-            float(BB_HEIGHT) * 0.5,
-            COLOR_LIGHT_NEUTRAL,
-            font_size=font_size,
-            anchor_x="left",
-            anchor_y="center",
-        )
 
     def render(self) -> None:
         if self.window_controller.window is None:
@@ -2489,25 +2484,20 @@ class KickEnv(Env):
             COLOR_SLATE_GRAY,
         )
 
-        arcade.draw_lbwh_rectangle_filled(0, 0, SCREEN_WIDTH, BB_HEIGHT, COLOR_DARK_NEUTRAL)
-        bar_layout = status_bar_layout(
+        bar_layout = draw_status_bar(
             width=float(SCREEN_WIDTH),
             bottom_bar_height=float(BB_HEIGHT),
             tile_size=float(TILE_SIZE),
             cell_inset=float(CELL_INSET),
             left_panel_width=self._bottom_bar_left_panel_width(),
             include_clock=True,
+            text_cache=self._text_cache,
+            left_text_entries=self._display_reward_entries(),
+            text_color=COLOR_LIGHT_NEUTRAL,
         )
-        if bar_layout.clock_center_x is not None:
-            self._draw_time_indicator(
-                center_x=float(bar_layout.clock_center_x),
-                center_y=float(bar_layout.center_y),
-                radius=float(bar_layout.clock_radius),
-                border_width=float(bar_layout.clock_border_width),
-            )
-        self._draw_bottom_reward_breakdown(
-            left=float(bar_layout.left_panel_left),
-            right=float(bar_layout.left_panel_right),
+        draw_status_clock(
+            layout=bar_layout,
+            remaining_ratio=float(self._remaining_time_ratio()),
         )
         self._draw_goal_icons(
             float(bar_layout.score_left),
@@ -2532,6 +2522,9 @@ class KickEnv(Env):
                 "reward_components": self._episode_reward_components.totals(),
                 "reward_breakdown": {},
             }
+
+        self.window_controller.poll_events_or_raise()
+        self._update_visual_overlay_toggle()
 
         episode_level = int(self._current_level)
         parsed_action = self._decode_team_actions(action) if self.mode != "human" else self.ACTION_STAY
@@ -2592,7 +2585,6 @@ class KickEnv(Env):
 
         if display_update_due:
             self._display_step_components = self._display_reward_components.totals()
-            self._display_reward_line_text = self._format_display_reward_line(self._display_step_components)
             self._display_reward_last_update_time = float(display_now)
 
         self.render()

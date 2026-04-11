@@ -20,8 +20,8 @@ from games.vroom.track_geometry import (
 @dataclass(frozen=True)
 class TrackGenConfig:
     track_width_px: float = 85.0
-    padding_px: float = 40.0
-    footprint_scale: float = 0.975
+    padding_px: float = 8.0
+    footprint_scale: float = 1.0
     corner_radius_px: float = 130.0
     sample_spacing_px: float = 6.0
     start_straight_len_px: float = 180.0

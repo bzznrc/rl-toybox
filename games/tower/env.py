@@ -30,6 +30,9 @@ from core.arcade_style import (
     COLOR_DEEP_PURPLE,
     DEFAULT_CELL_INSET,
     DEFAULT_TILE_SIZE,
+    GAME_TITLE_FONT_NAME,
+    GAME_UI_FONT_NAME,
+    INTER_FONT_FILE,
 )
 from core.curriculum import (
     ThreeLevelCurriculum,
@@ -42,6 +45,7 @@ from core.io_schema import clip_unit, ordered_feature_vector
 from core.primitives import (
     draw_cell_union_outline,
     draw_facing_indicator,
+    draw_status_bar,
     draw_two_tone_tile,
 )
 from core.rewards import RewardBreakdown
@@ -64,7 +68,7 @@ TOWER_KIND_TO_ID = {"fast": 1.0, "heavy": 2.0, "area": 3.0}
 SELL_REFUND_BY_LEVEL = {1: 0.90, 2: 0.75, 3: 0.60}
 SPAWN_GAPS = {"light": 8, "armored": 16, "flying": 10}
 
-WORLD_BG_TOP = (36, 39, 45)
+WORLD_BG_TOP = COLOR_SLATE_GRAY
 WORLD_BG_BOTTOM = COLOR_DARK_NEUTRAL
 GROUND_PATH_OUTER = COLOR_FOG_GRAY
 GROUND_PATH_INNER = COLOR_SLATE_GRAY
@@ -91,8 +95,8 @@ MENU_TEXT_DISABLED = COLOR_FOG_GRAY + (96,)
 MENU_ITEM_WIDTH = 84.0
 MENU_ITEM_HEIGHT = 20.0
 MENU_ITEM_GAP = 3.0
-UI_FONT_NAME = ("Roboto-Light", "Roboto Light", "Roboto", "Arial", "sans-serif")
-BLOCK_FONT_NAME = ("Roboto-Bold", "Roboto Bold", "Roboto", "Arial", "sans-serif")
+UI_FONT_NAME = GAME_UI_FONT_NAME
+BLOCK_FONT_NAME = GAME_TITLE_FONT_NAME
 GRID_COLS = int(round(float(config.WORLD_WIDTH) / float(TILE_SIZE)))
 GRID_ROWS = int(round(float(config.WORLD_HEIGHT) / float(TILE_SIZE)))
 MAP_MARGIN_CELLS = 2
@@ -718,8 +722,7 @@ class TowerEnv(Env):
             vsync=False,
         )
         self._text_cache = TextCache(max_entries=512)
-        load_font_once(resolve_font_path("Roboto-Light.ttf"))
-        load_font_once(resolve_font_path("Roboto-Bold.ttf"))
+        load_font_once(resolve_font_path(INTER_FONT_FILE))
 
         curriculum_config = build_curriculum_config(
             min_level=int(config.MIN_LEVEL),
@@ -1727,7 +1730,6 @@ class TowerEnv(Env):
         self._draw_context_menu()
 
     def _draw_hud(self) -> None:
-        arcade.draw_lbwh_rectangle_filled(0, 0, config.SCREEN_WIDTH, config.BB_HEIGHT, COLOR_DARK_NEUTRAL)
         wave = self._current_wave()
         wave_label = "Done" if wave is None else f"{int(self.wave_index) + 1}/{len(self.wave_plan)}"
         preview_entry = "-"
@@ -1737,26 +1739,27 @@ class TowerEnv(Env):
                 SIDE_RIGHT: "Right",
                 ENTRY_BOTH: "Both",
             }.get(str(wave.entry_mode), str(wave.entry_mode).title())
-        segments = [
-            f"Credits: {int(self.credits)}",
-            f"Lives: {int(self.lives)}",
-            f"Wave: {wave_label}",
-            f"NextWave: {preview_entry}",
-            f"Light: {0 if wave is None else int(wave.count_light)}",
-            f"Armored: {0 if wave is None else int(wave.count_armored)}",
-            f"Flying: {0 if wave is None else int(wave.count_flying)}",
+        entries: list[tuple[str, object]] = [
+            ("Credits", int(self.credits)),
+            ("Lives", int(self.lives)),
+            ("Wave", wave_label),
+            ("NextWave", preview_entry),
+            ("Light", 0 if wave is None else int(wave.count_light)),
+            ("Armored", 0 if wave is None else int(wave.count_armored)),
+            ("Flying", 0 if wave is None else int(wave.count_flying)),
         ]
         if self._last_outcome:
-            segments.append(f"Status: {'Victory' if self._last_outcome == 'win' else 'Defeat'}")
-        self._text_cache.draw(
-            " / ".join(segments),
-            x=14.0,
-            y=float(config.BB_HEIGHT) * 0.5,
-            color=COLOR_LIGHT_NEUTRAL,
-            font_size=10,
-            font_name=UI_FONT_NAME,
-            anchor_x="left",
-            anchor_y="center",
+            entries.append(("Status", "Victory" if self._last_outcome == "win" else "Defeat"))
+        draw_status_bar(
+            width=float(config.SCREEN_WIDTH),
+            bottom_bar_height=float(config.BB_HEIGHT),
+            tile_size=float(TILE_SIZE),
+            cell_inset=float(CELL_INSET),
+            left_panel_width=max(0.0, float(config.SCREEN_WIDTH) - 16.0),
+            include_clock=False,
+            text_cache=self._text_cache,
+            left_text_entries=entries,
+            text_color=COLOR_LIGHT_NEUTRAL,
         )
 
     def render(self) -> None:

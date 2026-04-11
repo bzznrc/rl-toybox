@@ -27,7 +27,15 @@ from core.curriculum import (
 from core.envs.base import Env
 from core.io_schema import clip_signed, clip_unit, normalize_last_action, ordered_feature_vector, signed_potential_shaping
 from core.match_tracker import compact_count_to_icons
-from core.primitives import draw_two_tone_tile, spawn_connected_random_walk_shapes
+from core.primitives import (
+    draw_status_bar,
+    draw_status_icon_row,
+    status_icon_inset,
+    draw_status_square_icon,
+    draw_two_tone_tile,
+    spawn_connected_random_walk_shapes,
+    status_icon_size,
+)
 from core.rewards import RewardBreakdown
 from games.snake.config import (
     ACTION_NAMES as SNAKE_ACTION_NAMES,
@@ -259,65 +267,57 @@ class BaseSnakeGame:
             self._draw_tile(tile, outer_color, inner_color)
 
     def _draw_status_bar(self) -> None:
-        arcade.draw_lbwh_rectangle_filled(0, 0, self.width, BB_HEIGHT, COLOR_DARK_NEUTRAL)
-        self._draw_score_icons(left=8.0, right=self.width - 8.0, center_y=BB_HEIGHT / 2.0)
+        layout = draw_status_bar(
+            width=float(self.width),
+            bottom_bar_height=float(BB_HEIGHT),
+            tile_size=float(TILE_SIZE),
+            cell_inset=float(CELL_INSET),
+            include_clock=False,
+        )
+        self._draw_score_icons(
+            left=float(layout.score_left),
+            right=float(layout.score_right),
+            center_y=float(layout.center_y),
+        )
 
     @staticmethod
     def _status_icon_size() -> float:
-        return max(12.0, min(float(BB_HEIGHT - 8), float(TILE_SIZE)))
+        return status_icon_size(float(BB_HEIGHT), float(TILE_SIZE))
 
     def _score_icons(self) -> list[bool]:
         return compact_count_to_icons(int(self.score), pack_size=5)
 
     def _draw_score_icons(self, left: float, right: float, center_y: float) -> None:
-        available_width = max(0.0, float(right) - float(left))
-        if available_width <= 0.0:
-            return
-
         icon_size = self._status_icon_size()
-        icon_gap = 6.0
-        if icon_size <= 0.0:
-            return
-
-        max_icons = int((available_width + icon_gap) // (icon_size + icon_gap))
-        if max_icons <= 0:
-            return
-
         icons = self._score_icons()
-        if not icons:
-            return
-        icons = icons[-max_icons:]
-
-        total_width = len(icons) * icon_size + max(0, len(icons) - 1) * icon_gap
-        start_x = float(left) + (available_width - total_width) / 2.0
-        for idx, is_compressed in enumerate(icons):
-            center_x = start_x + icon_size / 2.0 + idx * (icon_size + icon_gap)
-            self._draw_fruit_icon(center_x=center_x, center_y=center_y, size=icon_size, compressed=is_compressed)
-
-    def _draw_fruit_icon(self, center_x: float, center_y: float, size: float, compressed: bool = False) -> None:
-        bottom = center_y - size / 2.0
-        left = center_x - size / 2.0
-        arcade.draw_lbwh_rectangle_filled(left, bottom, size, size, COLOR_CORAL)
-
-        inset = max(1.0, round(CELL_INSET * (size / max(1.0, float(TILE_SIZE)))))
-        inner_size = max(1.0, size - 2.0 * inset)
-        arcade.draw_lbwh_rectangle_filled(
-            left + inset,
-            bottom + inset,
-            inner_size,
-            inner_size,
-            COLOR_BRICK_RED,
+        draw_status_icon_row(
+            left=float(left),
+            right=float(right),
+            center_y=float(center_y),
+            icon_size=float(icon_size),
+            items=icons,
+            draw_item=lambda is_compressed, center_x, row_center_y, size: self._draw_fruit_icon(
+                center_x=float(center_x),
+                center_y=float(row_center_y),
+                size=float(size),
+                compressed=bool(is_compressed),
+            ),
         )
 
-        if compressed:
-            marker_size = max(2.0, round(NN_CONTROL_MARKER_SIZE_PX * (size / max(1.0, float(TILE_SIZE)))))
-            arcade.draw_lbwh_rectangle_filled(
-                center_x - marker_size / 2.0,
-                center_y - marker_size / 2.0,
-                marker_size,
-                marker_size,
-                COLOR_CORAL,
-            )
+    def _draw_fruit_icon(self, center_x: float, center_y: float, size: float, compressed: bool = False) -> None:
+        inset = status_icon_inset(float(CELL_INSET))
+        marker_size = max(2.0, round(NN_CONTROL_MARKER_SIZE_PX * (size / max(1.0, float(TILE_SIZE)))))
+        draw_status_square_icon(
+            center_x=float(center_x),
+            center_y=float(center_y),
+            size=float(size),
+            outer_color=COLOR_CORAL,
+            inner_color=COLOR_BRICK_RED,
+            inset=float(inset),
+            packed=bool(compressed),
+            packed_marker_color=COLOR_CORAL,
+            packed_marker_size=float(marker_size),
+        )
 
     def draw_frame(self) -> None:
         if self.window is None:

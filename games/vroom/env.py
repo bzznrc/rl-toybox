@@ -40,11 +40,13 @@ from core.io_schema import (
 from core.match_tracker import MatchTracker
 from core.primitives import (
     draw_facing_indicator,
-    draw_time_pie_indicator,
+    draw_status_bar,
+    draw_status_clock,
+    draw_status_icon_row,
+    status_icon_inset,
     draw_status_square_icon,
     draw_two_tone_tile,
     resolve_circle_collisions,
-    status_bar_layout,
     status_icon_size,
 )
 from core.ray_viz import draw_player_rays
@@ -331,6 +333,8 @@ class VroomEnv(Env):
 
         self.steps = 0
         self.done = False
+        self.show_rays = bool(DRAW_RAYS)
+        self._prev_overlay_toggle_down = False
         self.last_action = np.zeros((self.ACT_DIM,), dtype=np.float32)
         self._last_ray_values = np.ones((5,), dtype=np.float32)
         self._last_ray_origin = (0.0, 0.0)
@@ -812,6 +816,18 @@ class VroomEnv(Env):
             brake=(1.0 if bool(brake) else 0.0),
         )
 
+    def _can_toggle_visual_overlay(self) -> bool:
+        return bool(self.show_game and self.mode in {"human", "eval"})
+
+    def _update_visual_overlay_toggle(self) -> None:
+        if not self._can_toggle_visual_overlay():
+            self._prev_overlay_toggle_down = False
+            return
+        toggle_down = bool(self.window_controller.is_key_down(arcade.key.X))
+        if toggle_down and not self._prev_overlay_toggle_down:
+            self.show_rays = not bool(self.show_rays)
+        self._prev_overlay_toggle_down = bool(toggle_down)
+
     def _ai_lane_limit(self) -> float:
         return max(4.0, float(self.track_half_width) - float(self.track_probe_radius) - 1.0)
 
@@ -1158,6 +1174,7 @@ class VroomEnv(Env):
             return self._last_obs, 0.0, True, done_info
 
         self.window_controller.poll_events_or_raise()
+        self._update_visual_overlay_toggle()
         if self.mode == "human":
             action_array = self._resolve_human_action()
         else:
@@ -1273,7 +1290,7 @@ class VroomEnv(Env):
         arcade.draw_line(x1, ay1, x2, ay2, edge_color, edge_width)
 
     def _draw_rays(self) -> None:
-        if not bool(DRAW_RAYS):
+        if not bool(self.show_rays and self.show_game):
             return
         origin_x, origin_y = self._last_ray_origin
         draw_player_rays(
@@ -1315,7 +1332,7 @@ class VroomEnv(Env):
     def _draw_player_icon(self, winner_idx: int, center_x: float, center_y: float, size: float) -> None:
         pair = self.player_color_pairs[int(winner_idx) % len(self.player_color_pairs)]
         outline_color, fill_color = pair[0], pair[1]
-        inset = max(1.0, round(4.0 * (size / max(1.0, float(TILE_SIZE)))))
+        inset = status_icon_inset(4.0)
         draw_status_square_icon(
             center_x=float(center_x),
             center_y=float(center_y),
@@ -1326,63 +1343,39 @@ class VroomEnv(Env):
         )
 
     def _draw_winner_history(self, left: float, right: float, center_y: float) -> None:
-        available_width = max(0.0, float(right) - float(left))
-        if available_width <= 0.0:
-            return
-
         icon_size = self._status_icon_size()
-        icon_gap = 6.0
-        if icon_size <= 0.0:
-            return
-        max_icons = int((available_width + icon_gap) // (icon_size + icon_gap))
-        if max_icons <= 0:
-            return
-
-        winners = self.win_history[-max_icons:]
-        if not winners:
-            return
-
-        total_width = len(winners) * icon_size + max(0, len(winners) - 1) * icon_gap
-        start_x = float(left) + (available_width - total_width) / 2.0
-        for idx, winner in enumerate(winners):
-            if winner is None:
-                continue
-            center_x = start_x + icon_size / 2.0 + idx * (icon_size + icon_gap)
-            self._draw_player_icon(int(winner), center_x, center_y, icon_size)
+        draw_status_icon_row(
+            left=float(left),
+            right=float(right),
+            center_y=float(center_y),
+            icon_size=float(icon_size),
+            items=list(self.win_history),
+            draw_item=lambda winner, icon_center_x, row_center_y, size: self._draw_player_icon(
+                int(winner),
+                float(icon_center_x),
+                float(row_center_y),
+                float(size),
+            )
+            if winner is not None
+            else None,
+        )
 
     def _remaining_time_ratio(self) -> float:
         return float(self.match_tracker.remaining_time_ratio(int(self.steps)))
 
-    def _draw_time_indicator(self, center_x: float, center_y: float, radius: float, border_width: float) -> None:
-        draw_time_pie_indicator(
-            center_x=float(center_x),
-            center_y=float(center_y),
-            radius=float(radius),
-            border_width=float(border_width),
-            remaining_ratio=float(self._remaining_time_ratio()),
-            base_color=COLOR_SLATE_GRAY,
-            fill_color=COLOR_FOG_GRAY,
-            outline_color=COLOR_FOG_GRAY,
-            num_segments=96,
-        )
-
     def _draw_status_bar(self) -> None:
-        arcade.draw_lbwh_rectangle_filled(0, 0, float(SCREEN_WIDTH), float(BB_HEIGHT), COLOR_DARK_NEUTRAL)
         include_clock = self.match_tracker.clock_duration_steps is not None
-        bar_layout = status_bar_layout(
+        bar_layout = draw_status_bar(
             width=float(SCREEN_WIDTH),
             bottom_bar_height=float(BB_HEIGHT),
             tile_size=float(TILE_SIZE),
             cell_inset=4.0,
             include_clock=bool(include_clock),
         )
-        if include_clock and bar_layout.clock_center_x is not None:
-            self._draw_time_indicator(
-                center_x=float(bar_layout.clock_center_x),
-                center_y=float(bar_layout.center_y),
-                radius=float(bar_layout.clock_radius),
-                border_width=float(bar_layout.clock_border_width),
-            )
+        draw_status_clock(
+            layout=bar_layout,
+            remaining_ratio=float(self._remaining_time_ratio()),
+        )
         self._draw_winner_history(
             float(bar_layout.score_left),
             float(bar_layout.score_right),

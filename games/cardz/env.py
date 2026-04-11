@@ -18,6 +18,9 @@ from core.arcade_style import (
     COLOR_FOG_GRAY,
     COLOR_LIGHT_NEUTRAL,
     COLOR_SLATE_GRAY,
+    DEFAULT_CELL_INSET,
+    DEFAULT_TILE_SIZE,
+    INTER_FONT_FILE,
 )
 from core.curriculum import (
     ThreeLevelCurriculum,
@@ -26,9 +29,9 @@ from core.curriculum import (
     validate_curriculum_level_settings,
 )
 from core.envs.base import Env
-from core.io_schema import clip_signed, clip_unit, ordered_feature_vector
+from core.io_schema import clip_unit, ordered_feature_vector
 from core.match_tracker import compact_count_to_icons
-from core.primitives import draw_status_square_icon
+from core.primitives import draw_status_bar, draw_status_square_icon
 from core.rewards import RewardBreakdown
 from core.runtime import ArcadeFrameClock, ArcadeWindowController, Rect, TextCache, load_font_once
 from core.utils import resolve_play_level
@@ -69,7 +72,7 @@ class CardDefinition:
     cost: int
     power: int
     value: int
-    type_id: float
+    card_id: float
 
 
 CARD_DEFS = {
@@ -79,7 +82,7 @@ CARD_DEFS = {
         cost=int(config.CARD_COSTS[str(key)]),
         power=int(config.CARD_POWERS[str(key)]),
         value=int(config.CARD_VALUES[str(key)]),
-        type_id=float(config.CARD_TYPE_IDS[str(key)]),
+        card_id=float(config.CARD_IDS[str(key)]),
     )
     for key in config.CARD_DRAW_ORDER
 }
@@ -95,7 +98,7 @@ OPPONENT_PASS_SCORE_THRESHOLD = 0.35
 
 
 class CardzEnv(Env):
-    """Tiny 2-player hidden-info lane-control environment."""
+    """Tiny 2-player lane-control environment with a compact public P1 view."""
 
     INPUT_FEATURE_NAMES = tuple(config.INPUT_FEATURE_NAMES)
     ACTION_NAMES = tuple(config.ACTION_NAMES)
@@ -143,7 +146,7 @@ class CardzEnv(Env):
             queue_input_events=self.mode == "human",
             vsync=False,
         )
-        load_font_once(resolve_font_path("Roboto-Light.ttf"))
+        load_font_once(resolve_font_path(INTER_FONT_FILE))
         self._text = TextCache()
 
         self._lane_rects = self._build_lane_rects()
@@ -158,7 +161,6 @@ class CardzEnv(Env):
         self._scores = np.zeros((config.PLAYER_COUNT,), dtype=np.int32)
         self._lane_scores = np.zeros((config.PLAYER_COUNT, config.NUM_LANES), dtype=np.int32)
         self._energy = np.zeros((config.PLAYER_COUNT,), dtype=np.int32)
-        self._persistent_power = np.zeros((config.PLAYER_COUNT, config.NUM_LANES), dtype=np.int32)
         self._temp_modifiers = np.zeros((config.PLAYER_COUNT, config.NUM_LANES), dtype=np.int32)
         self._lane_banners = np.zeros((config.PLAYER_COUNT, config.NUM_LANES), dtype=np.bool_)
         self._hands: list[list[str]] = [[], []]
@@ -318,7 +320,6 @@ class CardzEnv(Env):
         self._scores.fill(0)
         self._lane_scores.fill(0)
         self._energy.fill(0)
-        self._persistent_power.fill(0)
         self._temp_modifiers.fill(0)
         self._lane_banners.fill(False)
         self._hands = [[], []]
@@ -410,44 +411,61 @@ class CardzEnv(Env):
             - self._persistent_lane_total(int(opponent), int(lane))
         )
 
+    def _lane_status_code(self, player: int, lane: int) -> float:
+        # Public lane status bits: BAN=1, ATK=2.
+        status_code = 0
+        if self._lane_has_banner(int(player), int(lane)):
+            status_code += 1
+        if self._lane_has_attack(int(player), int(lane)):
+            status_code += 2
+        return float(status_code)
+
+    def _phase_code(self) -> float:
+        # Phase codes stay as compact public state ids rather than one-hot flags.
+        if bool(self._passed[int(PLAYER_P2)]):
+            return 2.0
+        if int(self._turn_lead_player(int(self.turn))) == int(PLAYER_P1):
+            return 0.0
+        return 1.0
+
     def _build_observation(self) -> np.ndarray:
-        actor = int(PLAYER_P1)
-        opponent = int(PLAYER_P2)
         feature_values: dict[str, float] = {
             "turn_norm": float(clip_unit(float(self.turn) / float(config.TURN_NORMALIZER))),
-            "energy_self_norm": float(clip_unit(float(self._energy[actor]) / float(config.ENERGY_NORMALIZER))),
-            "energy_opp_norm": float(clip_unit(float(self._energy[opponent]) / float(config.ENERGY_NORMALIZER))),
-            "score_self_norm": float(clip_unit(float(self._scores[actor]) / float(config.MATCH_SCORE_NORMALIZER))),
-            "score_opp_norm": float(clip_unit(float(self._scores[opponent]) / float(config.MATCH_SCORE_NORMALIZER))),
+            "energy_p1_norm": float(clip_unit(float(self._energy[int(PLAYER_P1)]) / float(config.ENERGY_NORMALIZER))),
+            "energy_p2_norm": float(clip_unit(float(self._energy[int(PLAYER_P2)]) / float(config.ENERGY_NORMALIZER))),
+            "score_p1_norm": float(
+                clip_unit(float(self._scores[int(PLAYER_P1)]) / float(config.MATCH_SCORE_NORMALIZER))
+            ),
+            "score_p2_norm": float(
+                clip_unit(float(self._scores[int(PLAYER_P2)]) / float(config.MATCH_SCORE_NORMALIZER))
+            ),
+            "hand_count_p2_norm": float(
+                clip_unit(float(len(self._hands[int(PLAYER_P2)])) / float(config.HAND_COUNT_NORMALIZER))
+            ),
+            "phase_code": float(self._phase_code()),
         }
         for lane in range(config.NUM_LANES):
-            feature_values[f"lane_{lane}_power_self_norm"] = float(
-                clip_signed(float(self._lane_total(actor, lane)) / float(config.LANE_POWER_NORMALIZER))
+            feature_values[f"lane_{lane}_power_p1_norm"] = float(
+                clip_unit(float(self._lane_total(int(PLAYER_P1), int(lane))) / float(config.LANE_POWER_NORMALIZER))
             )
-            feature_values[f"lane_{lane}_power_opp_norm"] = float(
-                clip_signed(float(self._lane_total(opponent, lane)) / float(config.LANE_POWER_NORMALIZER))
+            feature_values[f"lane_{lane}_power_p2_norm"] = float(
+                clip_unit(float(self._lane_total(int(PLAYER_P2), int(lane))) / float(config.LANE_POWER_NORMALIZER))
             )
-            feature_values[f"lane_{lane}_count_self_norm"] = float(
-                clip_unit(float(self._lane_unit_count(actor, lane)) / float(config.LANE_COUNT_NORMALIZER))
+            feature_values[f"lane_{lane}_unit_count_p1_norm"] = float(
+                clip_unit(float(self._lane_unit_count(int(PLAYER_P1), int(lane))) / float(config.LANE_COUNT_NORMALIZER))
             )
-            feature_values[f"lane_{lane}_count_opp_norm"] = float(
-                clip_unit(float(self._lane_unit_count(opponent, lane)) / float(config.LANE_COUNT_NORMALIZER))
+            feature_values[f"lane_{lane}_unit_count_p2_norm"] = float(
+                clip_unit(float(self._lane_unit_count(int(PLAYER_P2), int(lane))) / float(config.LANE_COUNT_NORMALIZER))
             )
+            feature_values[f"lane_{lane}_status_p1"] = float(self._lane_status_code(int(PLAYER_P1), int(lane)))
+            feature_values[f"lane_{lane}_status_p2"] = float(self._lane_status_code(int(PLAYER_P2), int(lane)))
         for slot in range(config.MAX_HAND_SIZE):
-            card_key = self._card_in_slot(actor, slot)
+            card_key = self._card_in_slot(int(PLAYER_P1), int(slot))
             if card_key is None:
-                feature_values[f"hand_{slot}_type"] = 0.0
-                feature_values[f"hand_{slot}_cost_norm"] = 0.0
-                feature_values[f"hand_{slot}_value_norm"] = 0.0
+                feature_values[f"hand_{slot}_card_id"] = 0.0
                 continue
             card = CARD_DEFS[str(card_key)]
-            feature_values[f"hand_{slot}_type"] = float(card.type_id)
-            feature_values[f"hand_{slot}_cost_norm"] = float(
-                clip_unit(float(card.cost) / float(config.CARD_COST_NORMALIZER))
-            )
-            feature_values[f"hand_{slot}_value_norm"] = float(
-                clip_unit(float(card.value) / float(config.CARD_VALUE_NORMALIZER))
-            )
+            feature_values[f"hand_{slot}_card_id"] = float(card.card_id)
         obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
         if obs.shape != (self.OBS_DIM,):
             raise RuntimeError(f"Cardz observation expected {self.OBS_DIM} features, got {obs.shape[0]}.")
@@ -624,7 +642,6 @@ class CardzEnv(Env):
         self._energy[int(player)] -= int(card.cost)
         if card.kind == "unit":
             self._lane_units[int(lane)][int(player)].append(str(card.key))
-            self._persistent_power[int(player), int(lane)] += int(card.power)
         elif card.key == "Atk":
             self._temp_modifiers[int(player), int(lane)] = int(config.ATK_DELTA)
         elif card.key == "Ban":
@@ -1288,40 +1305,40 @@ class CardzEnv(Env):
             return f"[{lead_label}]/{follow_label}"
         return f"{lead_label}/[{follow_label}]"
 
-    def _status_line(self) -> str:
+    def _status_entries(self) -> list[tuple[str, object]]:
         if self._done:
             result = "Draw" if self._winner is None else f"{self._turn_player_name(int(self._winner))} wins"
-            return (
-                f"Turn: {int(self.turn)}/{int(config.MAX_TURNS)}  "
-                f"Result: {result}  "
-                f"Score: {int(self._scores[int(PLAYER_P1)])}/{int(self._scores[int(PLAYER_P2)])}  "
-                "Enter restart"
-            )
+            return [
+                ("Turn", f"{int(self.turn)}/{int(config.MAX_TURNS)}"),
+                ("Result", result),
+                ("Score", f"{int(self._scores[int(PLAYER_P1)])}/{int(self._scores[int(PLAYER_P2)])}"),
+                ("Restart", "Enter"),
+            ]
         if self._turn_pause_active:
-            return (
-                f"Turn: {int(self.turn)}/{int(config.MAX_TURNS)}  "
-                "Resolving turn...  "
-                f"Score: {int(self._scores[int(PLAYER_P1)])}/{int(self._scores[int(PLAYER_P2)])}"
-            )
+            return [
+                ("Turn", f"{int(self.turn)}/{int(config.MAX_TURNS)}"),
+                ("Status", "Resolving turn..."),
+                ("Score", f"{int(self._scores[int(PLAYER_P1)])}/{int(self._scores[int(PLAYER_P2)])}"),
+            ]
         turn_cap = min(int(config.MAX_TURNS), max(1, int(self.turn)))
-        return (
-            f"Turn: {int(self.turn)}/{int(config.MAX_TURNS)}  "
-            f"Playing: {self._playing_state_text()}  "
-            f"Energy: {int(self._energy[int(self.current_player)])}/{turn_cap}  "
-            f"Score: {int(self._scores[int(PLAYER_P1)])}/{int(self._scores[int(PLAYER_P2)])}"
-        )
+        return [
+            ("Turn", f"{int(self.turn)}/{int(config.MAX_TURNS)}"),
+            ("Playing", self._playing_state_text()),
+            ("Energy", f"{int(self._energy[int(self.current_player)])}/{turn_cap}"),
+            ("Score", f"{int(self._scores[int(PLAYER_P1)])}/{int(self._scores[int(PLAYER_P2)])}"),
+        ]
 
     def _draw_bottom_bar(self) -> None:
-        arcade.draw_lbwh_rectangle_filled(0, 0, float(config.SCREEN_WIDTH), float(config.BB_HEIGHT), WORLD_BG)
-        self._text.draw(
-            self._status_line(),
-            x=float(config.SCREEN_WIDTH) * 0.5,
-            y=float(config.BB_HEIGHT) * 0.5,
-            color=COLOR_LIGHT_NEUTRAL,
-            font_size=11,
-            font_name=config.UI_FONT_NAME,
-            anchor_x="center",
-            anchor_y="center",
+        layout = draw_status_bar(
+            width=float(config.SCREEN_WIDTH),
+            bottom_bar_height=float(config.BB_HEIGHT),
+            tile_size=float(DEFAULT_TILE_SIZE),
+            cell_inset=float(DEFAULT_CELL_INSET),
+            left_panel_width=max(0.0, float(config.SCREEN_WIDTH) - 16.0),
+            include_clock=False,
+            text_cache=self._text,
+            left_text_entries=self._status_entries(),
+            text_color=COLOR_LIGHT_NEUTRAL,
         )
 
     def render(self) -> None:

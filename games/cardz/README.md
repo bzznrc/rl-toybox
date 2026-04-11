@@ -2,10 +2,6 @@
 
 Two-player lane-control card game built around hidden information, scripted opposition, and masked actions. `cardz` is the repo's smallest stochastic card game and a useful actor-critic example for turn-based decisions with legality constraints.
 
-## Clip
-
-No demo clip published yet.
-
 ## Default Algorithm / Network
 
 - Algorithm: `a2c` on the shared on-policy actor-critic stack

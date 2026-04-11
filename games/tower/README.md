@@ -2,10 +2,6 @@
 
 Wave-based tower defense built around build-phase planning, action masking, and delayed rewards. `tower` is the repo's clearest example of a value-based game where the policy acts at decision points instead of every frame.
 
-## Clip
-
-No demo clip published yet.
-
 ## Default Algorithm / Network
 
 - Algorithm family: value-based discrete control

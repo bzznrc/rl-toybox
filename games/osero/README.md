@@ -2,10 +2,6 @@
 
 Compact Osero/Reversi implementation built around self-play, MCTS, and a small policy/value network. It is the planning-oriented game in the repo and the clearest example of search-guided training.
 
-## Clip
-
-No demo clip published yet.
-
 ## Default Algorithm / Network
 
 - Algorithm family: `search_play`

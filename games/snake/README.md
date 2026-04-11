@@ -4,7 +4,7 @@ Classic grid Snake with a small obstacle curriculum, compact observations, and l
 
 ## Clip
 
-[![Snake Demo](../../media/snake-demo.gif)](../../media/snake-demo.mp4)
+![Snake Demo](../../media/snake-demo.gif)
 
 ## Default Algorithm / Network
 

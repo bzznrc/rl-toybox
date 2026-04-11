@@ -1706,19 +1706,20 @@ class BangEnv(Env):
 
         if self.mode == "human":
             self.game = HumanGame(show_game=show_game, level=int(self._current_level))
-            return
+        else:
+            level = int(self._current_level)
+            if end_on_player_death is None:
+                end_on_player_death = self.mode == "train"
 
-        level = int(self._current_level)
-        if end_on_player_death is None:
-            end_on_player_death = self.mode == "train"
-
-        self._current_level = int(level)
-        self.game = TrainingGame(
-            level=int(level),
-            show_game=show_game,
-            end_on_player_death=bool(end_on_player_death),
-        )
-        self._apply_level_settings(int(self._current_level))
+            self._current_level = int(level)
+            self.game = TrainingGame(
+                level=int(level),
+                show_game=show_game,
+                end_on_player_death=bool(end_on_player_death),
+            )
+            self._apply_level_settings(int(self._current_level))
+        self.window_controller = self.game.window_controller
+        self.window = self.game.window
 
     def _apply_level_settings(self, level: int) -> None:
         if not hasattr(self, "game"):
@@ -1783,9 +1784,9 @@ class BangEnv(Env):
         return obs, float(reward), bool(done), info
 
     def render(self) -> None:
-        # Bang self-renders inside play_step when show_game is enabled.
-        return None
+        self.game.draw_frame()
 
     def close(self) -> None:
         self.game.close()
+        self.window = None
 

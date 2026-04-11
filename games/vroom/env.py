@@ -43,10 +43,10 @@ from core.primitives import (
     draw_status_bar,
     draw_status_clock,
     draw_status_icon_row,
-    status_icon_inset,
     draw_status_square_icon,
     draw_two_tone_tile,
     resolve_circle_collisions,
+    status_icon_inset,
     status_icon_size,
 )
 from core.ray_viz import draw_player_rays
@@ -1284,10 +1284,6 @@ class VroomEnv(Env):
             arcade.draw_line_strip(self._track_left_outline_screen, edge_color, edge_width)
         if len(self._track_right_outline_screen) > 2:
             arcade.draw_line_strip(self._track_right_outline_screen, edge_color, edge_width)
-        (x1, y1), (x2, y2) = self.start_line
-        ay1 = self.window_controller.to_arcade_y(y1)
-        ay2 = self.window_controller.to_arcade_y(y2)
-        arcade.draw_line(x1, ay1, x2, ay2, edge_color, edge_width)
 
     def _draw_rays(self) -> None:
         if not bool(self.show_rays and self.show_game):

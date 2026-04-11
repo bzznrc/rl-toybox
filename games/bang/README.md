@@ -4,7 +4,7 @@ Top-down arena shooter focused on movement, aiming, line of sight, and timing sh
 
 ## Clip
 
-[![Bang Demo](../../media/bang-demo.gif)](../../media/bang-demo.mp4)
+![Bang Demo](../../media/bang-demo.gif)
 
 ## Default Algorithm / Network
 

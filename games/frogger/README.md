@@ -2,10 +2,6 @@
 
 Compact road-crossing game designed around local sensing, timing, and partial observability. `frogger` is the repo's recurrent-policy showcase: the agent only sees a small egocentric patch plus a few scalar hints, so memory matters.
 
-## Clip
-
-No demo clip published yet.
-
 ## Default Algorithm / Network
 
 - Algorithm: recurrent PPO (`recurrent_ppo`)

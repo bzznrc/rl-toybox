@@ -87,7 +87,7 @@ def main() -> None:
     try:
         if resume_mode == "best":
             target_level = int(
-                resolve_best_resume_level(env, explicit_level=args.resume_level, allow_prompt=True)
+                resolve_best_resume_level(env, explicit_level=args.resume_level, allow_prompt=False)
             )
             current_level = apply_training_start_level(env, target_level)
         else:

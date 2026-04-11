@@ -85,6 +85,7 @@ class OseroEnv(Env):
             queue_input_events=self.mode == "human",
             vsync=False,
         )
+        self.window = self.window_controller.window
         self._board_layout = self._build_board_layout()
         self._state = initial_state(self.board_size)
         self._last_obs = observation_from_state(self._state)
@@ -438,3 +439,4 @@ class OseroEnv(Env):
 
     def close(self) -> None:
         self.window_controller.close()
+        self.window = None

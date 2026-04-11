@@ -19,6 +19,11 @@ STATUS_ICON_GAP = 6.0
 STATUS_CLOCK_BASE_COLOR = COLOR_SLATE_GRAY
 STATUS_CLOCK_FILL_COLOR = COLOR_FOG_GRAY
 STATUS_CLOCK_OUTLINE_COLOR = COLOR_FOG_GRAY
+ROAD_DASH_ALPHA = 255
+ROAD_DASH_COLOR = (*COLOR_FOG_GRAY, int(ROAD_DASH_ALPHA))
+ROAD_DASH_LENGTH_RATIO = 0.40
+ROAD_DASH_THICKNESS_RATIO = 0.05
+ROAD_DASH_GAP_RATIO = 0.40
 
 
 def resolve_circle_collisions(
@@ -355,6 +360,119 @@ def draw_facing_indicator(
         window_controller.to_arcade_y(end_y),
         color,
         float(line_width),
+    )
+
+
+def road_dash_length(base_unit: float) -> float:
+    return max(2.0, float(base_unit) * float(ROAD_DASH_LENGTH_RATIO))
+
+
+def road_dash_thickness(cross_size: float) -> float:
+    return max(2.0, float(cross_size) * float(ROAD_DASH_THICKNESS_RATIO))
+
+
+def road_dash_gap(base_unit: float) -> float:
+    return max(0.0, float(base_unit) * float(ROAD_DASH_GAP_RATIO))
+
+
+def build_dashed_path_top_left_polygons(
+    *,
+    path_length: float,
+    sample_fn: Callable[[float], tuple[tuple[float, float], tuple[float, float]]],
+    dash_length: float,
+    dash_width: float,
+    gap_length: float,
+    curve_step: float | None = None,
+) -> list[list[tuple[float, float]]]:
+    """Build top-left-space dash polygons for a path.
+
+    Each dash is sampled across its length so curved paths produce curved ribbon
+    polygons instead of a single straight rectangle.
+    """
+
+    total_length = max(0.0, float(path_length))
+    segment_length = max(1.0, float(dash_length))
+    segment_width = max(1.0, float(dash_width))
+    gap = max(0.0, float(gap_length))
+    if total_length <= 1e-6:
+        return []
+
+    step = segment_length + gap
+    if step <= 1e-6:
+        return []
+
+    sample_spacing = float(curve_step) if curve_step is not None else max(4.0, min(10.0, 0.24 * segment_length))
+    sample_spacing = max(1.0, sample_spacing)
+    half_width = 0.5 * float(segment_width)
+    polygons: list[list[tuple[float, float]]] = []
+
+    dash_start = 0.0
+    while dash_start < total_length - 1e-6:
+        current_length = min(segment_length, total_length - dash_start)
+        sample_count = max(2, int(math.ceil(float(current_length) / float(sample_spacing))) + 1)
+        left_pts: list[tuple[float, float]] = []
+        right_pts: list[tuple[float, float]] = []
+        for sample_idx in range(sample_count):
+            alpha = float(sample_idx) / float(max(1, sample_count - 1))
+            sample_s = float(dash_start) + float(current_length) * alpha
+            (center_x, center_y), (tan_x, tan_y) = sample_fn(float(sample_s))
+            tan_mag = math.hypot(float(tan_x), float(tan_y))
+            if tan_mag <= 1e-9:
+                continue
+
+            tx = float(tan_x) / tan_mag
+            ty = float(tan_y) / tan_mag
+            nx = -ty
+            ny = tx
+            left_pts.append((float(center_x) - nx * half_width, float(center_y) - ny * half_width))
+            right_pts.append((float(center_x) + nx * half_width, float(center_y) + ny * half_width))
+
+        if len(left_pts) >= 2 and len(right_pts) >= 2:
+            polygons.append([*left_pts, *reversed(right_pts)])
+        dash_start += step
+
+    return polygons
+
+
+def draw_top_left_polygons(
+    window_controller: ArcadeWindowController,
+    *,
+    polygons: Sequence[Sequence[tuple[float, float]]],
+    color: tuple[int, int, int] | tuple[int, int, int, int] = ROAD_DASH_COLOR,
+) -> None:
+    for polygon in polygons:
+        if len(polygon) < 3:
+            continue
+        arcade.draw_polygon_filled(
+            [(float(px), float(window_controller.to_arcade_y(float(py)))) for px, py in polygon],
+            color,
+        )
+
+
+def draw_dashed_path_top_left(
+    window_controller: ArcadeWindowController,
+    *,
+    path_length: float,
+    sample_fn: Callable[[float], tuple[tuple[float, float], tuple[float, float]]],
+    dash_length: float,
+    dash_width: float,
+    gap_length: float,
+    curve_step: float | None = None,
+    color: tuple[int, int, int] | tuple[int, int, int, int] = ROAD_DASH_COLOR,
+) -> None:
+    """Draw repeated dashes along a path in top-left coordinate space."""
+
+    draw_top_left_polygons(
+        window_controller,
+        polygons=build_dashed_path_top_left_polygons(
+            path_length=float(path_length),
+            sample_fn=sample_fn,
+            dash_length=float(dash_length),
+            dash_width=float(dash_width),
+            gap_length=float(gap_length),
+            curve_step=curve_step,
+        ),
+        color=color,
     )
 
 

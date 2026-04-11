@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 import math
+import os
 from pathlib import Path
 import time
 from typing import Any, Iterable
@@ -15,6 +16,13 @@ from pyglet.window import key as pyglet_key
 
 
 _LOADED_FONT_PATHS: set[str] = set()
+
+
+def _env_visible_default(default: bool = True) -> bool:
+    raw = os.getenv("RL_TOYBOX_RENDER_VISIBLE")
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def load_font_once(font_path: str | Path) -> None:
@@ -91,7 +99,7 @@ class ArcadeWindowController:
             title,
             vsync=bool(vsync),
             enable_polling=True,
-            visible=bool(visible),
+            visible=_env_visible_default(bool(visible)),
         )
         self._key_state = pyglet_key.KeyStateHandler()
         self.window.push_handlers(self._key_state)

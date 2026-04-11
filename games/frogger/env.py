@@ -33,12 +33,16 @@ from core.envs.base import Env
 from core.io_schema import clip_unit
 from core.match_tracker import compact_count_to_icons
 from core.primitives import (
+    draw_dashed_path_top_left,
     draw_status_bar,
     draw_status_clock,
     draw_status_icon_row,
-    status_icon_inset,
     draw_status_square_icon,
     draw_two_tone_tile,
+    road_dash_gap,
+    road_dash_length,
+    road_dash_thickness,
+    status_icon_inset,
     status_icon_size,
 )
 from core.rewards import RewardBreakdown
@@ -68,7 +72,6 @@ ROAD_ROW_OUTER = COLOR_SLATE_GRAY
 ROAD_ROW_INNER = COLOR_DARK_NEUTRAL
 GOAL_ROW_OUTER = COLOR_SAND
 GOAL_ROW_INNER = COLOR_OCHRE
-LANE_DASH_COLOR = COLOR_FOG_GRAY
 BOARD_OUTLINE_COLOR = COLOR_FOG_GRAY
 CAR_STYLE_DEFS = (
     {"name": "slow", "outer": COLOR_CORAL, "inner": COLOR_BRICK_RED, "speed": 0.36},
@@ -607,22 +610,22 @@ class FroggerEnv(Env):
         )
 
     def _draw_lane_dashes(self, row: int) -> None:
-        dash_width = float(config.COLUMN_WIDTH_PX) * float(config.LANE_DASH_WIDTH_RATIO)
-        dash_height = max(2.0, float(self._row_band_height_px) * float(config.LANE_DASH_HEIGHT_RATIO))
-        gap = float(config.COLUMN_WIDTH_PX) * float(config.LANE_DASH_GAP_RATIO)
+        dash_width = road_dash_length(float(config.COLUMN_WIDTH_PX))
+        dash_height = road_dash_thickness(float(self._row_band_height_px))
+        gap = road_dash_gap(float(config.COLUMN_WIDTH_PX))
         top = float(self._row_band_top(int(row)) + (float(self._row_band_height_px) - dash_height) * 0.5)
         left = float(self._board_offset_x) + gap
         right = float(self._board_offset_x + self._board_width_px)
-        step = dash_width + gap
-        while left < right - gap:
-            self._draw_rect_top_left(
-                left=float(left),
-                top=float(top),
-                width=min(float(dash_width), right - gap - left),
-                height=float(dash_height),
-                color=LANE_DASH_COLOR,
-            )
-            left += step
+        path_length = max(0.0, right - gap - left)
+        center_y = float(top + 0.5 * dash_height)
+        draw_dashed_path_top_left(
+            self.window_controller,
+            path_length=float(path_length),
+            sample_fn=lambda s: ((float(left) + float(s), float(center_y)), (1.0, 0.0)),
+            dash_length=float(dash_width),
+            dash_width=float(dash_height),
+            gap_length=float(gap),
+        )
 
     def _draw_board(self) -> None:
         for row in range(int(self._board_rows)):

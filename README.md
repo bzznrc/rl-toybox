@@ -47,16 +47,16 @@ python -m scripts.play_user --game bang
 
 ## Games
 
-| Game ID | Role | Family | Status | Summary | Docs |
-| --- | --- | --- | --- | --- | --- |
-| `snake` | Intro grid-control game | value-based | active | Classic Snake with obstacle curriculum, compact vector observations, and lightweight shaping rewards | [games/snake/README.md](games/snake/README.md) |
-| `bang` | Flagship discrete-control arena game | value-based | active | Top-down shooter focused on movement, line of sight, and timing shots under pressure | [games/bang/README.md](games/bang/README.md) |
-| `tower` | Delayed-reward and action-masking showcase | value-based | active | Tiny wave-based tower defense where the policy acts only during build phases | [games/tower/README.md](games/tower/README.md) |
-| `vroom` | Continuous-control showcase | actor-critic | active | One-lap top-down racer with procedural tracks, compact vector observations, and SAC-oriented defaults | [games/vroom/README.md](games/vroom/README.md) |
-| `frogger` | Partial-observability / memory showcase | actor-critic | active | Compact road-crossing game designed around local sensing, timing, and recurrent-policy friendly observations | [games/frogger/README.md](games/frogger/README.md) |
-| `cardz` | Stochastic hidden-information game | actor-critic | active | Two-player lane-control card game with masked actions and a scripted opponent | [games/cardz/README.md](games/cardz/README.md) |
-| `osero` | Planning and self-play capstone | search + self-play | active | Small Osero/Reversi implementation using MCTS, self-play, and a compact policy/value network | [games/osero/README.md](games/osero/README.md) |
-| `kick` | Experimental multi-agent football project | MARL / CTDE | paused | Shared-policy left-team football environment kept in the repo as a paused experimental branch | [games/kick/README.md](games/kick/README.md) |
+| Game ID | Role | Family | Summary | Docs |
+| --- | --- | --- | --- | --- |
+| `snake` | Intro grid-control game | value-based | Classic Snake with obstacle curriculum, compact vector observations, and lightweight shaping rewards | [games/snake/README.md](games/snake/README.md) |
+| `bang` | Flagship discrete-control arena game | value-based | Top-down shooter focused on movement, line of sight, and timing shots under pressure | [games/bang/README.md](games/bang/README.md) |
+| `tower` | Delayed-reward and action-masking showcase | value-based | Tiny wave-based tower defense where the policy acts only during build phases | [games/tower/README.md](games/tower/README.md) |
+| `vroom` | Continuous-control showcase | actor-critic | One-lap top-down racer with procedural tracks, compact vector observations, and SAC-oriented defaults | [games/vroom/README.md](games/vroom/README.md) |
+| `frogger` | Partial-observability / memory showcase | actor-critic | Compact road-crossing game designed around local sensing, timing, and recurrent-policy friendly observations | [games/frogger/README.md](games/frogger/README.md) |
+| `cardz` | Stochastic hidden-information game | actor-critic | Two-player lane-control card game with masked actions and a scripted opponent | [games/cardz/README.md](games/cardz/README.md) |
+| `osero` | Planning and self-play capstone | search + self-play | Small Osero/Reversi implementation using MCTS, self-play, and a compact policy/value network | [games/osero/README.md](games/osero/README.md) |
+| `kick` | Experimental multi-agent football project | MARL / CTDE | Shared-policy left-team football environment kept in the repo as a paused experimental branch | [games/kick/README.md](games/kick/README.md) |
 
 ## Default Training Setups
 

@@ -2,10 +2,6 @@
 
 Top-down football environment with a shared LEFT-team policy and a centralized critic during training. `kick` is currently paused as an experimental branch, but the environment and documentation remain in the repo because it exercises the multi-agent and CTDE pieces more directly than the other games.
 
-## Clip
-
-No demo clip published yet.
-
 ## Default Algorithm / Network
 
 - Algorithm: PPO with MAPPO-style training

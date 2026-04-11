@@ -720,6 +720,8 @@ class SnakeEnv(Env):
         else:
             self.game = TrainingSnakeGame(show_game=bool(render))
             self._apply_level_settings(int(self._current_level))
+        self.window_controller = self.game.window_controller
+        self.window = self.game.window
 
     def _apply_level_settings(self, level: int) -> None:
         settings = LEVEL_SETTINGS.get(int(level), LEVEL_SETTINGS[int(MIN_LEVEL)])
@@ -801,9 +803,9 @@ class SnakeEnv(Env):
         return obs, float(reward), bool(done), info
 
     def render(self) -> None:
-        # Snake self-renders inside play_step when show_game is enabled.
-        return None
+        self.game.draw_frame()
 
     def close(self) -> None:
         self.game.close()
+        self.window = None
 

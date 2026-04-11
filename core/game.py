@@ -280,7 +280,8 @@ def normalize_resume_mode(mode: str) -> str:
 def resume_level_bounds(env: object) -> tuple[int, int]:
     curriculum = getattr(env, "_curriculum", None)
     if curriculum is None:
-        return 1, 3
+        current_level = resolve_current_level(env, default=1)
+        return int(current_level), int(current_level)
     curriculum_config = getattr(curriculum, "config", None)
     min_level = max(1, int(getattr(curriculum_config, "min_level", 1)))
     max_level = max(min_level, int(getattr(curriculum_config, "max_level", 3)))
@@ -291,14 +292,16 @@ def resolve_best_resume_level(
     env: object,
     *,
     explicit_level: int | None = None,
-    allow_prompt: bool = True,
+    allow_prompt: bool = False,
 ) -> int:
     min_level, max_level = resume_level_bounds(env)
     if explicit_level is not None:
         return max(int(min_level), min(int(max_level), int(explicit_level)))
+    if min_level == max_level:
+        return int(min_level)
     if not bool(allow_prompt) or not bool(sys.stdin.isatty()):
         raise ValueError(
-            "Resume mode 'best' requires --resume-level in non-interactive mode. "
+            "Resume mode 'best' requires --resume-level for games with curriculum levels. "
             f"Expected {int(min_level)}..{int(max_level)}."
         )
 
@@ -395,6 +398,20 @@ def resolve_play_model_path(run_paths: RunPaths, model_choice: str, level: int) 
     return path
 
 
+def resolve_latest_play_model_path(run_paths: RunPaths, level: int) -> Path:
+    level_value = max(1, int(level))
+    candidates: list[tuple[int, int, Path]] = []
+    for kind, priority in (("best", 1), ("check", 0)):
+        path = run_paths.model_path(level_value, kind)
+        if path.exists():
+            candidates.append((int(path.stat().st_mtime_ns), int(priority), path))
+    if not candidates:
+        expected_best = run_paths.model_path(level_value, "best")
+        raise FileNotFoundError(f"No model found for level {level_value} at '{expected_best.parent}'.")
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return candidates[0][2]
+
+
 __all__ = [
     "EXPLORATION_AVG_WINDOW_EPISODES",
     "MIN_EPISODES_FOR_STATS",
@@ -420,4 +437,5 @@ __all__ = [
     "apply_training_start_level",
     "resolve_resume_path",
     "resolve_play_model_path",
+    "resolve_latest_play_model_path",
 ]

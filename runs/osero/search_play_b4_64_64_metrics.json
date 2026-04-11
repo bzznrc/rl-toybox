@@ -1,0 +1,20 @@
+{
+  "avg_length": 12.25,
+  "best_loss": 0.5733971074223518,
+  "black_win_rate": 0.02,
+  "config": {
+    "checkpoint_every_games": 25,
+    "max_games": 5000,
+    "train_after_games": 8,
+    "updates_per_game": 2
+  },
+  "draw_rate": 0.04,
+  "last_metrics": {
+    "buffer_size": 20000.0,
+    "loss": 0.5494324862957001,
+    "policy_loss": 0.5459975898265839,
+    "value_loss": 0.003434920887229964
+  },
+  "total_games": 5000,
+  "total_steps": 60822
+}

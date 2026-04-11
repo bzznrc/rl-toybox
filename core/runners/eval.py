@@ -94,6 +94,22 @@ def _reset_policy_state(algorithm: Algorithm) -> None:
         reset_fn()
 
 
+def reset_eval_policy_state(algorithm: Algorithm) -> None:
+    _reset_policy_state(algorithm)
+
+
+def select_eval_action(env: Env, algorithm: Algorithm, obs: object):
+    action_mask = _extract_action_mask(env, obs)
+    central_obs = _extract_centralized_state(env, obs)
+    return _act_with_optional_mask(
+        algorithm,
+        obs,
+        explore=False,
+        action_mask=action_mask,
+        central_obs=central_obs,
+    )
+
+
 def run_eval(
     env: Env,
     algorithm: Algorithm,
@@ -106,21 +122,13 @@ def run_eval(
     wins = 0
 
     for _ in range(int(episodes)):
-        _reset_policy_state(algorithm)
+        reset_eval_policy_state(algorithm)
         obs = env.reset()
         episode_reward = 0.0
         length = 0
 
         for _step in range(int(max_steps_per_episode)):
-            action_mask = _extract_action_mask(env, obs)
-            central_obs = _extract_centralized_state(env, obs)
-            action = _act_with_optional_mask(
-                algorithm,
-                obs,
-                explore=False,
-                action_mask=action_mask,
-                central_obs=central_obs,
-            )
+            action = select_eval_action(env, algorithm, obs)
             obs, reward, done, info = env.step(action)
             episode_reward += _reward_scalar(reward)
             length += 1

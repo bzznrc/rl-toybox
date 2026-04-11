@@ -4,7 +4,7 @@ Top-down one-lap racing with procedural closed-loop tracks and continuous `steer
 
 ## Clip
 
-[![Vroom Demo](../../media/vroom-demo.gif)](../../media/vroom-demo.mp4)
+![Vroom Demo](../../media/vroom-demo.gif)
 
 ## Default Algorithm / Network
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 import time
@@ -9,26 +10,30 @@ from typing import Any
 
 import torch
 
+_CHECKPOINT_LOGGER = logging.getLogger("rl_toybox.train")
+
 
 def save_torch_checkpoint(
     path: str | Path,
     state: dict[str, Any],
     *,
-    retries: int = 5,
-    retry_delay_seconds: float = 0.2,
-) -> None:
+    retries: int = 6,
+    retry_delay_seconds: float = 0.25,
+) -> bool:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     max_attempts = max(1, int(retries))
-    temp_path = destination.with_name(f"{destination.name}.tmp.{os.getpid()}")
     last_error: Exception | None = None
 
     for attempt in range(max_attempts):
+        temp_path = destination.with_name(
+            f"{destination.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+        )
         try:
             torch.save(state, temp_path)
             os.replace(temp_path, destination)
-            return
+            return True
         except (OSError, RuntimeError) as error:
             last_error = error
             if temp_path.exists():
@@ -37,12 +42,17 @@ def save_torch_checkpoint(
                 except OSError:
                     pass
             if attempt < max_attempts - 1:
-                delay = float(retry_delay_seconds) * (attempt + 1)
+                # Windows sync/indexing tools can transiently lock checkpoint files.
+                delay = float(retry_delay_seconds) * (2**attempt)
                 time.sleep(max(0.0, delay))
 
-    raise RuntimeError(
-        f"Failed to save checkpoint to '{destination}' after {max_attempts} attempts."
-    ) from last_error
+    _CHECKPOINT_LOGGER.warning(
+        "Warn\tSave skipped after %s attempts\tPath: %s\tReason: %s",
+        max_attempts,
+        destination,
+        last_error,
+    )
+    return False
 
 
 def load_torch_checkpoint(path: str | Path, map_location: str | torch.device | None = None) -> dict[str, Any]:

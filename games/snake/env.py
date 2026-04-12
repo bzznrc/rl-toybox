@@ -642,16 +642,16 @@ class TrainingSnakeGame(BaseSnakeGame):
         feature_values = {
             "self_heading_sin": float(heading_sin),
             "self_heading_cos": float(heading_cos),
-            "self_length": float(clip_unit(float(len(self.snake)) / float(grid_cells))),
-            "self_last_action": float(normalize_last_action(self.last_action_index, SNAKE_ACT_DIM)),
-            "ray_fwd": float(self._ray_distance_to_collision(dir_x, dir_y)),
-            "ray_left": float(self._ray_distance_to_collision(left_x, left_y)),
-            "ray_right": float(self._ray_distance_to_collision(right_x, right_y)),
+            "self_len_norm": float(clip_unit(float(len(self.snake)) / float(grid_cells))),
+            "self_last_act_norm": float(normalize_last_action(self.last_action_index, SNAKE_ACT_DIM)),
+            "self_hunger_norm": float(clip_unit(float(self.steps_since_food) / float(grid_cells))),
+            "sens_fwd": float(self._ray_distance_to_collision(dir_x, dir_y)),
+            "sens_left": float(self._ray_distance_to_collision(left_x, left_y)),
+            "sens_right": float(self._ray_distance_to_collision(right_x, right_y)),
             "tgt_rel_angle_sin": float(tgt_rel_angle_sin),
             "tgt_rel_angle_cos": float(tgt_rel_angle_cos),
-            "tgt_manhattan_dist": float(manhattan_norm),
+            "tgt_manhattan_norm": float(manhattan_norm),
             "tgt_dist_delta": float(tgt_dist_delta),
-            "self_steps_since_food": float(clip_unit(float(self.steps_since_food) / float(grid_cells))),
         }
         state = np.asarray(ordered_feature_vector(SNAKE_INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
         assert len(state) == SNAKE_OBS_DIM

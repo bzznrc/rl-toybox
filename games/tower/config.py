@@ -43,26 +43,30 @@ ENTRY_MODES = ("left", "right", "both")
 
 # IO
 INPUT_FEATURE_NAMES = [
-    "run_gold_norm",
-    "run_lives_norm",
-    "run_wave_norm",
-    "run_actions_left_norm",
-    "wave_entry_left",
-    "wave_entry_right",
-    "wave_count_light_norm",
-    "wave_count_armored_norm",
-    "wave_count_flying_norm",
-    "map_layout_id_norm",
-    "slot_left_tower_kind",
-    "slot_left_tower_level_norm",
-    "slot_upper_tower_kind",
-    "slot_upper_tower_level_norm",
-    "slot_mid_tower_kind",
-    "slot_mid_tower_level_norm",
-    "slot_lower_tower_kind",
-    "slot_lower_tower_level_norm",
-    "slot_right_tower_kind",
-    "slot_right_tower_level_norm",
+    "glob_gold_norm",
+    "glob_lives_norm",
+    "glob_wave_norm",
+    "glob_acts_left_norm",
+    "board_entry_left",
+    "board_entry_right",
+    "board_n_light_norm",
+    "board_n_armored_norm",
+    "board_n_flying_norm",
+    "board_layout_id_norm",
+    "slot_left_kind_id",
+    "slot_left_lvl_norm",
+    "slot_upper_kind_id",
+    "slot_upper_lvl_norm",
+    "slot_mid_kind_id",
+    "slot_mid_lvl_norm",
+    "slot_lower_kind_id",
+    "slot_lower_lvl_norm",
+    "slot_right_kind_id",
+    "slot_right_lvl_norm",
+    "slot_empty_n_norm",
+    "slot_upg_n_norm",
+    "legal_build_any",
+    "legal_upg_any",
 ]
 ACTION_NAMES = [
     "start_wave",
@@ -150,7 +154,7 @@ REWARD_COMPONENT_ORDER = (
 
 
 # TRAINING
-HIDDEN_DIMENSIONS = [64, 64]
+HIDDEN_DIMENSIONS = [96, 96]
 
 TOTAL_TRAINING_STEPS = 250_000
 LEARN_START_STEPS = 2_000

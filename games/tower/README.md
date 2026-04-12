@@ -2,13 +2,17 @@
 
 Wave-based tower defense built around build-phase planning, action masking, and delayed rewards. `tower` is the repo's clearest example of a value-based game where the policy acts at decision points instead of every frame.
 
-## Default Algorithm / Network
+## Clip
+
+No clip is currently checked into the repo for `tower`.
+
+## Algorithm / Network
 
 - Algorithm family: value-based discrete control
 - Default algorithm: `dqn`
 - Recommended runtime shape: masked Double DQN with a dueling head
-- Hidden sizes: `[64, 64]`
-- Observation size: `20`
+- Hidden sizes: `[96, 96]`
+- Observation size: `24`
 - Action count: `26`
 
 ## Controls (Human)
@@ -25,32 +29,45 @@ Canonical `INPUT_FEATURE_NAMES` order:
 
 ```python
 [
-    "run_gold_norm",
-    "run_lives_norm",
-    "run_wave_norm",
-    "run_actions_left_norm",
-    "wave_entry_left",
-    "wave_entry_right",
-    "wave_count_light_norm",
-    "wave_count_armored_norm",
-    "wave_count_flying_norm",
-    "map_layout_id_norm",
-    "slot_left_tower_kind",
-    "slot_left_tower_level_norm",
-    "slot_upper_tower_kind",
-    "slot_upper_tower_level_norm",
-    "slot_mid_tower_kind",
-    "slot_mid_tower_level_norm",
-    "slot_lower_tower_kind",
-    "slot_lower_tower_level_norm",
-    "slot_right_tower_kind",
-    "slot_right_tower_level_norm",
+    # GLOB
+    "glob_gold_norm",
+    "glob_lives_norm",
+    "glob_wave_norm",
+    "glob_acts_left_norm",
+    # BOARD
+    "board_entry_left",
+    "board_entry_right",
+    "board_n_light_norm",
+    "board_n_armored_norm",
+    "board_n_flying_norm",
+    "board_layout_id_norm",
+    # SLOT
+    "slot_left_kind_id",
+    "slot_left_lvl_norm",
+    "slot_upper_kind_id",
+    "slot_upper_lvl_norm",
+    "slot_mid_kind_id",
+    "slot_mid_lvl_norm",
+    "slot_lower_kind_id",
+    "slot_lower_lvl_norm",
+    "slot_right_kind_id",
+    "slot_right_lvl_norm",
+    # LEGAL
+    "slot_empty_n_norm",
+    "slot_upg_n_norm",
+    "legal_build_any",
+    "legal_upg_any",
 ]
 ```
 
-- `tower_kind` encoding: `0=empty`, `1=fast`, `2=heavy`, `3=area`
-- `tower_level_norm`: `0.0` for empty, otherwise `level / 3`
-- `run_gold_norm` is the legacy feature name; the UI surfaces the same value as `Credits`
+- `kind_id` encoding: `0=empty`, `1=fast`, `2=heavy`, `3=area`
+- `lvl_norm`: `0.0` for empty, otherwise `level / 3`
+- `slot_empty_n_norm = empty_slots / 5`
+- `slot_upg_n_norm = upgradeable_slots / 5`
+- `legal_build_any` means at least one build action is mask-legal now under the current game state.
+- `legal_upg_any` means at least one upgrade action is mask-legal now under the current game state.
+- The `legal_*` summaries respect the same gating as `get_action_mask()`, including build/wave phase, terminal state, actions remaining, affordability, and slot-specific legality.
+- The game still uses the same fixed 5-slot topology: `left`, `upper`, `mid`, `lower`, `right`.
 
 Action space:
 

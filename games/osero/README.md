@@ -2,7 +2,11 @@
 
 Compact Osero/Reversi implementation built around self-play, MCTS, and a small policy/value network. It is the planning-oriented game in the repo and the clearest example of search-guided training.
 
-## Default Algorithm / Network
+## Clip
+
+No clip is currently checked into the repo for `osero`.
+
+## Algorithm / Network
 
 - Algorithm family: `search_play`
 - Search: lightweight PUCT MCTS with policy priors and value estimates from the shared network
@@ -22,6 +26,7 @@ Compact Osero/Reversi implementation built around self-play, MCTS, and a small p
 
 ## Observation / Actions
 
+- Observation family: board self-play / search `BOARD`
 - Observation is the flattened board only, row-major, from the current player to move
 - Cell encoding:
   - `0` empty
@@ -31,9 +36,9 @@ Compact Osero/Reversi implementation built around self-play, MCTS, and a small p
 
 Canonical feature order follows `INPUT_FEATURE_NAMES`:
 
-- `4x4`: `cell_r0_c0` through `cell_r3_c3`
-- `6x6`: `cell_r0_c0` through `cell_r5_c5`
-- `8x8`: `cell_r0_c0` through `cell_r7_c7`
+- `4x4`: `board_r0_c0` through `board_r3_c3`
+- `6x6`: `board_r0_c0` through `board_r5_c5`
+- `8x8`: `board_r0_c0` through `board_r7_c7`
 
 Action space is one action per board cell plus one pass action:
 
@@ -63,7 +68,7 @@ Action names follow row-major board order plus `pass`.
 
 The search trainer primarily learns from normalized MCTS visit counts for the policy target and final game outcome for the value target.
 
-## Board Size Selection
+## Curriculum (Train)
 
 There is no environment curriculum for `osero`. Board sizes are separate runtime choices:
 

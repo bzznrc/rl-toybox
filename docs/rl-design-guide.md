@@ -63,28 +63,57 @@ Each game config should prefer this order:
 - Keep `config.py` declarative and constants-only.
 - Put shared training/runtime boilerplate in shared `core/` code.
 - Keep future placeholder configs lightweight rather than speculative.
+- Treat `config.py` as the per-game source of truth for `INPUT_FEATURE_NAMES`, `ACTION_NAMES`, observation/action dimensions, and default network sizes.
 
 ## 4) Observation Taxonomy
 
-### Feature block ordering
+### Family block ordering
 
-Use this order when applicable:
+Use one of these family templates, and omit non-applicable blocks cleanly instead of inserting dummy features.
+
+Arcade / egocentric control:
 
 1. `SELF`
-2. `RAYS`
-3. `TGT`
-4. `GOALS/LANDMARKS`
-5. `TEAMMATES`
-6. `OPPONENTS`
-7. `TRACK/MAP`
-8. `HAZARDS`
+2. `SENS`
+3. `TGT/LAND`
+4. `ALLY`
+5. `OPP`
+6. `MAP/MEM`
+7. `HAZ`
+8. `FLAG`
+
+Structured turn-based / masked decision:
+
+1. `GLOB`
+2. `PHASE`
+3. `BOARD/LANE/SLOT`
+4. `HAND/INV`
+5. `LEGAL`
+
+Board self-play / search:
+
+1. `BOARD`
+
+For board self-play, the action mask stays outside the observation.
 
 ### Naming rules
 
-- `*_sin` pairs with `*_cos`
-- `dx` pairs with `dy`
-- `dvx` pairs with `dvy`
+- Use compact canonical prefixes: `self_`, `sens_`, `tgt_`, `land_`, `ally_`, `opp_`, `map_`, `mem_`, `haz_`, `flag_`, `glob_`, `phase_`, `board_`, `lane_`, `slot_`, `hand_`, `inv_`, `legal_`
+- Keep canonical prefixes to at most 5 characters before the underscore
+- Use `_id` for categorical scalar codes
+- Use `_norm` for normalized continuous scalars
+- Keep `*_sin` paired with `*_cos`
+- Keep `dx/dy` and `dvx/dvy` pairs adjacent
 - Boolean features should be numeric `0.0/1.0`
+- Keep block order intentional and documented in each game README
+
+### Current repo examples
+
+- `snake`: `self_*`, `sens_*`, `tgt_*`
+- `vroom`: `self_*`, `sens_*`, `flag_*`
+- `frogger`: `sens_patch_*` plus `self_*`, `tgt_*`, `land_*`, `flag_*`
+- `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`
+- `osero`: `board_r*_c*`
 
 ## 5) Action Space Conventions
 
@@ -135,6 +164,11 @@ Each active `games/<game>/README.md` must use this top-level heading order:
 8. `Run Commands`
 
 Games with no staged progression should still keep the same section structure and state that the curriculum is fixed.
+
+### Config mirroring
+
+- Each game README should copy observation/action dimensions, ordered feature names, and default network sizes from that game's `config.py`.
+- Root-level summaries should also defer to per-game `config.py` rather than re-stating older values from memory.
 
 ## 9) Checklist for Environment Changes
 

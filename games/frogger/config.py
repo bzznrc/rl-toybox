@@ -60,14 +60,14 @@ TOKEN_GOAL = 5.0
 
 
 # IO
-PATCH_FEATURE_NAMES = [f"local_{index:02d}" for index in range(LOCAL_PATCH_VALUES)]
+PATCH_FEATURE_NAMES = [f"sens_patch_{index:02d}" for index in range(LOCAL_PATCH_VALUES)]
 SCALAR_FEATURE_NAMES = [
-    "run_steps_remaining_norm",
-    "frog_lane_id_norm",
-    "frog_x_norm",
-    "goal_dy_norm",
-    "lane_dir_here",
-    "lane_speed_here_norm",
+    "self_steps_left_norm",
+    "self_lane_id_norm",
+    "self_x_norm",
+    "tgt_dy_norm",
+    "land_lane_dir_id",
+    "land_lane_speed_norm",
     "flag_danger_now",
 ]
 INPUT_FEATURE_NAMES = [*PATCH_FEATURE_NAMES, *SCALAR_FEATURE_NAMES]

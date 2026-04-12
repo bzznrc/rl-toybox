@@ -2,7 +2,11 @@
 
 Compact road-crossing game designed around local sensing, timing, and partial observability. `frogger` is the repo's recurrent-policy showcase: the agent only sees a small egocentric patch plus a few scalar hints, so memory matters.
 
-## Default Algorithm / Network
+## Clip
+
+No clip is currently checked into the repo for `frogger`.
+
+## Algorithm / Network
 
 - Algorithm: recurrent PPO (`recurrent_ppo`)
 - Shared encoder: `[32]`
@@ -19,22 +23,21 @@ Compact road-crossing game designed around local sensing, timing, and partial ob
 
 ## Observation / Actions
 
-- Observation: `32` floats (`INPUT_FEATURE_NAMES`, ordered)
-- Local egocentric patch: `25` values from a `5x5` window centered on the frog
+- Observation family: arcade / egocentric POMDP centered on `SENS`, with a scalar tail from `SELF -> TGT/LAND -> FLAG`
+- Observation: `32` floats (`INPUT_FEATURE_NAMES`, exact order)
+- `SENS` patch: `25` values from a `5x5` window centered on the frog
+  - feature names run from `sens_patch_00` to `sens_patch_24` in row-major order
   - `0 empty`
   - `1 boundary`
   - `2 safe row`
   - `3 road lane`
   - `4 car`
   - `5 goal row`
-- Scalar supplement: `7` values
-  - `run_steps_remaining_norm`
-  - `frog_lane_id_norm`
-  - `frog_x_norm`
-  - `goal_dy_norm`
-  - `lane_dir_here`
-  - `lane_speed_here_norm`
-  - `flag_danger_now`
+- Scalar tail: `7` values
+  - `SELF` (3): `self_steps_left_norm self_lane_id_norm self_x_norm`
+  - `TGT` (1): `tgt_dy_norm`
+  - `LAND` (2): `land_lane_dir_id land_lane_speed_norm`
+  - `FLAG` (1): `flag_danger_now`
 - Actions: `Discrete(5)` (`ACTION_NAMES`, ordered)
   - `0 up`
   - `1 down`
@@ -42,16 +45,11 @@ Compact road-crossing game designed around local sensing, timing, and partial ob
   - `3 right`
   - `4 wait`
 
-Canonical feature order is the 25 local patch cells in row-major order followed by the 7 scalar features listed above.
-
-## Why It Is a POMDP
-
-- The policy never sees the full lane state.
-- Cars just outside the local patch can still matter.
-- Lane direction and speed stay stable within a crossing, so the policy benefits from remembering them while crossing.
+Canonical feature order is `sens_patch_00` through `sens_patch_24` in row-major order, followed by the 7 scalar features listed above.
 
 ## Environment Notes
 
+- This is a POMDP because the policy never sees the full lane state, cars just outside the local patch can still matter, and lane direction/speed stay stable within a crossing.
 - A run continues across repeated crossings until a hit or timeout ends it.
 - Board layout is always:
   - top goal row

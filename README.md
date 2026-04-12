@@ -58,13 +58,27 @@ python -m scripts.play_user --game bang
 | `osero` | Planning and self-play capstone | search + self-play | Small Osero/Reversi implementation using MCTS, self-play, and a compact policy/value network | [games/osero/README.md](games/osero/README.md) |
 | `kick` | Experimental multi-agent football project | MARL / CTDE | Shared-policy left-team football environment kept in the repo as a paused experimental branch | [games/kick/README.md](games/kick/README.md) |
 
-## Default Training Setups
+## Observation Taxonomy
 
-- `snake`: linear Q-learning (`qlearn`, `obs=12`, `act=3`, hidden `[32]`)
-- `bang`: DQN (`dqn`, `obs=24`, `act=8`, hidden `[64, 64]`)
-- `tower`: masked Double DQN (`dqn`, `obs=20`, `act=26`, hidden `[64, 64]`)
-- `vroom`: SAC (`sac`, `obs=20`, `act=3`, hidden `[64, 64]`)
-- `frogger`: recurrent PPO (`recurrent_ppo`, `obs=32`, `act=5`, encoder `[32]`, lstm `64`, heads `[32]`)
-- `cardz`: actor-critic (`a2c`, `obs=30`, `act=16`, shared trunk `[80, 80]`)
-- `osero`: search/self-play (`search_play`, default `6x6`, `obs=36`, `act=37`, trunk `[96, 96]`; `8x8` also supported)
-- `kick`: paused PPO/MAPPO-style project (`ppo`, actor `[128, 128]`, critic `[256, 256]`)
+- Arcade / egocentric control: `SELF -> SENS -> TGT/LAND -> ALLY -> OPP -> MAP/MEM -> HAZ -> FLAG`
+- Structured turn-based / masked decision: `GLOB -> PHASE -> BOARD/LANE/SLOT -> HAND/INV -> LEGAL`
+- Board self-play / search: `BOARD` only; action masks stay outside the observation
+- Blocks can be omitted when they do not apply. Compact canonical prefixes are `self_`, `sens_`, `tgt_`, `land_`, `ally_`, `opp_`, `map_`, `mem_`, `haz_`, `flag_`, `glob_`, `phase_`, `board_`, `lane_`, `slot_`, `hand_`, `inv_`, and `legal_`.
+- Current active examples:
+  - `snake`: `self_*`, `sens_*`, `tgt_*`
+  - `vroom`: `self_*`, `sens_*`, `flag_*`
+  - `frogger`: `sens_patch_*` plus `self_*`, `tgt_*`, `land_*`, `flag_*`
+  - `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`
+  - `osero`: `board_r*_c*`
+- Per-game `config.py` owns the exact observation/action names, order, dimensions, and default network sizes; root docs and game READMEs should mirror that config truth.
+
+## Default Plans
+
+- `snake` -> linear Q-learning (`qlearn`, `obs=12`, `act=3`, hidden `[32]`)
+- `bang` -> DQN (`dqn`, `obs=28`, `act=8`, hidden `[96, 96]`)
+- `tower` -> masked Double DQN (`dqn`, `obs=24`, `act=26`, hidden `[96, 96]`)
+- `vroom` -> SAC (`sac`, `obs=20`, `act=3`, hidden `[64, 64]`)
+- `frogger` -> recurrent PPO (`recurrent_ppo`, `obs=32`, `act=5`, encoder `[32]`, lstm `64`, heads `[32]`)
+- `cardz` -> actor-critic (`a2c`, `obs=64`, `act=16`, shared trunk `[96, 96]`)
+- `osero` -> search/self-play (`search_play`, default `6x6`, `obs=36`, `act=37`, trunk `[96, 96]`; `8x8` also supported)
+- `kick` -> paused PPO/MAPPO-style project (`ppo`, `obs=48/player`, `act=12`, actor `[128, 128]`, critic `[256, 256]`)

@@ -35,16 +35,16 @@ MAX_OBSTACLE_SECTIONS = 5
 INPUT_FEATURE_NAMES = [
     "self_heading_sin",
     "self_heading_cos",
-    "self_length",
-    "self_last_action",
-    "ray_fwd",
-    "ray_left",
-    "ray_right",
+    "self_len_norm",
+    "self_last_act_norm",
+    "self_hunger_norm",
+    "sens_fwd",
+    "sens_left",
+    "sens_right",
     "tgt_rel_angle_sin",
     "tgt_rel_angle_cos",
-    "tgt_manhattan_dist",
+    "tgt_manhattan_norm",
     "tgt_dist_delta",
-    "self_steps_since_food",
 ]
 ACTION_NAMES = [
     "straight",

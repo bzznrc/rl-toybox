@@ -830,16 +830,38 @@ class TowerEnv(Env):
             )
         return plan
 
-    def _tower_kind_value(self, tower_state: TowerState | None) -> float:
+    def _tower_kind_id(self, tower_state: TowerState | None) -> float:
         if tower_state is None:
             return 0.0
         return float(TOWER_KIND_TO_ID.get(str(tower_state.kind), 0.0))
 
     @staticmethod
-    def _tower_level_norm(tower_state: TowerState | None) -> float:
+    def _tower_lvl_norm(tower_state: TowerState | None) -> float:
         if tower_state is None:
             return 0.0
         return clip_unit(float(tower_state.level) / 3.0)
+
+    def _empty_slot_count(self) -> int:
+        return sum(1 for slot_name in config.SLOT_NAMES if self.slot_towers[str(slot_name)] is None)
+
+    def _upgradeable_slot_count(self) -> int:
+        return sum(
+            1
+            for slot_name in config.SLOT_NAMES
+            if (tower_state := self.slot_towers[str(slot_name)]) is not None and int(tower_state.level) < 3
+        )
+
+    def _legal_build_any(self) -> bool:
+        mask = self.get_action_mask()
+        build_start = 1
+        build_stop = build_start + len(config.TOWER_KINDS) * len(config.SLOT_NAMES)
+        return bool(np.any(mask[build_start:build_stop]))
+
+    def _legal_upgrade_any(self) -> bool:
+        mask = self.get_action_mask()
+        upgrade_start = 1 + len(config.TOWER_KINDS) * len(config.SLOT_NAMES)
+        upgrade_stop = upgrade_start + len(config.SLOT_NAMES)
+        return bool(np.any(mask[upgrade_start:upgrade_stop]))
 
     def _wave_number_norm(self) -> float:
         if not self.wave_plan:
@@ -851,30 +873,39 @@ class TowerEnv(Env):
 
     def _build_observation(self) -> np.ndarray:
         wave = self._current_wave()
+        empty_slot_count = int(self._empty_slot_count())
+        upgradeable_slot_count = int(self._upgradeable_slot_count())
         feature_values = {
-            "run_gold_norm": clip_unit(float(self.credits) / float(config.MAX_CREDITS_NORMALIZER)),
-            "run_lives_norm": clip_unit(float(self.lives) / float(config.MAX_LIVES_NORMALIZER)),
-            "run_wave_norm": float(self._wave_number_norm()),
-            "run_actions_left_norm": clip_unit(
+            "glob_gold_norm": clip_unit(float(self.credits) / float(config.MAX_CREDITS_NORMALIZER)),
+            "glob_lives_norm": clip_unit(float(self.lives) / float(config.MAX_LIVES_NORMALIZER)),
+            "glob_wave_norm": float(self._wave_number_norm()),
+            "glob_acts_left_norm": clip_unit(
                 float(self.actions_remaining) / float(config.DECISION_BUDGET_NORMALIZER)
             ),
-            "wave_entry_left": 1.0 if wave is not None and wave.entry_mode in {SIDE_LEFT, ENTRY_BOTH} else 0.0,
-            "wave_entry_right": 1.0 if wave is not None and wave.entry_mode in {SIDE_RIGHT, ENTRY_BOTH} else 0.0,
-            "wave_count_light_norm": clip_unit(
+            "board_entry_left": 1.0 if wave is not None and wave.entry_mode in {SIDE_LEFT, ENTRY_BOTH} else 0.0,
+            "board_entry_right": 1.0 if wave is not None and wave.entry_mode in {SIDE_RIGHT, ENTRY_BOTH} else 0.0,
+            "board_n_light_norm": clip_unit(
                 float(0 if wave is None else wave.count_light) / float(config.MAX_WAVE_COUNT_NORMALIZER)
             ),
-            "wave_count_armored_norm": clip_unit(
+            "board_n_armored_norm": clip_unit(
                 float(0 if wave is None else wave.count_armored) / float(config.MAX_WAVE_COUNT_NORMALIZER)
             ),
-            "wave_count_flying_norm": clip_unit(
+            "board_n_flying_norm": clip_unit(
                 float(0 if wave is None else wave.count_flying) / float(config.MAX_WAVE_COUNT_NORMALIZER)
             ),
-            "map_layout_id_norm": float(self.layout.layout_norm),
+            "board_layout_id_norm": float(self.layout.layout_norm),
+            "slot_empty_n_norm": clip_unit(float(empty_slot_count) / float(max(1, len(config.SLOT_NAMES)))),
+            "slot_upg_n_norm": clip_unit(
+                float(upgradeable_slot_count) / float(max(1, len(config.SLOT_NAMES)))
+            ),
+            # These summaries intentionally mirror the live action mask, not just raw affordance.
+            "legal_build_any": 1.0 if self._legal_build_any() else 0.0,
+            "legal_upg_any": 1.0 if self._legal_upgrade_any() else 0.0,
         }
         for slot_name in config.SLOT_NAMES:
             tower_state = self.slot_towers[str(slot_name)]
-            feature_values[f"slot_{slot_name}_tower_kind"] = float(self._tower_kind_value(tower_state))
-            feature_values[f"slot_{slot_name}_tower_level_norm"] = float(self._tower_level_norm(tower_state))
+            feature_values[f"slot_{slot_name}_kind_id"] = float(self._tower_kind_id(tower_state))
+            feature_values[f"slot_{slot_name}_lvl_norm"] = float(self._tower_lvl_norm(tower_state))
 
         obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
         if obs.shape != (self.OBS_DIM,):

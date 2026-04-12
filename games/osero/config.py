@@ -61,9 +61,9 @@ HOVER_OUTLINE_WIDTH = 3.0
 
 # IO
 INPUT_FEATURE_NAMES_BY_SIZE = {
-    4: row_major_grid_feature_names(4),
-    6: row_major_grid_feature_names(6),
-    8: row_major_grid_feature_names(8),
+    4: row_major_grid_feature_names(4, prefix="board"),
+    6: row_major_grid_feature_names(6, prefix="board"),
+    8: row_major_grid_feature_names(8, prefix="board"),
 }
 ACTION_NAMES_BY_SIZE = {
     4: row_major_grid_action_names(4, include_pass=True),
@@ -101,7 +101,7 @@ TEMPERATURE_SAMPLE_MOVES = 10
 
 
 # TRAINING
-MAX_GAMES = 5000
+MAX_GAMES = 10000
 TRAIN_AFTER_GAMES = 8
 UPDATES_PER_GAME = 2
 CHECKPOINT_EVERY_GAMES = 25

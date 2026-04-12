@@ -53,30 +53,34 @@ PROJECTILE_HITBOX_SIZE = 10
 
 # IO
 INPUT_FEATURE_NAMES = [
-    "self_angle_sin",
-    "self_angle_cos",
-    "self_move_intent_x",
-    "self_move_intent_y",
+    "self_ang_sin",
+    "self_ang_cos",
+    "self_move_x",
+    "self_move_y",
     "self_shot_cd_norm",
-    "ray_fwd",
-    "ray_left",
-    "ray_right",
-    "ray_back",
+    "sens_fwd",
+    "sens_left",
+    "sens_right",
+    "sens_back",
     "opp1_dx",
     "opp1_dy",
     "opp1_los",
-    "opp1_rel_ang",
+    "opp1_ang_sin",
+    "opp1_ang_cos",
     "opp2_dx",
     "opp2_dy",
     "opp2_los",
-    "opp2_rel_ang",
+    "opp2_ang_sin",
+    "opp2_ang_cos",
     "opp3_dx",
     "opp3_dy",
     "opp3_los",
-    "opp3_rel_ang",
+    "opp3_ang_sin",
+    "opp3_ang_cos",
+    "opp_near_dist_norm",
     "haz_tti_norm",
     "haz_miss_norm",
-    "haz_in_trajectory",
+    "haz_in_traj",
 ]
 ACTION_NAMES = [
     "move_up",
@@ -155,7 +159,7 @@ REWARD_COMPONENTS = {
 
 
 # TRAINING
-HIDDEN_DIMENSIONS = [64, 64]
+HIDDEN_DIMENSIONS = [96, 96]
 
 TOTAL_TRAINING_STEPS = 10_000_000
 CHECKPOINT_EVERY_STEPS = 200_000

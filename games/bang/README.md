@@ -6,10 +6,10 @@ Top-down arena shooter focused on movement, aiming, line of sight, and timing sh
 
 ![Bang Demo](../../media/bang-demo.gif)
 
-## Default Algorithm / Network
+## Algorithm / Network
 
 - Algorithm: DQN with double Q-learning, dueling heads, and prioritized replay
-- Hidden sizes: `[64, 64]`
+- Hidden sizes: `[96, 96]`
 
 ## Controls (Human)
 
@@ -20,31 +20,44 @@ Top-down arena shooter focused on movement, aiming, line of sight, and timing sh
 
 ## Observation / Actions
 
-- Observation: `24` floats (`INPUT_FEATURE_NAMES`, ordered)
-  - `self_angle_sin`
-  - `self_angle_cos`
-  - `self_move_intent_x`
-  - `self_move_intent_y`
-  - `self_shot_cd_norm`
-  - `ray_fwd`
-  - `ray_left`
-  - `ray_right`
-  - `ray_back`
-  - `opp1_dx`
-  - `opp1_dy`
-  - `opp1_los`
-  - `opp1_rel_ang`
-  - `opp2_dx`
-  - `opp2_dy`
-  - `opp2_los`
-  - `opp2_rel_ang`
-  - `opp3_dx`
-  - `opp3_dy`
-  - `opp3_los`
-  - `opp3_rel_ang`
-  - `haz_tti_norm`
-  - `haz_miss_norm`
-  - `haz_in_trajectory`
+- Observation: `28` floats (`INPUT_FEATURE_NAMES`, exact order)
+
+```python
+[
+    # SELF
+    "self_ang_sin",
+    "self_ang_cos",
+    "self_move_x",
+    "self_move_y",
+    "self_shot_cd_norm",
+    # SENS
+    "sens_fwd",
+    "sens_left",
+    "sens_right",
+    "sens_back",
+    # OPP
+    "opp1_dx",
+    "opp1_dy",
+    "opp1_los",
+    "opp1_ang_sin",
+    "opp1_ang_cos",
+    "opp2_dx",
+    "opp2_dy",
+    "opp2_los",
+    "opp2_ang_sin",
+    "opp2_ang_cos",
+    "opp3_dx",
+    "opp3_dy",
+    "opp3_los",
+    "opp3_ang_sin",
+    "opp3_ang_cos",
+    "opp_near_dist_norm",
+    # HAZ
+    "haz_tti_norm",
+    "haz_miss_norm",
+    "haz_in_traj",
+]
+```
 - Actions: `Discrete(8)` (`ACTION_NAMES`, ordered)
   - `0 move_up`
   - `1 move_down`
@@ -55,7 +68,9 @@ Top-down arena shooter focused on movement, aiming, line of sight, and timing sh
   - `6 aim_right`
   - `7 shoot`
 
-Ray features are normalized free-space-before-hit values in `[0, 1]`. Hits include arena walls and square obstacles.
+- `sens_*` values are normalized free-space-before-hit values in `[0, 1]`. Hits include arena walls and square obstacles.
+- Opponent slots are filled from alive opponents sorted by `(distance, fixed player order)`, so the slot order stays deterministic.
+- `opp*_ang_sin` and `opp*_ang_cos` are derived from the same ego-relative angle for each slotted opponent.
 
 ## Environment Notes
 
@@ -77,7 +92,7 @@ An episode counts as a success when the player wins the match.
 - `PENALTY_LOSE = -5.0` on match loss
 - `REWARD_KILL = +2.0` per enemy elimination
 - Engagement shaping: `clip(0.5 * (Phi_eng_next - Phi_eng_prev), -0.25, +0.25)` where `Phi_eng = (1 if tgt_in_los else 0) - tgt_dist_norm`
-- Hazard shaping: `clip(0.5 * (Phi_haz_next - Phi_haz_prev), -0.25, +0.25)` where `Phi_haz = haz_dist_norm - 1.5 * haz_in_trajectory`
+- Hazard shaping: `clip(0.5 * (Phi_haz_next - Phi_haz_prev), -0.25, +0.25)` where `Phi_haz = haz_dist_norm - 1.5 * haz_in_traj`
 - `PENALTY_STEP = -0.005` every training step
 
 ## Curriculum (Train)

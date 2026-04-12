@@ -2135,8 +2135,8 @@ class KickEnv(Env):
             "self_theta_cos": self_theta_cos,
             "self_theta_sin": self_theta_sin,
             "self_has_ball": 1.0 if controlled.has_ball else 0.0,
-            "self_role": float(self._role_scalar(controlled.role)),
-            "self_role_lane": float(self._role_lane_scalar(controlled.role)),
+            "self_role_id": float(self._role_scalar(controlled.role)),
+            "self_role_lane_id": float(self._role_lane_scalar(controlled.role)),
             "self_stamina": float(controlled.stamina),
             "self_stamina_delta": float(clip_signed(controlled.stamina_delta)),
             "tgt_dx": tgt_dx,
@@ -2145,15 +2145,15 @@ class KickEnv(Env):
             "tgt_rel_angle_cos": tgt_rel_angle_cos,
             "tgt_dvx": float(clip_signed((self.ball_vx - controlled.vx) / ball_vel_norm)),
             "tgt_dvy": float(clip_signed((self.ball_vy - controlled.vy) / ball_vel_norm)),
-            "tgt_owner_team": float(ball_owner_team),
-            "goal_dx": goal_dx,
-            "goal_dy": goal_dy,
-            "goal_rel_angle_sin": goal_rel_angle_sin,
-            "goal_rel_angle_cos": goal_rel_angle_cos,
-            "own_goal_dx": own_goal_dx,
-            "own_goal_dy": own_goal_dy,
-            "own_goal_rel_angle_sin": own_goal_rel_angle_sin,
-            "own_goal_rel_angle_cos": own_goal_rel_angle_cos,
+            "tgt_owner_team_id": float(ball_owner_team),
+            "land_opp_goal_dx": goal_dx,
+            "land_opp_goal_dy": goal_dy,
+            "land_opp_goal_rel_angle_sin": goal_rel_angle_sin,
+            "land_opp_goal_rel_angle_cos": goal_rel_angle_cos,
+            "land_own_goal_dx": own_goal_dx,
+            "land_own_goal_dy": own_goal_dy,
+            "land_own_goal_rel_angle_sin": own_goal_rel_angle_sin,
+            "land_own_goal_rel_angle_cos": own_goal_rel_angle_cos,
         }
 
         while len(teammates) < nearest_count:
@@ -2162,10 +2162,10 @@ class KickEnv(Env):
             opponents.append(self.right_players[0] if self.right_players else controlled)
 
         for idx, teammate in enumerate(teammates[:nearest_count], start=1):
-            feature_values[f"own{idx}_dx"] = float(clip_signed((teammate.x - controlled.x) / width))
-            feature_values[f"own{idx}_dy"] = float(clip_signed((teammate.y - controlled.y) / height))
-            feature_values[f"own{idx}_dvx"] = float(clip_signed((teammate.vx - controlled.vx) / player_vel_norm))
-            feature_values[f"own{idx}_dvy"] = float(clip_signed((teammate.vy - controlled.vy) / player_vel_norm))
+            feature_values[f"ally{idx}_dx"] = float(clip_signed((teammate.x - controlled.x) / width))
+            feature_values[f"ally{idx}_dy"] = float(clip_signed((teammate.y - controlled.y) / height))
+            feature_values[f"ally{idx}_dvx"] = float(clip_signed((teammate.vx - controlled.vx) / player_vel_norm))
+            feature_values[f"ally{idx}_dvy"] = float(clip_signed((teammate.vy - controlled.vy) / player_vel_norm))
 
         for idx, opponent in enumerate(opponents[:nearest_count], start=1):
             feature_values[f"opp{idx}_dx"] = float(clip_signed((opponent.x - controlled.x) / width))

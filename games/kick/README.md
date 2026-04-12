@@ -2,7 +2,11 @@
 
 Top-down football environment with a shared LEFT-team policy and a centralized critic during training. `kick` is currently paused as an experimental branch, but the environment and documentation remain in the repo because it exercises the multi-agent and CTDE pieces more directly than the other games.
 
-## Default Algorithm / Network
+## Clip
+
+No clip is currently checked into the repo for `kick`.
+
+## Algorithm / Network
 
 - Algorithm: PPO with MAPPO-style training
 - Actor MLP: `[128, 128]`
@@ -19,16 +23,16 @@ Top-down football environment with a shared LEFT-team policy and a centralized c
 
 ## Observation / Actions
 
+- Observation family: arcade / egocentric `SELF -> TGT -> LAND -> ALLY -> OPP`, emitted once per LEFT player
 - Observation:
   - RL mode (`train` / `eval`): `(N_left, 48)` where each row is one LEFT-player feature vector
   - Human mode: single `(48,)` vector for the currently controlled player
-- Feature blocks:
-  - `SELF` (9): `self_vx self_vy self_theta_cos self_theta_sin self_has_ball self_role self_role_lane self_stamina self_stamina_delta`
-  - `BALL` (7): `tgt_dx tgt_dy tgt_rel_angle_sin tgt_rel_angle_cos tgt_dvx tgt_dvy tgt_owner_team`
-  - `GOAL (opponent)` (4): `goal_dx goal_dy goal_rel_angle_sin goal_rel_angle_cos`
-  - `GOAL (own)` (4): `own_goal_dx own_goal_dy own_goal_rel_angle_sin own_goal_rel_angle_cos`
-  - `OWN 1..3` (12): `own{k}_{dx,dy,dvx,dvy}`
-  - `OPP 1..3` (12): `opp{k}_{dx,dy,dvx,dvy}`
+- Feature blocks in exact order:
+  - `SELF` (9): `self_vx self_vy self_theta_cos self_theta_sin self_has_ball self_role_id self_role_lane_id self_stamina self_stamina_delta`
+  - `TGT` (7): `tgt_dx tgt_dy tgt_rel_angle_sin tgt_rel_angle_cos tgt_dvx tgt_dvy tgt_owner_team_id`
+  - `LAND` (8): `land_opp_goal_dx land_opp_goal_dy land_opp_goal_rel_angle_sin land_opp_goal_rel_angle_cos land_own_goal_dx land_own_goal_dy land_own_goal_rel_angle_sin land_own_goal_rel_angle_cos`
+  - `ALLY` (12): `ally1_dx ally1_dy ally1_dvx ally1_dvy ally2_dx ally2_dy ally2_dvx ally2_dvy ally3_dx ally3_dy ally3_dvx ally3_dvy`
+  - `OPP` (12): `opp1_dx opp1_dy opp1_dvx opp1_dvy opp2_dx opp2_dy opp2_dvx opp2_dvy opp3_dx opp3_dy opp3_dvx opp3_dvy`
 - Nearest teammate/opponent selection is deterministic: sort by `(distance, player.slot_index)`
 - Actions: `Discrete(12)` (`ACTION_NAMES`, ordered)
   - `0 stay`

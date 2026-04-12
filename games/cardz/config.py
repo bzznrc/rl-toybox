@@ -114,41 +114,66 @@ TITLE_FONT_NAME = GAME_TITLE_FONT_NAME
 
 
 # IO
-# Compact public-information P1 view:
-# - public global state
+# Structured public-information P1 view:
+# - global match state
+# - explicit one-hot phase flags
 # - per-lane public board state for both players
-# - P1 hand card ids only
+# - explicit one-hot P1 hand slots only
+PHASE_FEATURE_NAMES = (
+    "phase_open",
+    "phase_resp",
+    "phase_free",
+)
+HAND_CARD_FLAG_SUFFIXES = (
+    "empty",
+    "u1",
+    "u2",
+    "u3",
+    "atk",
+    "ban",
+)
+HAND_CARD_FLAG_BY_KEY = {
+    None: "empty",
+    "U1": "u1",
+    "U2": "u2",
+    "U3": "u3",
+    "Atk": "atk",
+    "Ban": "ban",
+}
 INPUT_FEATURE_NAMES = [
-    "turn_norm",
-    "energy_p1_norm",
-    "energy_p2_norm",
-    "score_p1_norm",
-    "score_p2_norm",
-    "hand_count_p2_norm",
-    "phase_code",
-    "lane_0_power_p1_norm",
-    "lane_0_power_p2_norm",
-    "lane_0_unit_count_p1_norm",
-    "lane_0_unit_count_p2_norm",
-    "lane_0_status_p1",
-    "lane_0_status_p2",
-    "lane_1_power_p1_norm",
-    "lane_1_power_p2_norm",
-    "lane_1_unit_count_p1_norm",
-    "lane_1_unit_count_p2_norm",
-    "lane_1_status_p1",
-    "lane_1_status_p2",
-    "lane_2_power_p1_norm",
-    "lane_2_power_p2_norm",
-    "lane_2_unit_count_p1_norm",
-    "lane_2_unit_count_p2_norm",
-    "lane_2_status_p1",
-    "lane_2_status_p2",
-    "hand_0_card_id",
-    "hand_1_card_id",
-    "hand_2_card_id",
-    "hand_3_card_id",
-    "hand_4_card_id",
+    "glob_turn_norm",
+    "glob_energy_p1_norm",
+    "glob_energy_p2_norm",
+    "glob_score_p1_norm",
+    "glob_score_p2_norm",
+    "glob_hand_count_p1_norm",
+    "glob_hand_count_p2_norm",
+    *PHASE_FEATURE_NAMES,
+    *[
+        feature_name
+        for lane in range(NUM_LANES)
+        for feature_name in (
+            f"lane_{lane}_power_p1_norm",
+            f"lane_{lane}_power_p2_norm",
+            f"lane_{lane}_unit_count_p1_norm",
+            f"lane_{lane}_unit_count_p2_norm",
+        )
+    ],
+    *[
+        feature_name
+        for lane in range(NUM_LANES)
+        for feature_name in (
+            f"lane_{lane}_p1_has_ban",
+            f"lane_{lane}_p1_has_atk",
+            f"lane_{lane}_p2_has_ban",
+            f"lane_{lane}_p2_has_atk",
+        )
+    ],
+    *[
+        f"hand_{slot}_{suffix}"
+        for slot in range(MAX_HAND_SIZE)
+        for suffix in HAND_CARD_FLAG_SUFFIXES
+    ],
 ]
 ACTION_NAMES = [
     f"play_hand_{slot}_lane_{lane}"
@@ -158,6 +183,8 @@ ACTION_NAMES = [
 OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
 PASS_ACTION_INDEX = ACT_DIM - 1
+if OBS_DIM != 64:
+    raise RuntimeError(f"Cardz INPUT_FEATURE_NAMES expected 64 entries, got {OBS_DIM}.")
 
 
 # CURRICULUM
@@ -204,8 +231,8 @@ REWARD_COMPONENT_NAMES = (
 
 
 # TRAINING
-# Default compact A2C trunk: 30 -> 64 -> 64, then actor/critic heads.
-HIDDEN_DIMENSIONS = [64, 64]
+# Default actor-critic trunk: 64 -> 96 -> 96, then actor/critic heads.
+HIDDEN_DIMENSIONS = [96, 96]
 SHARE_BACKBONE = True
 
 MAX_TRAINING_ITERATIONS = 8000

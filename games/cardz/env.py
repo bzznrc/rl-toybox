@@ -98,7 +98,7 @@ OPPONENT_PASS_SCORE_THRESHOLD = 0.35
 
 
 class CardzEnv(Env):
-    """Tiny 2-player lane-control environment with a compact public P1 view."""
+    """Tiny 2-player lane-control environment with a structured public P1 view."""
 
     INPUT_FEATURE_NAMES = tuple(config.INPUT_FEATURE_NAMES)
     ACTION_NAMES = tuple(config.ACTION_NAMES)
@@ -411,39 +411,38 @@ class CardzEnv(Env):
             - self._persistent_lane_total(int(opponent), int(lane))
         )
 
-    def _lane_status_code(self, player: int, lane: int) -> float:
-        # Public lane status bits: BAN=1, ATK=2.
-        status_code = 0
-        if self._lane_has_banner(int(player), int(lane)):
-            status_code += 1
-        if self._lane_has_attack(int(player), int(lane)):
-            status_code += 2
-        return float(status_code)
-
-    def _phase_code(self) -> float:
-        # Phase codes stay as compact public state ids rather than one-hot flags.
+    def _phase_feature_name(self) -> str:
         if bool(self._passed[int(PLAYER_P2)]):
-            return 2.0
+            return "phase_free"
         if int(self._turn_lead_player(int(self.turn))) == int(PLAYER_P1):
-            return 0.0
-        return 1.0
+            return "phase_open"
+        return "phase_resp"
 
     def _build_observation(self) -> np.ndarray:
+        active_phase = self._phase_feature_name()
         feature_values: dict[str, float] = {
-            "turn_norm": float(clip_unit(float(self.turn) / float(config.TURN_NORMALIZER))),
-            "energy_p1_norm": float(clip_unit(float(self._energy[int(PLAYER_P1)]) / float(config.ENERGY_NORMALIZER))),
-            "energy_p2_norm": float(clip_unit(float(self._energy[int(PLAYER_P2)]) / float(config.ENERGY_NORMALIZER))),
-            "score_p1_norm": float(
+            "glob_turn_norm": float(clip_unit(float(self.turn) / float(config.TURN_NORMALIZER))),
+            "glob_energy_p1_norm": float(
+                clip_unit(float(self._energy[int(PLAYER_P1)]) / float(config.ENERGY_NORMALIZER))
+            ),
+            "glob_energy_p2_norm": float(
+                clip_unit(float(self._energy[int(PLAYER_P2)]) / float(config.ENERGY_NORMALIZER))
+            ),
+            "glob_score_p1_norm": float(
                 clip_unit(float(self._scores[int(PLAYER_P1)]) / float(config.MATCH_SCORE_NORMALIZER))
             ),
-            "score_p2_norm": float(
+            "glob_score_p2_norm": float(
                 clip_unit(float(self._scores[int(PLAYER_P2)]) / float(config.MATCH_SCORE_NORMALIZER))
             ),
-            "hand_count_p2_norm": float(
+            "glob_hand_count_p1_norm": float(
+                clip_unit(float(len(self._hands[int(PLAYER_P1)])) / float(config.HAND_COUNT_NORMALIZER))
+            ),
+            "glob_hand_count_p2_norm": float(
                 clip_unit(float(len(self._hands[int(PLAYER_P2)])) / float(config.HAND_COUNT_NORMALIZER))
             ),
-            "phase_code": float(self._phase_code()),
         }
+        for phase_name in config.PHASE_FEATURE_NAMES:
+            feature_values[str(phase_name)] = 1.0 if str(phase_name) == str(active_phase) else 0.0
         for lane in range(config.NUM_LANES):
             feature_values[f"lane_{lane}_power_p1_norm"] = float(
                 clip_unit(float(self._lane_total(int(PLAYER_P1), int(lane))) / float(config.LANE_POWER_NORMALIZER))
@@ -457,15 +456,15 @@ class CardzEnv(Env):
             feature_values[f"lane_{lane}_unit_count_p2_norm"] = float(
                 clip_unit(float(self._lane_unit_count(int(PLAYER_P2), int(lane))) / float(config.LANE_COUNT_NORMALIZER))
             )
-            feature_values[f"lane_{lane}_status_p1"] = float(self._lane_status_code(int(PLAYER_P1), int(lane)))
-            feature_values[f"lane_{lane}_status_p2"] = float(self._lane_status_code(int(PLAYER_P2), int(lane)))
+            feature_values[f"lane_{lane}_p1_has_ban"] = float(self._lane_has_banner(int(PLAYER_P1), int(lane)))
+            feature_values[f"lane_{lane}_p1_has_atk"] = float(self._lane_has_attack(int(PLAYER_P1), int(lane)))
+            feature_values[f"lane_{lane}_p2_has_ban"] = float(self._lane_has_banner(int(PLAYER_P2), int(lane)))
+            feature_values[f"lane_{lane}_p2_has_atk"] = float(self._lane_has_attack(int(PLAYER_P2), int(lane)))
         for slot in range(config.MAX_HAND_SIZE):
             card_key = self._card_in_slot(int(PLAYER_P1), int(slot))
-            if card_key is None:
-                feature_values[f"hand_{slot}_card_id"] = 0.0
-                continue
-            card = CARD_DEFS[str(card_key)]
-            feature_values[f"hand_{slot}_card_id"] = float(card.card_id)
+            active_suffix = str(config.HAND_CARD_FLAG_BY_KEY[None if card_key is None else str(card_key)])
+            for suffix in config.HAND_CARD_FLAG_SUFFIXES:
+                feature_values[f"hand_{slot}_{suffix}"] = 1.0 if str(suffix) == str(active_suffix) else 0.0
         obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
         if obs.shape != (self.OBS_DIM,):
             raise RuntimeError(f"Cardz observation expected {self.OBS_DIM} features, got {obs.shape[0]}.")

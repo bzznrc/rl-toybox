@@ -6,7 +6,7 @@ Classic grid Snake with a small obstacle curriculum, compact observations, and l
 
 ![Snake Demo](../../media/snake-demo.gif)
 
-## Default Algorithm / Network
+## Algorithm / Network
 
 - Algorithm: linear Q-learning (`qlearn`)
 - Hidden sizes: `[32]`
@@ -17,25 +17,17 @@ Classic grid Snake with a small obstacle curriculum, compact observations, and l
 
 ## Observation / Actions
 
-- Observation: `12` floats (`INPUT_FEATURE_NAMES`, ordered)
-  - `self_heading_sin`
-  - `self_heading_cos`
-  - `self_length`
-  - `self_last_action`
-  - `ray_fwd`
-  - `ray_left`
-  - `ray_right`
-  - `tgt_rel_angle_sin`
-  - `tgt_rel_angle_cos`
-  - `tgt_manhattan_dist`
-  - `tgt_dist_delta`
-  - `self_steps_since_food`
+- Observation family: arcade / egocentric `SELF -> SENS -> TGT`
+- Observation: `12` floats (`INPUT_FEATURE_NAMES`, exact order)
+  - `SELF` (5): `self_heading_sin self_heading_cos self_len_norm self_last_act_norm self_hunger_norm`
+  - `SENS` (3): `sens_fwd sens_left sens_right`
+  - `TGT` (4): `tgt_rel_angle_sin tgt_rel_angle_cos tgt_manhattan_norm tgt_dist_delta`
 - Actions: `Discrete(3)`
   - `0 straight`
   - `1 turn_right`
   - `2 turn_left`
 
-Ray features are normalized free-space-before-collision measurements in the snake's local frame. `0.0` means a collision is adjacent; `1.0` means no collision is found within the probe range.
+`sens_*` values are normalized free-space-before-collision measurements in the snake's local frame. `0.0` means a collision is adjacent; `1.0` means no collision is found within the probe range.
 
 ## Environment Notes
 
@@ -50,7 +42,7 @@ Ray features are normalized free-space-before-collision measurements in the snak
 - Progress shaping: `clip(1.0 * (Phi_next - Phi_prev), -0.05, +0.05)` where `Phi = -dist_food_norm - 0.5 * hunger_norm`
 - `PENALTY_STEP = -0.005` every training step
 
-`dist_food_norm` is normalized Manhattan head-to-food distance. When wrap-around is enabled it uses the shortest wrapped path. `hunger_norm` is `clamp(self_steps_since_food / hunger_cap_steps, 0, 1)`.
+`tgt_manhattan_norm` is normalized Manhattan head-to-food distance. When wrap-around is enabled it uses the shortest wrapped path. `self_hunger_norm` is `clamp(steps_since_food / hunger_cap_steps, 0, 1)`.
 
 ## Curriculum (Train)
 

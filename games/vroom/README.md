@@ -6,7 +6,7 @@ Top-down one-lap racing with procedural closed-loop tracks and continuous `steer
 
 ![Vroom Demo](../../media/vroom-demo.gif)
 
-## Default Algorithm / Network
+## Algorithm / Network
 
 - Algorithm: soft actor-critic (`sac`)
 - Actor: `20 -> 64 -> 64 -> 3`
@@ -22,33 +22,17 @@ Top-down one-lap racing with procedural closed-loop tracks and continuous `steer
 
 ## Observation / Actions
 
-- Observation: `20` floats (`INPUT_FEATURE_NAMES`, ordered)
-  - `track_lat_off`
-  - `ego_spd_lat`
-  - `ego_spd_fwd`
-  - `ego_spd_delta`
-  - `ego_yaw_rate`
-  - `track_heading_err_sin`
-  - `track_heading_err_cos`
-  - `track_look_near_sin`
-  - `track_look_near_cos`
-  - `track_look_far_sin`
-  - `track_look_far_cos`
-  - `track_curve_near`
-  - `track_curve_far`
-  - `ray_f`
-  - `ray_fl`
-  - `ray_fr`
-  - `ray_l`
-  - `ray_r`
-  - `flag_contact`
-  - `flag_off_track`
+- Observation family: arcade / egocentric `SELF -> SENS -> FLAG`
+- Observation: `20` floats (`INPUT_FEATURE_NAMES`, exact order)
+  - `SELF` (7): `self_lat_off self_spd_lat self_spd_fwd self_spd_delta self_yaw_rate self_head_err_sin self_head_err_cos`
+  - `SENS` (11): `sens_look_near_sin sens_look_near_cos sens_look_far_sin sens_look_far_cos sens_curve_near sens_curve_far sens_fwd sens_left_front sens_right_front sens_left sens_right`
+  - `FLAG` (2): `flag_contact flag_off_track`
 - Actions: `Box(3)` (`ACTION_NAMES`, ordered)
   - `steer` in `[-1, 1]`
   - `throttle` in `[0, 1]`
   - `brake` in `[0, 1]`
 
-The observation is intentionally vector-only and compact. `track_*` features encode track-relative geometry, `ray_*` features encode normalized free space before the road edge, and `flag_*` features expose binary control-state information.
+The observation is intentionally vector-only and compact. `self_*` features encode car state in the local track frame, `sens_*` features encode look-ahead geometry plus road-edge clearance, and `flag_*` features expose binary control-state information.
 
 ## Environment Notes
 

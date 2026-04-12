@@ -2,10 +2,14 @@
 
 Two-player lane-control card game built around hidden information, scripted opposition, and masked actions. `cardz` is the repo's smallest stochastic card game and a useful actor-critic example for turn-based decisions with legality constraints.
 
-## Default Algorithm / Network
+## Clip
+
+No clip is currently checked into the repo for `cardz`.
+
+## Algorithm / Network
 
 - Algorithm: `a2c` on the shared on-policy actor-critic stack
-- Network: shared trunk `[80, 80]`, actor head `16`, critic head `1`
+- Network: shared trunk `[96, 96]`, actor head `16`, critic head `1`
 
 ## Controls (Human)
 
@@ -19,32 +23,29 @@ Two-player lane-control card game built around hidden information, scripted oppo
 
 ## Observation / Actions
 
-- Observation: `30` floats (`INPUT_FEATURE_NAMES`, ordered)
-  - Global: `turn_norm`, `energy_p1_norm`, `energy_p2_norm`, `score_p1_norm`, `score_p2_norm`, `hand_count_p2_norm`, `phase_code`
-  - Lanes: `lane_<i>_power_p1_norm`, `lane_<i>_power_p2_norm`, `lane_<i>_unit_count_p1_norm`, `lane_<i>_unit_count_p2_norm`, `lane_<i>_status_p1`, `lane_<i>_status_p2` for `i in {0,1,2}`
-  - Hand: `hand_<j>_card_id` for `j in {0,1,2,3,4}`
+- Structured taxonomy fit: `GLOB -> PHASE -> LANE -> HAND -> LEGAL`
+- The current implementation keeps `LEGAL` in the action mask rather than the observation.
+- Observation: `64` floats (`INPUT_FEATURE_NAMES`, ordered)
+- Categorical public fields were expanded into explicit flags / one-hot blocks:
+  - `PHASE`: one-hot over `phase_open`, `phase_resp`, `phase_free`
+  - lane status: explicit `lane_<i>_p<player>_has_ban` and `lane_<i>_p<player>_has_atk`
+  - each `HAND` slot: one-hot over `empty`, `u1`, `u2`, `u3`, `atk`, `ban`
+- Ordered features:
+  - `GLOB (1-7)`: `glob_turn_norm`, `glob_energy_p1_norm`, `glob_energy_p2_norm`, `glob_score_p1_norm`, `glob_score_p2_norm`, `glob_hand_count_p1_norm`, `glob_hand_count_p2_norm`
+  - `PHASE (8-10)`: `phase_open`, `phase_resp`, `phase_free`
+  - `LANE numeric (11-22)`: `lane_0_power_p1_norm`, `lane_0_power_p2_norm`, `lane_0_unit_count_p1_norm`, `lane_0_unit_count_p2_norm`, `lane_1_power_p1_norm`, `lane_1_power_p2_norm`, `lane_1_unit_count_p1_norm`, `lane_1_unit_count_p2_norm`, `lane_2_power_p1_norm`, `lane_2_power_p2_norm`, `lane_2_unit_count_p1_norm`, `lane_2_unit_count_p2_norm`
+  - `LANE status (23-34)`: `lane_0_p1_has_ban`, `lane_0_p1_has_atk`, `lane_0_p2_has_ban`, `lane_0_p2_has_atk`, `lane_1_p1_has_ban`, `lane_1_p1_has_atk`, `lane_1_p2_has_ban`, `lane_1_p2_has_atk`, `lane_2_p1_has_ban`, `lane_2_p1_has_atk`, `lane_2_p2_has_ban`, `lane_2_p2_has_atk`
+  - `HAND (35-64)`: `hand_0_empty`, `hand_0_u1`, `hand_0_u2`, `hand_0_u3`, `hand_0_atk`, `hand_0_ban`, `hand_1_empty`, `hand_1_u1`, `hand_1_u2`, `hand_1_u3`, `hand_1_atk`, `hand_1_ban`, `hand_2_empty`, `hand_2_u1`, `hand_2_u2`, `hand_2_u3`, `hand_2_atk`, `hand_2_ban`, `hand_3_empty`, `hand_3_u1`, `hand_3_u2`, `hand_3_u3`, `hand_3_atk`, `hand_3_ban`, `hand_4_empty`, `hand_4_u1`, `hand_4_u2`, `hand_4_u3`, `hand_4_atk`, `hand_4_ban`
 - Perspective: `P1` only
-- Card id encoding:
-  - `0` empty
-  - `1` `U1`
-  - `2` `U2`
-  - `3` `U3`
-  - `4` `Atk`
-  - `5` `Ban`
-- Lane status encoding:
-  - `0` none
-  - `1` `BAN` only
-  - `2` `ATK` only
-  - `3` `BAN + ATK`
-- `phase_code` encoding:
-  - `0` P1 opens the turn exchange
-  - `1` P1 is the responder while P2 may still act later in the turn
-  - `2` P1 acts uncontested because P2 already passed
+- Phase semantics:
+  - `phase_open`: P1 opens the turn exchange
+  - `phase_resp`: P1 is the responder while P2 may still act later in the turn
+  - `phase_free`: P1 acts uncontested because P2 already passed
 - Actions: `Discrete(16)` (`ACTION_NAMES`, ordered)
   - `0..14`: `play_hand_<slot>_lane_<lane>`
   - `15`: `pass`
 
-The observation stays compact and public-information only: P1 sees board state, scores, energy, P2 hand size, and P1's own hand ids, but not P2's hand contents. Action masking still handles legal-play validity, so there are no per-card playable-now flags in the observation.
+The observation stays public-information only: P1 sees board state, scores, energy, both public hand counts, and P1's own hand contents, but not P2's hand contents. Action masking still handles legal-play validity, so there are no per-card playable-now flags in the observation.
 
 Action masking disables empty hand slots, unaffordable cards, unit plays into full lanes, `Atk` on lanes where that side already has an active attack buff, and `Ban` on lanes with no friendly units or an existing friendly banner.
 

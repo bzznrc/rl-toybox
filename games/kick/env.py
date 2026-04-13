@@ -50,6 +50,8 @@ from games.kick.config import (
     ACTION_NAMES as KICK_ACTION_NAMES,
     ACT_DIM as KICK_ACT_DIM,
     BALL_RADIUS_SCALE,
+    B_CLIP,
+    B_SCALE,
     BB_HEIGHT,
     CENTRAL_OBS_MASK_DIM,
     CENTRAL_OBS_BALL_FEATURES,
@@ -59,19 +61,18 @@ from games.kick.config import (
     DEBUG_SANITY_CHECKS,
     FPS,
     GAME_SPEED_SCALE,
-    GK_HIGH_BYPASS_PROB_DEFAULT,
     INPUT_FEATURE_NAMES as KICK_INPUT_FEATURE_NAMES,
     LEVEL_SETTINGS,
     MAX_LEVEL,
     MAX_LEFT_PLAYERS,
     MIN_LEVEL,
     OBS_DIM as KICK_OBS_DIM,
+    OBS_NEAREST_OUTFIELD_PLAYERS as KICK_OBS_NEAREST_OUTFIELD_PLAYERS,
     PHYSICS_DT,
     PENALTY_AREA_DEPTH_RATIO,
     PENALTY_AREA_WIDTH_RATIO,
     PENALTY_CONCEDE,
     PENALTY_TURNOVER,
-    PENALTY_ZONE,
     PLAYER_A_MAX_PX_PER_SEC2,
     PLAYER_V_MAX_PX_PER_SEC,
     PPO_METRICS_LOG_ENABLED,
@@ -79,6 +80,9 @@ from games.kick.config import (
     REWARD_PROGRESS,
     REWARD_PASS,
     REWARD_SCORE,
+    ROLE_ATTACK_SHIFT_TILES_BY_ROLE as KICK_ROLE_ATTACK_SHIFT_TILES_BY_ROLE,
+    ROLE_FEATURE_NAME_BY_ROLE as KICK_ROLE_FEATURE_NAME_BY_ROLE,
+    ROLE_NAMES as KICK_ROLE_NAMES,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     SHOW_BOTTOM_REWARD_BREAKDOWN,
@@ -90,7 +94,12 @@ from games.kick.config import (
     TILE_SIZE,
     TRAINING_FPS,
     WINDOW_TITLE,
-    Z_TOL,
+    ZONE_PENALTY_LINEAR_COEF,
+    ZONE_PENALTY_QUADRATIC_COEF,
+    ZONE_TOL_X_GK,
+    ZONE_TOL_X,
+    ZONE_TOL_Y_GK,
+    ZONE_TOL_Y,
     ZONE_TARGET_CLONE_ALPHA,
 )
 
@@ -122,7 +131,7 @@ class KickPlayer:
 
 
 class KickEnv(Env):
-    """Top-down football environment with curriculum-sized teams.
+    """Top-down football environment with curriculum-sized 7v7 teams.
 
     Human controls:
     - Move: WASD
@@ -155,40 +164,23 @@ class KickEnv(Env):
 
     TEAM_LEFT = "left"
     TEAM_RIGHT = "right"
-    ROLE_ORDER = ("GK", "LB", "LCB", "RCB", "RB", "LM", "LCM", "RCM", "RM", "LCS", "RCS")
-    ROLE_SCALAR_BY_GROUP = {
-        "GK": -1.0,
-        "DEF": 0.0,
-        "MID": 0.5,
-        "ATK": 1.0,
-    }
-    ROLE_LANE_BY_ROLE = {
-        "GK": 0.0,
-        "LB": -1.0,
-        "LM": -1.0,
-        "LS": -1.0,
-        "LCB": -0.25,
-        "LCM": -0.25,
-        "LCS": -0.25,
-        "RCB": 0.25,
-        "RCM": 0.25,
-        "RCS": 0.25,
-        "RB": 1.0,
-        "RM": 1.0,
-    }
+    ROLE_ORDER = tuple(KICK_ROLE_NAMES)
+    ROLE_FEATURE_NAME_BY_ROLE = dict(KICK_ROLE_FEATURE_NAME_BY_ROLE)
     ROLE_GROUP_BY_ROLE = {
         "GK": "GK",
         "LB": "DEF",
-        "LCB": "DEF",
-        "RCB": "DEF",
         "RB": "DEF",
         "LM": "MID",
-        "LCM": "MID",
-        "RCM": "MID",
+        "CM": "MID",
         "RM": "MID",
-        "LS": "ATK",
-        "LCS": "ATK",
-        "RCS": "ATK",
+        "CS": "ATK",
+    }
+    ROLE_ATTACK_SHIFT_TILES_BY_ROLE = dict(KICK_ROLE_ATTACK_SHIFT_TILES_BY_ROLE)
+    ROLE_Y_SHIFT_SCALE_BY_GROUP = {
+        "GK": 0.15,
+        "DEF": 0.40,
+        "MID": 0.60,
+        "ATK": 0.50,
     }
     ACTION_TO_DIRECTION = {
         ACTION_STAY: (0.0, 0.0),
@@ -206,17 +198,48 @@ class KickEnv(Env):
         ACTION_KICK_MID: 2,
         ACTION_KICK_HIGH: 3,
     }
-    OBS_NEAREST_PLAYERS = 3
+    OBS_NEAREST_PLAYERS = int(KICK_OBS_NEAREST_OUTFIELD_PLAYERS)
     MATCH_DURATION_SECONDS = 60.0
-    Z_ANCHOR_SMOOTH_TAU_SECONDS = 2.5
+    ANCHOR_SMOOTH_TAU_SECONDS = 0.35
+    SHOOT_MODE_GOAL_DISTANCE_RATIO = 0.30
+    SHOOT_MODE_FACING_COS_THRESHOLD = 0.55
+    GOALKEEPER_TRACK_ALPHA = 0.22
+    PASS_SPEED_SCALE_BY_KIND = {
+        1: 5.5,
+        2: 8.5,
+        3: 11.5,
+    }
+    SHOT_SPEED_SCALE_BY_KIND = {
+        1: 10.0,
+        2: 12.0,
+        3: 14.0,
+    }
+    SHOT_ASSIST_MIN_BY_KIND = {
+        1: 0.78,
+        2: 0.60,
+        3: 0.44,
+    }
+    SHOT_ASSIST_MAX_BY_KIND = {
+        1: 0.96,
+        2: 0.82,
+        3: 0.66,
+    }
+    SHOT_SPREAD_DEG_BY_KIND = {
+        1: 1.5,
+        2: 2.5,
+        3: 3.5,
+    }
+    SCRIPTED_SHOOT_COMMIT_DISTANCE_RATIO = 0.17
+    SCRIPTED_PASS_PRESSURE_RADIUS_TILES = 3.8
     DISPLAY_REWARD_UPDATE_INTERVAL_SECONDS = 0.5
-    REWARD_COMPONENT_ORDER = ("G", "C", "T", "A", "P", "Z")
+    REWARD_COMPONENT_ORDER = ("G", "C", "T", "A", "P", "B", "Z")
     REWARD_COMPONENT_KEY_TO_CODE = {
         "outcome.reward_score": "G",
         "outcome.penalty_concede": "C",
         "event.penalty_turnover": "T",
         "event.reward_pass": "A",
         "progress.reward_progress": "P",
+        "event.reward_ball_approach": "B",
         "event.penalty_zone": "Z",
     }
 
@@ -237,7 +260,7 @@ class KickEnv(Env):
         self._current_level = (
             int(self._curriculum.get_level())
             if self._curriculum is not None
-            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=3)
+            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=MAX_LEVEL)
         )
         self._last_episode_level = int(self._current_level)
         self._last_episode_success = 0
@@ -275,8 +298,8 @@ class KickEnv(Env):
         self.ball_radius = max(3.0, TILE_SIZE * 0.2 * float(BALL_RADIUS_SCALE))
         self.ball_drag_offset = TILE_SIZE * 0.58
         self.physics_dt = float(PHYSICS_DT)
-        self._z_anchor_smooth_alpha = 1.0 - math.exp(
-            -float(self.physics_dt) / float(self.Z_ANCHOR_SMOOTH_TAU_SECONDS)
+        self._anchor_smooth_alpha = 1.0 - math.exp(
+            -float(self.physics_dt) / float(self.ANCHOR_SMOOTH_TAU_SECONDS)
         )
         self.player_vmax_base = float(PLAYER_V_MAX_PX_PER_SEC)
         self.player_amax_base = float(PLAYER_A_MAX_PX_PER_SEC2)
@@ -298,12 +321,11 @@ class KickEnv(Env):
         self.contact_damp = 0.08
         self.contact_accel_scale = 0.7
         self.enemy_stamina_scale = 1.0
-        self.enemy_shot_error_choices: tuple[float, ...] = (0.0,)
         self.enemy_recovery_wait_ratio = 0.25
         self.enemy_recovery_resume_ratio = 0.70
         self.enemy_ball_turn_rate_deg = 7.5
-        self.gk_high_bypass_prob = float(GK_HIGH_BYPASS_PROB_DEFAULT)
         self._level_entropy_coef = 0.0
+        self._start_possession_mode = "CEN"
         self.debug_sanity_checks = bool(DEBUG_SANITY_CHECKS)
         self.max_left_players = int(MAX_LEFT_PLAYERS)
         self.central_obs_mask_dim = int(CENTRAL_OBS_MASK_DIM)
@@ -316,6 +338,7 @@ class KickEnv(Env):
         self.left_goalkeeper: KickPlayer | None = None
         self.right_goalkeeper: KickPlayer | None = None
         self._enemy_recovery_mode: dict[int, bool] = {}
+        self._keeper_track_y: dict[tuple[str, int], float] = {}
         self.controlled_index = 0
 
         self.ball_x = 0.0
@@ -324,8 +347,8 @@ class KickEnv(Env):
         self.ball_vy = 0.0
         self.ball_owner: KickPlayer | None = None
         self.ball_last_kick_type = 0
-        self._z_anchor_x: dict[int, float] = {}
-        self._z_anchor_y: dict[int, float] = {}
+        self._anchor_x: dict[int, float] = {}
+        self._anchor_y: dict[int, float] = {}
 
         self.last_touch_team: str | None = None
         self.last_touch_player_id: int | None = None
@@ -359,7 +382,7 @@ class KickEnv(Env):
     def _default_controlled_index(self) -> int:
         if not self.left_players:
             return 0
-        for preferred_role in ("LCS", "RCS", "LCM", "RCM", "GK"):
+        for preferred_role in ("CS", "CM", "LM", "RM", "GK"):
             for idx, player in enumerate(self.left_players):
                 if str(player.role) == preferred_role:
                     return int(idx)
@@ -408,7 +431,6 @@ class KickEnv(Env):
         players_opponent = max(1, int(settings["players_opponent"]))
         goals_size_scale = settings.get("goals_size_scale", None)
         enemy_stamina_scale = settings.get("enemy_stamina_scale", 1.0)
-        enemy_shot_error_choices = settings.get("enemy_shot_error_choices", [0.0])
         if "entropy_coef" not in settings:
             raise ValueError("Kick LEVEL_SETTINGS entries must define 'entropy_coef'.")
         raw_entropy_coef = settings["entropy_coef"]
@@ -436,17 +458,12 @@ class KickEnv(Env):
         except (TypeError, ValueError):
             enemy_stamina_scale_value = 1.0
         self.enemy_stamina_scale = self._clamp(enemy_stamina_scale_value, 0.0, 1.0)
-        parsed_error_choices: list[float] = []
-        if isinstance(enemy_shot_error_choices, (list, tuple)):
-            for raw in enemy_shot_error_choices:
-                try:
-                    parsed_error_choices.append(float(raw))
-                except (TypeError, ValueError):
-                    continue
-        if not parsed_error_choices:
-            parsed_error_choices = [0.0]
-        self.enemy_shot_error_choices = tuple(parsed_error_choices)
-        self.gk_high_bypass_prob = self._clamp(float(GK_HIGH_BYPASS_PROB_DEFAULT), 0.0, 1.0)
+        start_possession_mode = str(settings.get("start_possession", "CEN")).upper()
+        if start_possession_mode not in {"CEN", "RND_LEFT", "RND_RIGHT"}:
+            raise ValueError(
+                "Kick LEVEL_SETTINGS 'start_possession' must be 'CEN', 'RND_LEFT', or 'RND_RIGHT'."
+            )
+        self._start_possession_mode = start_possession_mode
         try:
             parsed_entropy_coef = float(raw_entropy_coef)
         except (TypeError, ValueError) as exc:
@@ -472,24 +489,23 @@ class KickEnv(Env):
         self._enemy_recovery_mode = {int(player.slot_index): False for player in self.right_players}
         self.left_goalkeeper = next((player for player in self.left_players if player.role == "GK"), None)
         self.right_goalkeeper = next((player for player in self.right_players if player.role == "GK"), None)
+        self._initialize_goalkeeper_track_state()
         self.controlled_index = int(self._default_controlled_index())
 
     def _team_for_roles(self, team: str, roles: list[str]) -> list[KickPlayer]:
-        y4 = (
-            self.pitch_top + self.pitch_height * 0.16,
-            self.pitch_top + self.pitch_height * 0.38,
-            self.pitch_top + self.pitch_height * 0.62,
-            self.pitch_top + self.pitch_height * 0.84,
-        )
-        y2 = (
-            self.pitch_top + self.pitch_height * 0.40,
-            self.pitch_top + self.pitch_height * 0.60,
-        )
+        center_y = self.pitch_top + self.pitch_height * 0.50
+        wide_top_y = self.pitch_top + self.pitch_height * 0.24
+        wide_bottom_y = self.pitch_top + self.pitch_height * 0.76
+        fullback_top_y = 0.5 * (wide_top_y + center_y)
+        fullback_bottom_y = 0.5 * (center_y + wide_bottom_y)
+
+        # Keep both teams organized inside their own half at kickoff, but give
+        # each line enough vertical and horizontal spread to avoid clustering.
         line_x_left = {
-            "GK": SCREEN_WIDTH * 0.06,
+            "GK": SCREEN_WIDTH * 0.07,
             "D": SCREEN_WIDTH * 0.20,
-            "M": SCREEN_WIDTH * 0.38,
-            "S": SCREEN_WIDTH * 0.56,
+            "M": SCREEN_WIDTH * 0.34,
+            "S": SCREEN_WIDTH * 0.47,
         }
         if team == self.TEAM_RIGHT:
             line_x = {key: SCREEN_WIDTH - value for key, value in line_x_left.items()}
@@ -499,17 +515,13 @@ class KickEnv(Env):
             default_angle = 0.0
 
         placement = {
-            "GK": (line_x["GK"], self.pitch_center_y),
-            "LB": (line_x["D"], y4[0]),
-            "LCB": (line_x["D"], y4[1]),
-            "RCB": (line_x["D"], y4[2]),
-            "RB": (line_x["D"], y4[3]),
-            "LM": (line_x["M"], y4[0]),
-            "LCM": (line_x["M"], y4[1]),
-            "RCM": (line_x["M"], y4[2]),
-            "RM": (line_x["M"], y4[3]),
-            "LCS": (line_x["S"], y2[0]),
-            "RCS": (line_x["S"], y2[1]),
+            "GK": (line_x["GK"], center_y),
+            "LB": (line_x["D"], fullback_top_y),
+            "RB": (line_x["D"], fullback_bottom_y),
+            "LM": (line_x["M"], wide_top_y),
+            "CM": (line_x["M"], center_y),
+            "RM": (line_x["M"], wide_bottom_y),
+            "CS": (line_x["S"], center_y),
         }
 
         players: list[KickPlayer] = []
@@ -609,6 +621,34 @@ class KickEnv(Env):
             return int(self.last_touch_player_id)
         return None
 
+    def _left_outfield_players(self) -> list[KickPlayer]:
+        return [player for player in self.left_players if str(player.role) != "GK"]
+
+    def _closest_left_ball_challenger_id(
+        self,
+        *,
+        ball_x: float | None = None,
+        ball_y: float | None = None,
+        positions_by_player_id: dict[int, tuple[float, float]] | None = None,
+    ) -> int | None:
+        candidates = self._left_outfield_players()
+        if not candidates:
+            return None
+
+        target_x = float(self.ball_x if ball_x is None else ball_x)
+        target_y = float(self.ball_y if ball_y is None else ball_y)
+
+        def _player_distance(player: KickPlayer) -> tuple[float, int]:
+            player_id = int(player.slot_index)
+            if positions_by_player_id is not None:
+                px, py = positions_by_player_id.get(player_id, (float(player.x), float(player.y)))
+            else:
+                px, py = float(player.x), float(player.y)
+            return float(self._distance(px, py, target_x, target_y)), int(player_id)
+
+        challenger = min(candidates, key=_player_distance)
+        return int(challenger.slot_index)
+
     def _clear_pending_pass(self) -> None:
         self._pass_pending = False
         self._pass_passer_id = None
@@ -705,9 +745,14 @@ class KickEnv(Env):
         *,
         k: int,
         exclude: KickPlayer | None = None,
+        exclude_goalkeeper: bool = False,
     ) -> list[KickPlayer]:
         pool = self.left_players if team == self.TEAM_LEFT else self.right_players
-        candidates = [player for player in pool if player is not exclude]
+        candidates = [
+            player
+            for player in pool
+            if player is not exclude and (not bool(exclude_goalkeeper) or str(player.role) != "GK")
+        ]
         candidates.sort(
             key=lambda player: (
                 float(self._distance(player.x, player.y, x, y)),
@@ -735,17 +780,25 @@ class KickEnv(Env):
         if keys != sorted(keys, key=lambda item: (item[0], item[1])):
             raise RuntimeError(f"Kick nearest-player ordering for {label} is not stable by (distance, slot_index).")
 
-    def _role_scalar(self, role: str) -> float:
+    @classmethod
+    def _role_group(cls, role: str) -> str:
         role_key = str(role).upper()
-        group = self.ROLE_GROUP_BY_ROLE.get(role_key)
-        if group is None:
-            group = "DEF"
-        return float(self.ROLE_SCALAR_BY_GROUP[group])
+        return str(cls.ROLE_GROUP_BY_ROLE.get(role_key, "DEF"))
 
     @classmethod
-    def _role_lane_scalar(cls, role: str) -> float:
+    def _role_attack_shift_pixels(cls, role: str) -> float:
         role_key = str(role).upper()
-        return float(cls.ROLE_LANE_BY_ROLE[role_key])
+        return float(cls.ROLE_ATTACK_SHIFT_TILES_BY_ROLE.get(role_key, 0.0)) * float(TILE_SIZE)
+
+    @classmethod
+    def _role_one_hot_feature_values(cls, role: str) -> dict[str, float]:
+        role_key = str(role).upper()
+        feature_name = cls.ROLE_FEATURE_NAME_BY_ROLE.get(role_key)
+        if feature_name is None:
+            raise ValueError(f"Unsupported Kick role '{role}'.")
+        feature_values = {name: 0.0 for name in cls.ROLE_FEATURE_NAME_BY_ROLE.values()}
+        feature_values[str(feature_name)] = 1.0
+        return feature_values
 
     def _update_stamina(self, player: KickPlayer, moved: bool) -> None:
         previous = float(player.stamina)
@@ -837,6 +890,74 @@ class KickEnv(Env):
             return KickEnv.ACTION_KICK_HIGH
         return KickEnv.ACTION_STAY
 
+    @classmethod
+    def _attack_sign_for_team(cls, team: str) -> float:
+        return 1.0 if str(team) == cls.TEAM_LEFT else -1.0
+
+    def _attacking_goal_x_for_team(self, team: str) -> float:
+        if str(team) == self.TEAM_LEFT:
+            return float(SCREEN_WIDTH - self.ball_radius)
+        return float(self.ball_radius)
+
+    def _goalkeeper_for_team(self, team: str) -> KickPlayer | None:
+        if str(team) == self.TEAM_LEFT:
+            return self.left_goalkeeper
+        return self.right_goalkeeper
+
+    def _opponent_goalkeeper_for_player(self, player: KickPlayer) -> KickPlayer | None:
+        defending_team = self.TEAM_RIGHT if player.team == self.TEAM_LEFT else self.TEAM_LEFT
+        return self._goalkeeper_for_team(defending_team)
+
+    @staticmethod
+    def _goalkeeper_track_key(keeper: KickPlayer) -> tuple[str, int]:
+        return str(keeper.team), int(keeper.slot_index)
+
+    def _initialize_goalkeeper_track_state(self) -> None:
+        self._keeper_track_y = {}
+        for keeper in (self.left_goalkeeper, self.right_goalkeeper):
+            if keeper is None:
+                continue
+            self._keeper_track_y[self._goalkeeper_track_key(keeper)] = float(keeper.y)
+
+    def _goalkeeper_reference_for_player(self, player: KickPlayer) -> tuple[float, float, float]:
+        defending_team = self.TEAM_RIGHT if player.team == self.TEAM_LEFT else self.TEAM_LEFT
+        goal_top, goal_bottom, _ = self._goal_bounds_for_defending_team(defending_team)
+        goal_center_y = float((goal_top + goal_bottom) * 0.5)
+        keeper = self._opponent_goalkeeper_for_player(player)
+        if keeper is None:
+            return self._attacking_goal_x_for_team(player.team), goal_center_y, 0.0
+        return float(keeper.x), float(keeper.y), float(keeper.vy)
+
+    def _shape_target_for_player(self, player: KickPlayer) -> tuple[float, float]:
+        team_attacking = self.effective_possession_team() == player.team
+        return self._player_anchor_position(
+            player,
+            team_attacking=team_attacking,
+            ball_y=float(self.ball_y),
+            use_smoothed=(player.team == self.TEAM_LEFT),
+        )
+
+    def _ball_hunter_for_team(self, team: str) -> KickPlayer | None:
+        pool = self.left_players if team == self.TEAM_LEFT else self.right_players
+        if not pool:
+            return None
+
+        candidates = [player for player in pool if str(player.role) != "GK"]
+        if not candidates:
+            candidates = list(pool)
+
+        if self.ball_owner is not None:
+            target_x = float(self.ball_owner.x)
+            target_y = float(self.ball_owner.y)
+        else:
+            target_x = float(self.ball_x)
+            target_y = float(self.ball_y)
+
+        return min(
+            candidates,
+            key=lambda player: self._distance(player.x, player.y, target_x, target_y),
+        )
+
     @staticmethod
     def _clamp_vector_magnitude(x: float, y: float, max_magnitude: float) -> tuple[float, float]:
         magnitude = math.hypot(x, y)
@@ -865,7 +986,27 @@ class KickEnv(Env):
         max_x = SCREEN_WIDTH - self.player_half
         min_y = self.player_half
         max_y = self.pitch_bottom - self.player_half
+        if player.has_ball and self.ball_owner is player:
+            min_y = -self.player_half
+            max_y = self.pitch_bottom + self.player_half
         return min_x, max_x, min_y, max_y
+
+    def _handle_ball_owner_touchline_exit(self) -> bool:
+        owner = self.ball_owner
+        if owner is None:
+            return False
+        if 0.0 <= float(owner.y) <= float(self.pitch_bottom):
+            return False
+
+        exit_x = float(np.clip(float(owner.x), -float(self.ball_radius), float(SCREEN_WIDTH) + float(self.ball_radius)))
+        exit_y = float(owner.y)
+        self._set_ball_owner(None)
+        self.ball_x = exit_x
+        self.ball_y = exit_y
+        self.ball_vx = 0.0
+        self.ball_vy = 0.0
+        self.ball_last_kick_type = 0
+        return True
 
     def _clamp_player_position(self, player: KickPlayer) -> None:
         min_x, max_x, min_y, max_y = self._player_bounds(player)
@@ -938,15 +1079,6 @@ class KickEnv(Env):
         moved = math.hypot(player.vx, player.vy) > 1e-3
         self._update_stamina(player, moved=moved)
 
-    def _shoot_speed(self, hold_seconds: float) -> float:
-        if hold_seconds < 0.1:
-            return 5.5 * self.speed_scale
-        if hold_seconds < 0.3:
-            return 8.5 * self.speed_scale
-        if hold_seconds < 0.5:
-            return 11.5 * self.speed_scale
-        return 14.5 * self.speed_scale
-
     def _kick_type_from_hold_seconds(self, hold_seconds: float) -> int:
         if hold_seconds < 0.3:
             return 1
@@ -954,20 +1086,111 @@ class KickEnv(Env):
             return 2
         return 3
 
-    def _apply_kick_or_contest(self, player: KickPlayer, kick_type: int) -> None:
+    def _pass_speed_for_kind(self, kick_type: int) -> float:
         kind = int(np.clip(int(kick_type), 0, 3))
         if kind <= 0:
+            return 0.0
+        return float(self.PASS_SPEED_SCALE_BY_KIND.get(kind, self.PASS_SPEED_SCALE_BY_KIND[3])) * self.speed_scale
+
+    def _shot_speed_for_kind(self, kick_type: int) -> float:
+        kind = int(np.clip(int(kick_type), 0, 3))
+        if kind <= 0:
+            return 0.0
+        return float(self.SHOT_SPEED_SCALE_BY_KIND.get(kind, self.SHOT_SPEED_SCALE_BY_KIND[3])) * self.speed_scale
+
+    def _shoot_mode_alignment(self, player: KickPlayer) -> float:
+        facing_x = math.cos(math.radians(float(player.angle)))
+        alignment = self._attack_sign_for_team(player.team) * float(facing_x)
+        return float(np.clip(alignment, -1.0, 1.0))
+
+    def _forward_distance_to_goal(self, player: KickPlayer) -> float:
+        goal_x = self._attacking_goal_x_for_team(player.team)
+        return max(0.0, self._attack_sign_for_team(player.team) * (float(goal_x) - float(player.x)))
+
+    def _player_in_shoot_mode(self, player: KickPlayer) -> bool:
+        if (not player.has_ball) or self.ball_owner is not player:
+            return False
+        if self._forward_distance_to_goal(player) > float(SCREEN_WIDTH) * float(self.SHOOT_MODE_GOAL_DISTANCE_RATIO):
+            return False
+        return bool(self._shoot_mode_alignment(player) >= float(self.SHOOT_MODE_FACING_COS_THRESHOLD))
+
+    def _player_shoot_charge_stage(self, player: KickPlayer) -> int:
+        if self.mode != "human":
+            return 0
+        if player is not self._controlled_player():
+            return 0
+        if (not self._prev_space_down) or self._human_shot_hold_start is None:
+            return 0
+        if not self._player_in_shoot_mode(player):
+            return 0
+        hold = max(0.0, time.perf_counter() - float(self._human_shot_hold_start))
+        return int(self._kick_type_from_hold_seconds(hold))
+
+    def _shoot_alignment_blend(self, player: KickPlayer) -> float:
+        threshold = float(self.SHOOT_MODE_FACING_COS_THRESHOLD)
+        alignment = float(self._shoot_mode_alignment(player))
+        if alignment <= threshold:
+            return 0.0
+        return float(np.clip((alignment - threshold) / max(1e-6, 1.0 - threshold), 0.0, 1.0))
+
+    @staticmethod
+    def _blend_angle(current_angle: float, target_angle: float, weight: float) -> float:
+        current = (float(current_angle) + 360.0) % 360.0
+        target = (float(target_angle) + 360.0) % 360.0
+        delta = ((target - current + 540.0) % 360.0) - 180.0
+        return (current + float(np.clip(weight, 0.0, 1.0)) * delta + 360.0) % 360.0
+
+    def _shot_target_point(self, player: KickPlayer, kick_type: int) -> tuple[float, float]:
+        defending_team = self.TEAM_RIGHT if player.team == self.TEAM_LEFT else self.TEAM_LEFT
+        goal_x = self._attacking_goal_x_for_team(player.team)
+        goal_top, goal_bottom, goal_half = self._goal_bounds_for_defending_team(defending_team)
+        goal_center_y = float((goal_top + goal_bottom) * 0.5)
+        _, keeper_y, _ = self._goalkeeper_reference_for_player(player)
+        keeper_offset = float(keeper_y) - goal_center_y
+        center_band = float(goal_half) * 0.12
+        if keeper_offset < -center_band:
+            open_side = 1.0
+        elif keeper_offset > center_band:
+            open_side = -1.0
+        else:
+            open_side = 1.0 if float(player.y) <= goal_center_y else -1.0
+
+        open_center_offset = open_side * min(float(goal_half) * 0.18, abs(keeper_offset) * 0.5)
+        if int(kick_type) == 1:
+            lane_offset = 0.0 if abs(keeper_offset) <= center_band else open_center_offset
+        elif int(kick_type) == 2:
+            lane_offset = open_side * float(goal_half) * 0.42
+        else:
+            lane_offset = open_side * float(goal_half) * 0.72
+
+        inset = max(float(self.ball_radius) * 0.9, float(goal_half) * 0.10)
+        target_y = self._clamp(goal_center_y + lane_offset, float(goal_top) + inset, float(goal_bottom) - inset)
+        return float(goal_x), float(target_y)
+
+    def _shot_angle_for_kind(self, player: KickPlayer, kick_type: int) -> float:
+        target_x, target_y = self._shot_target_point(player, kick_type)
+        target_angle = self._angle_degrees(player.x, player.y, target_x, target_y)
+        kind = int(np.clip(int(kick_type), 1, 3))
+        align_blend = self._shoot_alignment_blend(player)
+        assist_min = float(self.SHOT_ASSIST_MIN_BY_KIND.get(kind, self.SHOT_ASSIST_MIN_BY_KIND[3]))
+        assist_max = float(self.SHOT_ASSIST_MAX_BY_KIND.get(kind, self.SHOT_ASSIST_MAX_BY_KIND[3]))
+        assist = assist_min + (assist_max - assist_min) * align_blend
+        shot_angle = self._blend_angle(player.angle, target_angle, assist)
+        base_spread = float(self.SHOT_SPREAD_DEG_BY_KIND.get(kind, self.SHOT_SPREAD_DEG_BY_KIND[3]))
+        spread = base_spread + (1.0 - align_blend) * (0.75 + 0.25 * float(kind))
+        return float((shot_angle + random.uniform(-spread, spread)) % 360.0)
+
+    def _resolve_kick_action(self, player: KickPlayer, kick_type: int, *, force_pass: bool = False) -> None:
+        kind = int(np.clip(int(kick_type), 0, 3))
+        if kind <= 0 or (not player.has_ball) or self.ball_owner is not player:
             return
-        if player.has_ball and self.ball_owner is player:
-            self._arm_pending_pass(player)
-            if kind == 1:
-                speed = self._shoot_speed(0.15)
-            elif kind == 2:
-                speed = self._shoot_speed(0.35)
-            else:
-                speed = self._shoot_speed(0.60)
-            self._kick_ball(player, speed=speed, kick_type=kind)
-        return
+        if (not bool(force_pass)) and self._player_in_shoot_mode(player):
+            shot_angle = self._shot_angle_for_kind(player, kind)
+            player.angle = float(shot_angle)
+            self._kick_ball(player, speed=self._shot_speed_for_kind(kind), angle_degrees=shot_angle, kick_type=kind)
+            return
+        self._arm_pending_pass(player)
+        self._kick_ball(player, speed=self._pass_speed_for_kind(kind), kick_type=kind)
 
     @staticmethod
     def _point_segment_distance(
@@ -1112,7 +1335,7 @@ class KickEnv(Env):
             if controlled.has_ball and self._human_shot_hold_start is not None:
                 hold = max(0.0, time.perf_counter() - self._human_shot_hold_start)
                 kick_type = self._kick_type_from_hold_seconds(hold)
-                self._apply_kick_or_contest(controlled, kick_type=kick_type)
+                self._resolve_kick_action(controlled, kick_type=kick_type)
                 self.last_action_index = self._kick_action_from_kind(kick_type)
             self._human_shot_hold_start = None
 
@@ -1138,7 +1361,7 @@ class KickEnv(Env):
         kick_type = self.KICK_ACTION_TO_KIND.get(action_idx, 0)
         if kick_type <= 0:
             return
-        self._apply_kick_or_contest(player, kick_type=kick_type)
+        self._resolve_kick_action(player, kick_type=kick_type)
 
     def _rl_team_step(self, actions) -> np.ndarray:
         action_indices = self._decode_team_actions(actions)
@@ -1221,6 +1444,31 @@ class KickEnv(Env):
                 best_target = teammate
         return best_target
 
+    def _carrier_pressure_count(self, carrier: KickPlayer, defenders: list[KickPlayer]) -> int:
+        facing_x = math.cos(math.radians(float(carrier.angle)))
+        facing_y = math.sin(math.radians(float(carrier.angle)))
+        pressure_radius = float(self.SCRIPTED_PASS_PRESSURE_RADIUS_TILES) * float(TILE_SIZE)
+        pressure_count = 0
+        for defender in defenders:
+            rel_x = float(defender.x) - float(carrier.x)
+            rel_y = float(defender.y) - float(carrier.y)
+            distance = math.hypot(rel_x, rel_y)
+            if distance <= pressure_radius:
+                pressure_count += 1
+                continue
+            forward = rel_x * facing_x + rel_y * facing_y
+            if 0.0 < forward <= pressure_radius * 1.35:
+                lateral = abs(rel_x * facing_y - rel_y * facing_x)
+                if lateral <= TILE_SIZE * 1.9:
+                    pressure_count += 1
+        return int(pressure_count)
+
+    def _scripted_ready_to_shoot(self, player: KickPlayer) -> bool:
+        if not self._player_in_shoot_mode(player):
+            return False
+        goal_distance = self._forward_distance_to_goal(player)
+        return bool(goal_distance <= float(SCREEN_WIDTH) * float(self.SCRIPTED_SHOOT_COMMIT_DISTANCE_RATIO))
+
     def _penalty_area_bounds_for_defending_team(self, team: str) -> tuple[float, float, float, float]:
         penalty_depth = SCREEN_WIDTH * float(PENALTY_AREA_DEPTH_RATIO)
         penalty_height = self.pitch_height * float(PENALTY_AREA_WIDTH_RATIO)
@@ -1230,48 +1478,42 @@ class KickEnv(Env):
             return 0.0, penalty_depth, penalty_top, penalty_bottom
         return SCREEN_WIDTH - penalty_depth, float(SCREEN_WIDTH), penalty_top, penalty_bottom
 
-    def _is_in_attacking_penalty_area(self, player: KickPlayer) -> bool:
+    def _scripted_shot_kind(self, player: KickPlayer) -> int:
+        goal_distance = self._forward_distance_to_goal(player)
         defending_team = self.TEAM_RIGHT if player.team == self.TEAM_LEFT else self.TEAM_LEFT
-        left_x, right_x, top_y, bottom_y = self._penalty_area_bounds_for_defending_team(defending_team)
-        return left_x <= float(player.x) <= right_x and top_y <= float(player.y) <= bottom_y
-
-    def _attempt_penalty_area_shot(self, player: KickPlayer) -> bool:
-        if (not player.has_ball) or self.ball_owner is not player:
-            return False
-        if not self._is_in_attacking_penalty_area(player):
-            return False
-
-        defending_team = self.TEAM_RIGHT if player.team == self.TEAM_LEFT else self.TEAM_LEFT
-        goal_x = SCREEN_WIDTH - self.ball_radius if player.team == self.TEAM_LEFT else self.ball_radius
         goal_top, goal_bottom, goal_half = self._goal_bounds_for_defending_team(defending_team)
-        corner_inset = max(self.ball_radius * 0.75, goal_half * 0.15)
-        top_corner_y = goal_top + corner_inset
-        center_y = self.pitch_center_y
-        bottom_corner_y = goal_bottom - corner_inset
+        goal_center_y = float((goal_top + goal_bottom) * 0.5)
+        _, keeper_y, _ = self._goalkeeper_reference_for_player(player)
+        keeper_offset_norm = abs(float(keeper_y) - goal_center_y) / max(1.0, float(goal_half))
+        if goal_distance <= float(SCREEN_WIDTH) * 0.18 and keeper_offset_norm > 0.15:
+            return 3
+        if goal_distance <= float(SCREEN_WIDTH) * 0.24:
+            return 2
+        return 1
 
-        roll = random.random()
-        if float(player.y) <= self.pitch_center_y:
-            if roll < 0.50:
-                target_y = top_corner_y
-            elif roll < 0.75:
-                target_y = center_y
+    def _goalkeeper_cover_target_y(self, keeper: KickPlayer) -> float:
+        goal_top, goal_bottom, goal_half = self._goal_bounds_for_defending_team(keeper.team)
+        goal_center_y = float((goal_top + goal_bottom) * 0.5)
+        owner = self.ball_owner
+
+        if owner is not None and owner.team != keeper.team:
+            if self._player_in_shoot_mode(owner):
+                likely_kind = self._scripted_shot_kind(owner)
+                _, likely_target_y = self._shot_target_point(owner, likely_kind)
+                desired_y = 0.65 * float(likely_target_y) + 0.35 * float(owner.y)
             else:
-                target_y = bottom_corner_y
+                desired_y = 0.55 * float(self.ball_y) + 0.45 * float(owner.y)
         else:
-            if roll < 0.50:
-                target_y = bottom_corner_y
-            elif roll < 0.75:
-                target_y = center_y
-            else:
-                target_y = top_corner_y
+            desired_y = 0.65 * float(self.ball_y) + 0.35 * goal_center_y
 
-        shot_angle = self._angle_degrees(player.x, player.y, goal_x, target_y)
-        if player.team == self.TEAM_RIGHT:
-            shot_error = random.choice(self.enemy_shot_error_choices)
-            shot_angle = float((float(shot_angle) + float(shot_error)) % 360.0)
-        player.angle = float(shot_angle)
-        self._kick_ball(player, speed=11.0 * self.speed_scale, angle_degrees=player.angle)
-        return True
+        travel_band = max(float(self.player_half), float(goal_half) * 0.85)
+        desired_y = self._clamp(desired_y, goal_center_y - travel_band, goal_center_y + travel_band)
+        key = self._goalkeeper_track_key(keeper)
+        prev_y = float(self._keeper_track_y.get(key, keeper.y))
+        tracked_y = prev_y + float(self.GOALKEEPER_TRACK_ALPHA) * (float(desired_y) - prev_y)
+        tracked_y = self._clamp(tracked_y, goal_top + self.player_half, goal_bottom - self.player_half)
+        self._keeper_track_y[key] = float(tracked_y)
+        return float(tracked_y)
 
     def _ai_player_step(self, player: KickPlayer) -> None:
         if self.mode == "human":
@@ -1289,81 +1531,71 @@ class KickEnv(Env):
             self._ai_goalkeeper_step(player)
             return
 
-        target_x = player.home_x
-        target_y = player.home_y
+        target_x, target_y = self._shape_target_for_player(player)
 
         if player.has_ball:
-            goal_x = SCREEN_WIDTH - self.ball_radius if player.team == self.TEAM_LEFT else self.ball_radius
-            if self._attempt_penalty_area_shot(player):
-                return
             defenders = [candidate for candidate in self.all_players if candidate.team != player.team]
             blocker_in_front = self._has_defender_in_front(player, defenders)
-            pass_target = self._select_progressive_pass_target(player) if blocker_in_front else None
+            pressure_count = self._carrier_pressure_count(player, defenders)
+            goal_x = self._attacking_goal_x_for_team(player.team)
+            attack_sign = self._attack_sign_for_team(player.team)
+            desired_goal_angle = self._angle_degrees(player.x, player.y, goal_x, self.pitch_center_y)
+            turn_rate = self.enemy_ball_turn_rate_deg if player.team == self.TEAM_RIGHT else 18.0
+            player.angle = self._turn_towards_angle(player.angle, desired_goal_angle, turn_rate)
+            shoot_mode = self._player_in_shoot_mode(player)
+            shot_ready = self._scripted_ready_to_shoot(player)
+            pass_target = self._select_progressive_pass_target(player) if pressure_count > 0 else None
 
             if pass_target is not None:
                 pass_angle = self._angle_degrees(player.x, player.y, pass_target.x, pass_target.y)
                 player.angle = pass_angle
-                self._kick_ball(player, speed=self._shoot_speed(0.35), angle_degrees=pass_angle)
+                self._resolve_kick_action(player, 2, force_pass=True)
+                return
+
+            if shot_ready and not blocker_in_front:
+                self._resolve_kick_action(player, self._scripted_shot_kind(player))
                 return
 
             if blocker_in_front:
                 lane_sign = -1.0 if player.home_y > self.pitch_center_y else 1.0
-                target_x = player.x + (1.0 if player.team == self.TEAM_LEFT else -1.0) * TILE_SIZE * 4.0
-                target_y = self._clamp(player.y + lane_sign * TILE_SIZE * 3.2, TILE_SIZE, self.pitch_bottom - TILE_SIZE)
+                target_x = player.x + attack_sign * TILE_SIZE * (2.8 if shoot_mode else 3.6)
+                target_y = self._clamp(player.y + lane_sign * TILE_SIZE * 2.8, TILE_SIZE, self.pitch_bottom - TILE_SIZE)
             else:
-                target_x = goal_x
-                home_bias = (player.home_y - self.pitch_center_y) * 0.25
-                target_y = self._clamp(self.pitch_center_y + home_bias, TILE_SIZE, self.pitch_bottom - TILE_SIZE)
+                carry_step = TILE_SIZE * (2.6 if shoot_mode else 4.4)
+                target_x = self._clamp(player.x + attack_sign * carry_step, self.player_half, SCREEN_WIDTH - self.player_half)
+                if shoot_mode:
+                    _, shot_target_y = self._shot_target_point(player, 2)
+                    target_y = self._clamp(
+                        0.55 * float(shot_target_y) + 0.45 * float(player.home_y),
+                        TILE_SIZE,
+                        self.pitch_bottom - TILE_SIZE,
+                    )
+                else:
+                    target_y = self._clamp(
+                        0.70 * float(player.home_y) + 0.30 * float(self.pitch_center_y),
+                        TILE_SIZE,
+                        self.pitch_bottom - TILE_SIZE,
+                    )
 
             desired_angle = self._angle_degrees(player.x, player.y, target_x, target_y)
-            if player.team == self.TEAM_RIGHT:
-                player.angle = self._turn_towards_angle(player.angle, desired_angle, self.enemy_ball_turn_rate_deg)
-            else:
-                player.angle = desired_angle
+            player.angle = self._turn_towards_angle(player.angle, desired_angle, turn_rate)
             self._move_player(player, target_x - player.x, target_y - player.y)
-
-            shoot_lane_blocked = self._is_lane_blocked(player.x, player.y, goal_x, self.pitch_center_y, defenders, margin=1.0)
-            shoot_threshold = SCREEN_WIDTH * 0.27
-            distance_to_goal = abs(goal_x - player.x)
-            if distance_to_goal < shoot_threshold and (not shoot_lane_blocked) and random.random() < 0.12:
-                if player.team == self.TEAM_RIGHT:
-                    base_angle = self._angle_degrees(player.x, player.y, goal_x, self.pitch_center_y)
-                    shot_error = random.choice(self.enemy_shot_error_choices)
-                    player.angle = float((base_angle + float(shot_error)) % 360.0)
-                else:
-                    _, _, target_goal_half = self._goal_bounds_for_defending_team(self.TEAM_RIGHT)
-                    variance = random.uniform(-target_goal_half * 0.7, target_goal_half * 0.7)
-                    player.angle = self._angle_degrees(player.x, player.y, goal_x, self.pitch_center_y + variance)
-                self._kick_ball(player, speed=11.0 * self.speed_scale)
             return
 
         owner = self.ball_owner
+        hunter = self._ball_hunter_for_team(player.team)
         if owner is None:
-            nearest_teammate = self._nearest_player(player.team, self.ball_x, self.ball_y)
-            if nearest_teammate is player:
+            if hunter is player:
                 target_x = self.ball_x
                 target_y = self.ball_y
-            else:
-                pull = 0.28
-                target_x = (1.0 - pull) * player.home_x + pull * self.ball_x
-                target_y = (1.0 - pull) * player.home_y + pull * self.ball_y
         elif owner.team == player.team:
             if owner is player:
                 return
-            role_group = self.ROLE_GROUP_BY_ROLE.get(str(player.role).upper(), "DEF")
-            support = 0.20 if role_group == "ATK" else 0.12
-            target_x = (1.0 - support) * player.home_x + support * owner.x
-            target_y = (1.0 - support) * player.home_y + support * owner.y
         else:
-            nearest_teammate = self._nearest_player(player.team, owner.x, owner.y)
-            if nearest_teammate is player:
+            if hunter is player:
                 target_x = owner.x
                 target_y = owner.y
-            else:
-                press = 0.18
-                target_x = (1.0 - press) * player.home_x + press * owner.x
-                target_y = (1.0 - press) * player.home_y + press * owner.y
-            if self._distance(player.x, player.y, self.ball_x, self.ball_y) < self.contest_range * 0.9:
+            if hunter is player and self._distance(player.x, player.y, self.ball_x, self.ball_y) < self.contest_range * 0.9:
                 self._attempt_contest(player)
 
         distance = self._distance(player.x, player.y, target_x, target_y)
@@ -1379,19 +1611,25 @@ class KickEnv(Env):
 
         target_x = home_x
         goal_top, goal_bottom, _ = self._goal_bounds_for_defending_team(keeper.team)
-        target_y = self._clamp(self.ball_y, goal_top + self.player_half, goal_bottom - self.player_half)
+        target_y = self._goalkeeper_cover_target_y(keeper)
         if self.ball_owner is not None and self.ball_owner.team != keeper.team:
-            step_out = TILE_SIZE * 0.6
+            owner = self.ball_owner
+            step_out = TILE_SIZE * (0.85 if owner is not None and self._player_in_shoot_mode(owner) else 0.55)
             target_x = home_x + step_out if defend_left else home_x - step_out
 
         keeper.angle = self._angle_degrees(keeper.x, keeper.y, self.ball_x, self.ball_y)
         self._move_player(keeper, target_x - keeper.x, target_y - keeper.y)
 
-        if keeper.has_ball and random.random() < 0.08:
-            clear_x = SCREEN_WIDTH * 0.50
-            clear_y = random.uniform(self.pitch_top + TILE_SIZE, self.pitch_bottom - TILE_SIZE)
-            keeper.angle = self._angle_degrees(keeper.x, keeper.y, clear_x, clear_y)
-            self._kick_ball(keeper, speed=10.0 * self.speed_scale)
+        if keeper.has_ball and self.ball_owner is keeper:
+            clear_target = self._select_progressive_pass_target(keeper)
+            if clear_target is not None:
+                keeper.angle = self._angle_degrees(keeper.x, keeper.y, clear_target.x, clear_target.y)
+                self._resolve_kick_action(keeper, 2, force_pass=True)
+            else:
+                clear_x = SCREEN_WIDTH * 0.50
+                clear_y = self.pitch_center_y
+                keeper.angle = self._angle_degrees(keeper.x, keeper.y, clear_x, clear_y)
+                self._resolve_kick_action(keeper, 3)
 
     def _step_ball(self) -> None:
         if self.ball_owner is not None:
@@ -1443,13 +1681,12 @@ class KickEnv(Env):
             if self._distance(self.ball_x, self.ball_y, keeper.x, keeper.y) > TILE_SIZE * 1.8:
                 continue
 
+            ball_speed = math.hypot(self.ball_vx, self.ball_vy)
             offset_from_keeper = abs(self.ball_y - keeper.y)
-            catch_prob = self._clamp(1.0 - offset_from_keeper / max(1.0, goal_half_height), 0.0, 1.0)
-            would_catch = random.random() < catch_prob
-            if not would_catch:
-                continue
-
-            if int(self.ball_last_kick_type) == 3 and random.random() < float(self.gk_high_bypass_prob):
+            offset_ratio = self._clamp(offset_from_keeper / max(1.0, goal_half_height), 0.0, 1.0)
+            speed_ratio = self._clamp(ball_speed / max(1.0, self.ball_max_speed * 1.1), 0.0, 1.0)
+            catch_radius = TILE_SIZE * (1.0 + 0.55 * (1.0 - offset_ratio) - 0.20 * speed_ratio)
+            if self._distance(self.ball_x, self.ball_y, keeper.x, keeper.y) > catch_radius:
                 continue
 
             self._set_ball_owner(keeper)
@@ -1477,10 +1714,47 @@ class KickEnv(Env):
         self.ball_vy = 0.0
         self.ball_last_kick_type = 0
         self._set_ball_owner(None)
+        self._initialize_goalkeeper_track_state()
         self._reset_progress_baseline()
 
         self.freeze_frames = self.freeze_after_restart
         self._human_shot_hold_start = None
+
+    def _random_left_outfield_player(self) -> KickPlayer | None:
+        candidates = [player for player in self.left_players if str(player.role) != "GK"]
+        if candidates:
+            return random.choice(candidates)
+        if self.left_goalkeeper is not None:
+            return self.left_goalkeeper
+        if self.left_players:
+            return self.left_players[0]
+        return None
+
+    def _random_right_outfield_player(self) -> KickPlayer | None:
+        candidates = [player for player in self.right_players if str(player.role) != "GK"]
+        if candidates:
+            return random.choice(candidates)
+        if self.right_goalkeeper is not None:
+            return self.right_goalkeeper
+        if self.right_players:
+            return self.right_players[0]
+        return None
+
+    def _seed_easy_level_start_possession(self) -> None:
+        if str(self._start_possession_mode) == "CEN":
+            return
+        player = (
+            self._random_left_outfield_player()
+            if str(self._start_possession_mode) == "RND_LEFT"
+            else self._random_right_outfield_player()
+        )
+        if player is None:
+            return
+        player.vx = 0.0
+        player.vy = 0.0
+        target_x = SCREEN_WIDTH - self.ball_radius if player.team == self.TEAM_LEFT else self.ball_radius
+        player.angle = self._angle_degrees(player.x, player.y, target_x, self.pitch_center_y)
+        self._set_ball_owner(player)
 
     def _restart_throw_in(self, team: str, x: float, y_top: bool) -> None:
         self._clear_pending_pass()
@@ -1533,6 +1807,7 @@ class KickEnv(Env):
         target_y = self.pitch_center_y
         keeper.angle = self._angle_degrees(keeper.x, keeper.y, target_x, target_y)
         self._set_ball_owner(keeper)
+        self._keeper_track_y[self._goalkeeper_track_key(keeper)] = float(keeper.y)
         self._reset_progress_baseline()
         self.freeze_frames = self.freeze_after_restart
 
@@ -1616,9 +1891,10 @@ class KickEnv(Env):
             self._resolve_player_contacts()
             self._run_auto_contests()
             self._decay_timers()
-            self._step_ball()
-            self._try_pickup_free_ball()
-            self._try_goalkeeper_catch()
+            if not self._handle_ball_owner_touchline_exit():
+                self._step_ball()
+                self._try_pickup_free_ball()
+                self._try_goalkeeper_catch()
             self._handle_ball_boundaries()
 
         self.steps += 1
@@ -1637,7 +1913,7 @@ class KickEnv(Env):
         depth_now = self._ball_depth_progress()
         responsible_id = self._responsible_left_player_id()
 
-        if self._prev_effective_possession_team != self.TEAM_RIGHT and possession_team == self.TEAM_RIGHT:
+        if possession_team != self.TEAM_LEFT:
             self._progress_prev_depth = float(depth_now)
             self._prev_effective_possession_team = possession_team
             return 0.0, None
@@ -1652,257 +1928,230 @@ class KickEnv(Env):
         reward_value = float(REWARD_PROGRESS) * clipped_delta
         return float(reward_value), int(responsible_id)
 
+    def _ball_approach_reward(
+        self,
+        *,
+        prev_left_positions: dict[int, tuple[float, float]],
+        prev_ball_position: tuple[float, float],
+        challenger_id: int | None,
+    ) -> tuple[float, int | None]:
+        if self.effective_possession_team() == self.TEAM_LEFT:
+            return 0.0, None
+        if challenger_id is None:
+            return 0.0, None
+
+        current_player = next(
+            (player for player in self.left_players if int(player.slot_index) == int(challenger_id)),
+            None,
+        )
+        prev_position = prev_left_positions.get(int(challenger_id))
+        if current_player is None or prev_position is None:
+            return 0.0, None
+
+        prev_ball_x, prev_ball_y = prev_ball_position
+        prev_dist = float(self._distance(prev_position[0], prev_position[1], prev_ball_x, prev_ball_y))
+        curr_dist = float(self._distance(current_player.x, current_player.y, self.ball_x, self.ball_y))
+        ball_improve = float(prev_dist - curr_dist)
+        reward_value = float(B_SCALE) * float(np.clip(ball_improve, -float(B_CLIP), float(B_CLIP)))
+        return float(reward_value), int(challenger_id)
+
     def _opponent_goal_center(self) -> tuple[float, float]:
         goal_top, goal_bottom, _ = self._goal_bounds_for_defending_team(self.TEAM_RIGHT)
         return float(SCREEN_WIDTH), float((goal_top + goal_bottom) * 0.5)
 
-    @staticmethod
-    def _goal_axis_y_from_x(x_pos: float) -> float:
-        width = max(1.0, float(SCREEN_WIDTH))
-        axis = (float(x_pos) / width) * 100.0
-        if axis <= 0.0:
-            return 0.0
-        if axis >= 100.0:
-            return 100.0
-        return float(axis)
-
-    def _lane_axis_from_y(self, y_pos: float) -> float:
+    def _ball_y_norm(self, ball_y: float) -> float:
         height = max(1.0, float(self.pitch_height))
-        axis = ((float(y_pos) - float(self.pitch_top)) / height) * 100.0
-        if axis <= 0.0:
+        centered = (2.0 * ((float(ball_y) - float(self.pitch_top)) / height)) - 1.0
+        return float(clip_signed(centered))
+
+    def _raw_anchor_target(
+        self,
+        player: KickPlayer,
+        *,
+        team_attacking: bool,
+        ball_y: float,
+    ) -> tuple[float, float]:
+        attack_direction = 1.0 if player.team == self.TEAM_LEFT else -1.0
+        attack_shift = self._role_attack_shift_pixels(player.role) if bool(team_attacking) else 0.0
+        target_x = float(player.home_x) + attack_direction * float(attack_shift)
+
+        role_group = self._role_group(player.role)
+        y_shift_scale = float(self.ROLE_Y_SHIFT_SCALE_BY_GROUP.get(role_group, 0.40))
+        max_y_shift = float(self.pitch_height) * 0.08 * y_shift_scale
+        target_y = float(player.home_y) + self._ball_y_norm(ball_y) * max_y_shift
+
+        return (
+            float(self._clamp(target_x, self.player_half, SCREEN_WIDTH - self.player_half)),
+            float(self._clamp(target_y, self.player_half, self.pitch_bottom - self.player_half)),
+        )
+
+    def _zone_tolerances_for_player(self, player: KickPlayer) -> tuple[float, float]:
+        if str(player.role) == "GK":
+            return float(ZONE_TOL_X_GK), float(ZONE_TOL_Y_GK)
+        return float(ZONE_TOL_X), float(ZONE_TOL_Y)
+
+    def _anchor_offset_norm_for_player(
+        self,
+        player: KickPlayer,
+        *,
+        team_attacking: bool,
+        ball_y: float,
+        use_smoothed: bool = True,
+    ) -> tuple[float, float]:
+        target_x, target_y = self._player_anchor_position(
+            player,
+            team_attacking=team_attacking,
+            ball_y=ball_y,
+            use_smoothed=bool(use_smoothed),
+        )
+        width = max(1.0, float(SCREEN_WIDTH))
+        height = max(1.0, float(self.pitch_height))
+        return (
+            float(clip_signed((float(target_x) - float(player.x)) / width)),
+            float(clip_signed((float(target_y) - float(player.y)) / height)),
+        )
+
+    def _zone_distance_for_player(
+        self,
+        player: KickPlayer,
+        *,
+        team_attacking: bool,
+        ball_y: float,
+        use_smoothed: bool = True,
+    ) -> float:
+        dx, dy = self._anchor_offset_norm_for_player(
+            player,
+            team_attacking=team_attacking,
+            ball_y=ball_y,
+            use_smoothed=bool(use_smoothed),
+        )
+        tol_x, tol_y = self._zone_tolerances_for_player(player)
+        return float(math.sqrt((float(dx) / tol_x) ** 2 + (float(dy) / tol_y) ** 2))
+
+    def _zone_penalty_for_player(
+        self,
+        player: KickPlayer,
+        *,
+        team_attacking: bool,
+        ball_y: float,
+    ) -> float:
+        zone_distance = self._zone_distance_for_player(
+            player,
+            team_attacking=team_attacking,
+            ball_y=ball_y,
+            use_smoothed=True,
+        )
+        if zone_distance <= 1.0:
             return 0.0
-        if axis >= 100.0:
-            return 100.0
-        return float(axis)
+        excess = float(zone_distance) - 1.0
+        return -(
+            float(ZONE_PENALTY_LINEAR_COEF) * excess
+            + float(ZONE_PENALTY_QUADRATIC_COEF) * excess * excess
+        )
 
-    def _lane_axis_to_y(self, axis_value: float) -> float:
-        axis = float(axis_value)
-        if axis <= 0.0:
-            axis = 0.0
-        elif axis >= 100.0:
-            axis = 100.0
-        mapped_y = float(self.pitch_top) + (axis / 100.0) * float(self.pitch_height)
-        return float(self._clamp(mapped_y, self.player_half, self.pitch_bottom - self.player_half))
-
-    def _zone_anchor_y(self, player: KickPlayer, *, has_possession: bool, ball_y: float) -> float:
-        role_group = self.ROLE_GROUP_BY_ROLE.get(str(player.role).upper(), "DEF")
-        if role_group == "GK":
-            return 5.0
-
-        base_anchor_by_group = {
-            "DEF": 25.0,
-            "MID": 45.0,
-            "ATK": 65.0,
-        }
-        base_anchor = float(base_anchor_by_group.get(role_group, 45.0))
-        phase_shift = 10.0 if bool(has_possession) else -10.0
-        ball_shift = float(np.clip((float(ball_y) - 50.0) * 0.1, -5.0, 5.0))
-        return float(self._clamp(base_anchor + phase_shift + ball_shift, 5.0, 85.0))
-
-    def _zone_anchor_lane_axis(self, player: KickPlayer, *, ball_lane_axis: float) -> float:
-        base_lane_axis = self._lane_axis_from_y(player.home_y)
-        ball_shift = float(np.clip((float(ball_lane_axis) - 50.0) * 0.2, -7.5, 7.5))
-        return float(self._clamp(base_lane_axis + ball_shift, 5.0, 95.0))
+    def _should_skip_zone_penalty(self, player: KickPlayer, *, challenger_id: int | None) -> bool:
+        if self.ball_owner is player:
+            return True
+        if self._player_in_shoot_mode(player):
+            return True
+        if self.effective_possession_team() != self.TEAM_LEFT and challenger_id is not None:
+            return bool(int(player.slot_index) == int(challenger_id))
+        return False
 
     def _zone_norm_components(self, *, use_smoothed: bool = True) -> float:
         if not self.left_players:
             return 0.0
 
-        left_has_possession = self.effective_possession_team() == self.TEAM_LEFT
-        ball_depth_y = self._goal_axis_y_from_x(self.ball_x)
-        ball_lane_axis = self._lane_axis_from_y(self.ball_y)
-        width = max(1.0, float(SCREEN_WIDTH))
-        height = max(1.0, float(self.pitch_height))
-        inv_width = 1.0 / width
-        inv_height = 1.0 / height
-
-        depth_norm_total = 0.0
-        lane_norm_total = 0.0
+        left_attacking = self.effective_possession_team() == self.TEAM_LEFT
+        ball_y = float(self.ball_y)
+        zone_distance_total = 0.0
         for player in self.left_players:
-            target_x = self._zone_player_target_x(
+            zone_distance_total += self._zone_distance_for_player(
                 player,
-                has_possession=left_has_possession,
-                ball_depth_axis=ball_depth_y,
+                team_attacking=left_attacking,
+                ball_y=ball_y,
                 use_smoothed=bool(use_smoothed),
             )
-            target_y = self._zone_player_target_y(
-                player,
-                ball_lane_axis=ball_lane_axis,
-                use_smoothed=bool(use_smoothed),
-            )
-            depth_norm_total += abs(float(player.x) - float(target_x)) * inv_width
-            lane_norm_total += abs(float(player.y) - float(target_y)) * inv_height
 
         divisor = max(1, len(self.left_players))
-        depth_mean = depth_norm_total / divisor
-        lane_mean = lane_norm_total / divisor
-        return float(np.clip((depth_mean + lane_mean) * 0.5, 0.0, 1.0))
+        return float(np.clip(zone_distance_total / divisor, 0.0, 1.0))
 
     def _zone_norm(self) -> float:
         return float(self._zone_norm_components())
 
-    def _zone_norm_for_player(
-        self,
-        player: KickPlayer,
-        *,
-        has_possession: bool,
-        ball_depth_axis: float,
-        ball_lane_axis: float,
-        use_smoothed: bool = True,
-    ) -> tuple[float, float]:
-        target_x = self._zone_player_target_x(
-            player,
-            has_possession=has_possession,
-            ball_depth_axis=ball_depth_axis,
-            use_smoothed=bool(use_smoothed),
-        )
-        target_y = self._zone_player_target_y(
-            player,
-            ball_lane_axis=ball_lane_axis,
-            use_smoothed=bool(use_smoothed),
-        )
-        width = max(1.0, float(SCREEN_WIDTH))
-        height = max(1.0, float(self.pitch_height))
-        x_distance_norm = abs(float(player.x) - float(target_x)) / width
-        y_distance_norm = abs(float(player.y) - float(target_y)) / height
-        return (
-            float(np.clip(x_distance_norm, 0.0, 1.0)),
-            float(np.clip(y_distance_norm, 0.0, 1.0)),
-        )
-
-    def _depth_axis_to_x(self, axis_value: float) -> float:
-        axis = float(axis_value)
-        if axis <= 0.0:
-            axis = 0.0
-        elif axis >= 100.0:
-            axis = 100.0
-        mapped_x = (axis / 100.0) * float(SCREEN_WIDTH)
-        return float(self._clamp(mapped_x, self.player_half, SCREEN_WIDTH - self.player_half))
-
-    def _zone_target_x(
-        self,
-        player: KickPlayer,
-        *,
-        has_possession: bool,
-        ball_depth_axis: float,
-    ) -> float:
-        depth_anchor_axis = self._zone_anchor_y(
-            player,
-            has_possession=has_possession,
-            ball_y=ball_depth_axis,
-        )
-        return float(self._depth_axis_to_x(depth_anchor_axis))
-
-    def _zone_target_y(
-        self,
-        player: KickPlayer,
-        *,
-        ball_lane_axis: float,
-    ) -> float:
-        lane_anchor_axis = self._zone_anchor_lane_axis(
-            player,
-            ball_lane_axis=ball_lane_axis,
-        )
-        return float(self._lane_axis_to_y(lane_anchor_axis))
-
     @staticmethod
-    def _z_anchor_player_key(player: KickPlayer) -> int:
+    def _anchor_player_key(player: KickPlayer) -> int:
         return int(player.slot_index)
 
-    def _initialize_z_anchor_state(self) -> None:
+    def _initialize_anchor_state(self) -> None:
         if not self.left_players:
-            self._z_anchor_x = {}
-            self._z_anchor_y = {}
+            self._anchor_x = {}
+            self._anchor_y = {}
             return
-        left_has_possession = self.effective_possession_team() == self.TEAM_LEFT
-        ball_depth_axis = self._goal_axis_y_from_x(self.ball_x)
-        ball_lane_axis = self._lane_axis_from_y(self.ball_y)
-        anchors: dict[int, float] = {}
-        lane_anchors: dict[int, float] = {}
-        for player in self.left_players:
-            key = self._z_anchor_player_key(player)
-            anchors[key] = float(
-                self._zone_target_x(
-                    player,
-                    has_possession=left_has_possession,
-                    ball_depth_axis=ball_depth_axis,
-                )
-            )
-            lane_anchors[key] = float(
-                self._zone_target_y(
-                    player,
-                    ball_lane_axis=ball_lane_axis,
-                )
-            )
-        self._z_anchor_x = anchors
-        self._z_anchor_y = lane_anchors
 
-    def _update_z_anchor_state(self) -> None:
+        left_attacking = self.effective_possession_team() == self.TEAM_LEFT
+        ball_y = float(self.ball_y)
+        next_anchor_x: dict[int, float] = {}
+        next_anchor_y: dict[int, float] = {}
+        for player in self.left_players:
+            key = self._anchor_player_key(player)
+            target_x, target_y = self._raw_anchor_target(
+                player,
+                team_attacking=left_attacking,
+                ball_y=ball_y,
+            )
+            next_anchor_x[key] = float(target_x)
+            next_anchor_y[key] = float(target_y)
+        self._anchor_x = next_anchor_x
+        self._anchor_y = next_anchor_y
+
+    def _update_anchor_state(self) -> None:
         if not self.left_players:
-            self._z_anchor_x = {}
-            self._z_anchor_y = {}
+            self._anchor_x = {}
+            self._anchor_y = {}
             return
-        left_has_possession = self.effective_possession_team() == self.TEAM_LEFT
-        ball_depth_axis = self._goal_axis_y_from_x(self.ball_x)
-        ball_lane_axis = self._lane_axis_from_y(self.ball_y)
-        alpha = float(self._z_anchor_smooth_alpha)
-        prev_anchors = self._z_anchor_x
-        prev_lane_anchors = self._z_anchor_y
-        next_anchors: dict[int, float] = {}
-        next_lane_anchors: dict[int, float] = {}
-        for player in self.left_players:
-            key = self._z_anchor_player_key(player)
-            target_x = self._zone_target_x(
-                player,
-                has_possession=left_has_possession,
-                ball_depth_axis=ball_depth_axis,
-            )
-            prev_x = float(prev_anchors.get(key, target_x))
-            smooth_x = prev_x + alpha * (float(target_x) - prev_x)
-            next_anchors[key] = float(smooth_x)
-            target_y = self._zone_target_y(
-                player,
-                ball_lane_axis=ball_lane_axis,
-            )
-            prev_y = float(prev_lane_anchors.get(key, target_y))
-            smooth_y = prev_y + alpha * (float(target_y) - prev_y)
-            next_lane_anchors[key] = float(smooth_y)
-        self._z_anchor_x = next_anchors
-        self._z_anchor_y = next_lane_anchors
 
-    def _zone_player_target_x(
+        left_attacking = self.effective_possession_team() == self.TEAM_LEFT
+        ball_y = float(self.ball_y)
+        alpha = float(self._anchor_smooth_alpha)
+        prev_anchor_x = self._anchor_x
+        prev_anchor_y = self._anchor_y
+        next_anchor_x: dict[int, float] = {}
+        next_anchor_y: dict[int, float] = {}
+        for player in self.left_players:
+            key = self._anchor_player_key(player)
+            target_x, target_y = self._raw_anchor_target(
+                player,
+                team_attacking=left_attacking,
+                ball_y=ball_y,
+            )
+            prev_x = float(prev_anchor_x.get(key, target_x))
+            prev_y = float(prev_anchor_y.get(key, target_y))
+            next_anchor_x[key] = float(prev_x + alpha * (float(target_x) - prev_x))
+            next_anchor_y[key] = float(prev_y + alpha * (float(target_y) - prev_y))
+        self._anchor_x = next_anchor_x
+        self._anchor_y = next_anchor_y
+
+    def _player_anchor_position(
         self,
         player: KickPlayer,
         *,
-        has_possession: bool,
-        ball_depth_axis: float,
+        team_attacking: bool,
+        ball_y: float,
         use_smoothed: bool,
-    ) -> float:
-        target_x = self._zone_target_x(
+    ) -> tuple[float, float]:
+        target_x, target_y = self._raw_anchor_target(
             player,
-            has_possession=has_possession,
-            ball_depth_axis=ball_depth_axis,
+            team_attacking=team_attacking,
+            ball_y=ball_y,
         )
-        if not use_smoothed:
-            return float(target_x)
-        key = self._z_anchor_player_key(player)
-        return float(self._z_anchor_x.get(key, target_x))
-
-    def _zone_player_target_y(
-        self,
-        player: KickPlayer,
-        *,
-        ball_lane_axis: float,
-        use_smoothed: bool,
-    ) -> float:
-        target_y = self._zone_target_y(
-            player,
-            ball_lane_axis=ball_lane_axis,
+        if not bool(use_smoothed):
+            return float(target_x), float(target_y)
+        key = self._anchor_player_key(player)
+        return (
+            float(self._anchor_x.get(key, target_x)),
+            float(self._anchor_y.get(key, target_y)),
         )
-        if not use_smoothed:
-            return float(target_y)
-        key = self._z_anchor_player_key(player)
-        return float(self._z_anchor_y.get(key, target_y))
 
     def _can_toggle_visual_overlay(self) -> bool:
         return bool(self.show_game and self.mode in {"human", "eval"})
@@ -1926,22 +2175,27 @@ class KickEnv(Env):
             return
 
         clone_color = COLOR_LIGHT_NEUTRAL + (int(self.zone_target_clone_alpha),)
-        left_has_possession = self.effective_possession_team() == self.TEAM_LEFT
-        ball_depth_axis = self._goal_axis_y_from_x(self.ball_x)
-        ball_lane_axis = self._lane_axis_from_y(self.ball_y)
+        safe_zone_color = COLOR_LIGHT_NEUTRAL + (128,)
+        left_attacking = self.effective_possession_team() == self.TEAM_LEFT
+        ball_y = float(self.ball_y)
         inset = float(CELL_INSET)
 
         for player in self.left_players:
-            target_x = self._zone_player_target_x(
+            target_x, target_y = self._player_anchor_position(
                 player,
-                has_possession=left_has_possession,
-                ball_depth_axis=ball_depth_axis,
+                team_attacking=left_attacking,
+                ball_y=ball_y,
                 use_smoothed=True,
             )
-            target_y = self._zone_player_target_y(
-                player,
-                ball_lane_axis=ball_lane_axis,
-                use_smoothed=True,
+            tol_x, tol_y = self._zone_tolerances_for_player(player)
+            safe_zone_width = max(self.player_size, 2.0 * float(tol_x) * float(SCREEN_WIDTH))
+            safe_zone_height = max(self.player_size, 2.0 * float(tol_y) * float(self.pitch_height))
+            arcade.draw_ellipse_filled(
+                target_x,
+                self.window_controller.to_arcade_y(target_y),
+                safe_zone_width,
+                safe_zone_height,
+                safe_zone_color,
             )
             arcade.draw_line(
                 player.x,
@@ -1984,6 +2238,8 @@ class KickEnv(Env):
         prev_responsible_left_id: int | None,
         prev_possession_team: str | None,
         curr_owner_team: str | None,
+        prev_left_positions: dict[int, tuple[float, float]],
+        prev_ball_position: tuple[float, float],
     ) -> tuple[np.ndarray, dict[str, float]]:
         player_count = len(self.left_players)
         rewards = np.zeros((player_count,), dtype=np.float32)
@@ -1992,10 +2248,15 @@ class KickEnv(Env):
             "event.penalty_turnover": 0.0,
             "event.reward_pass": 0.0,
             "progress.reward_progress": 0.0,
+            "event.reward_ball_approach": 0.0,
             "event.penalty_zone": 0.0,
             "outcome.reward_score": 0.0,
             "outcome.penalty_concede": 0.0,
         }
+
+        active_challenger_id = None
+        if self.effective_possession_team() != self.TEAM_LEFT:
+            active_challenger_id = self._closest_left_ball_challenger_id()
 
         progress_reward, progress_owner_id = self._progress_reward()
         progress_reward = float(progress_reward)
@@ -2004,6 +2265,18 @@ class KickEnv(Env):
             if progress_idx is not None:
                 rewards[int(progress_idx)] += progress_reward
         reward_breakdown["progress.reward_progress"] = float(progress_reward)
+
+        ball_approach_reward, challenger_reward_id = self._ball_approach_reward(
+            prev_left_positions=prev_left_positions,
+            prev_ball_position=prev_ball_position,
+            challenger_id=active_challenger_id,
+        )
+        ball_approach_reward = float(ball_approach_reward)
+        if ball_approach_reward != 0.0 and challenger_reward_id is not None:
+            challenger_idx = index_by_player_id.get(int(challenger_reward_id))
+            if challenger_idx is not None:
+                rewards[int(challenger_idx)] += ball_approach_reward
+        reward_breakdown["event.reward_ball_approach"] = float(ball_approach_reward)
 
         exclude_goalkeeper_catch = self._is_opponent_goalkeeper_collection()
         direct_turnover = bool(
@@ -2038,20 +2311,16 @@ class KickEnv(Env):
             reward_breakdown["event.reward_pass"] = pass_reward
 
         zone_total = 0.0
-        left_has_possession = self.effective_possession_team() == self.TEAM_LEFT
-        ball_depth_axis = self._goal_axis_y_from_x(self.ball_x)
-        ball_lane_axis = self._lane_axis_from_y(self.ball_y)
+        left_attacking = self.effective_possession_team() == self.TEAM_LEFT
+        ball_y = float(self.ball_y)
         for idx, player in enumerate(self.left_players):
-            zone_norm_x, zone_norm_y = self._zone_norm_for_player(
+            if self._should_skip_zone_penalty(player, challenger_id=active_challenger_id):
+                continue
+            zone_penalty = self._zone_penalty_for_player(
                 player,
-                has_possession=left_has_possession,
-                ball_depth_axis=ball_depth_axis,
-                ball_lane_axis=ball_lane_axis,
-                use_smoothed=True,
+                team_attacking=left_attacking,
+                ball_y=ball_y,
             )
-            zone_distance = float(math.hypot(float(zone_norm_x), float(zone_norm_y)))
-            zone_excess = max(0.0, float(zone_distance) - float(Z_TOL))
-            zone_penalty = float(PENALTY_ZONE) * float(zone_excess * zone_excess)
             rewards[int(idx)] += zone_penalty
             zone_total += zone_penalty
         reward_breakdown["event.penalty_zone"] = float(zone_total)
@@ -2081,8 +2350,15 @@ class KickEnv(Env):
             controlled.y,
             k=nearest_count,
             exclude=controlled,
+            exclude_goalkeeper=True,
         )
-        opponents = self._nearest_players(self.TEAM_RIGHT, controlled.x, controlled.y, k=nearest_count)
+        opponents = self._nearest_players(
+            self.TEAM_RIGHT,
+            controlled.x,
+            controlled.y,
+            k=nearest_count,
+            exclude_goalkeeper=True,
+        )
         self._debug_validate_nearest_order(controlled=controlled, players=teammates, label="own")
         self._debug_validate_nearest_order(controlled=controlled, players=opponents, label="opp")
 
@@ -2091,6 +2367,7 @@ class KickEnv(Env):
         self_theta_sin = float(math.sin(angle_rad))
         tgt_dx = float(clip_signed((self.ball_x - controlled.x) / width))
         tgt_dy = float(clip_signed((self.ball_y - controlled.y) / height))
+        tgt_dist_norm = float(np.clip(math.hypot(tgt_dx, tgt_dy), 0.0, 1.0))
 
         def _relative_heading(dx: float, dy: float) -> tuple[float, float]:
             rel_norm = math.hypot(float(dx), float(dy))
@@ -2101,77 +2378,75 @@ class KickEnv(Env):
             rel_sin = float(clip_signed((self_theta_cos * float(dy) - self_theta_sin * float(dx)) / rel_norm_eps))
             return rel_sin, rel_cos
 
-        ball_rel_norm = math.hypot(tgt_dx, tgt_dy)
-        if ball_rel_norm <= 1e-8:
-            tgt_rel_angle_sin = 0.0
-            tgt_rel_angle_cos = 1.0
-        else:
-            ball_rel_norm_eps = ball_rel_norm + 1e-8
-            tgt_rel_angle_cos = float(
-                clip_signed((self_theta_cos * tgt_dx + self_theta_sin * tgt_dy) / ball_rel_norm_eps)
-            )
-            tgt_rel_angle_sin = float(
-                clip_signed((self_theta_cos * tgt_dy - self_theta_sin * tgt_dx) / ball_rel_norm_eps)
-            )
-        effective_team = self.effective_possession_team()
-        if effective_team is None:
-            ball_owner_team = 0.0
-        elif effective_team == self.TEAM_LEFT:
-            ball_owner_team = 1.0
-        else:
-            ball_owner_team = -1.0
+        tgt_rel_ang_sin, tgt_rel_ang_cos = _relative_heading(tgt_dx, tgt_dy)
         opp_goal_y = float((self.right_goal_top + self.right_goal_bottom) * 0.5)
         own_goal_y = float((self.left_goal_top + self.left_goal_bottom) * 0.5)
         goal_dx = float(clip_signed((float(SCREEN_WIDTH) - controlled.x) / width))
         goal_dy = float(clip_signed((opp_goal_y - controlled.y) / height))
-        goal_rel_angle_sin, goal_rel_angle_cos = _relative_heading(goal_dx, goal_dy)
         own_goal_dx = float(clip_signed((0.0 - controlled.x) / width))
         own_goal_dy = float(clip_signed((own_goal_y - controlled.y) / height))
-        own_goal_rel_angle_sin, own_goal_rel_angle_cos = _relative_heading(own_goal_dx, own_goal_dy)
+        gk_x, gk_y, gk_vy = self._goalkeeper_reference_for_player(controlled)
+        shoot_mode_flag = 1.0 if self._player_in_shoot_mode(controlled) else 0.0
+
+        left_attacking = self.effective_possession_team() == self.TEAM_LEFT
+        anchor_x, anchor_y = self._player_anchor_position(
+            controlled,
+            team_attacking=left_attacking,
+            ball_y=float(self.ball_y),
+            use_smoothed=True,
+        )
+        map_anchor_dx = float(clip_signed((float(anchor_x) - controlled.x) / width))
+        map_anchor_dy = float(clip_signed((float(anchor_y) - controlled.y) / height))
 
         feature_values: dict[str, float] = {
+            "self_x_norm": float(clip_signed((2.0 * (float(controlled.x) / width)) - 1.0)),
+            "self_y_norm": float(clip_signed((2.0 * ((float(controlled.y) - float(self.pitch_top)) / height)) - 1.0)),
             "self_vx": float(clip_signed(controlled.vx / player_vel_norm)),
             "self_vy": float(clip_signed(controlled.vy / player_vel_norm)),
             "self_theta_cos": self_theta_cos,
             "self_theta_sin": self_theta_sin,
             "self_has_ball": 1.0 if controlled.has_ball else 0.0,
-            "self_role_id": float(self._role_scalar(controlled.role)),
-            "self_role_lane_id": float(self._role_lane_scalar(controlled.role)),
             "self_stamina": float(controlled.stamina),
             "self_stamina_delta": float(clip_signed(controlled.stamina_delta)),
             "tgt_dx": tgt_dx,
             "tgt_dy": tgt_dy,
-            "tgt_rel_angle_sin": tgt_rel_angle_sin,
-            "tgt_rel_angle_cos": tgt_rel_angle_cos,
+            "tgt_dist_norm": tgt_dist_norm,
+            "tgt_rel_ang_sin": tgt_rel_ang_sin,
+            "tgt_rel_ang_cos": tgt_rel_ang_cos,
             "tgt_dvx": float(clip_signed((self.ball_vx - controlled.vx) / ball_vel_norm)),
-            "tgt_dvy": float(clip_signed((self.ball_vy - controlled.vy) / ball_vel_norm)),
-            "tgt_owner_team_id": float(ball_owner_team),
             "land_opp_goal_dx": goal_dx,
             "land_opp_goal_dy": goal_dy,
-            "land_opp_goal_rel_angle_sin": goal_rel_angle_sin,
-            "land_opp_goal_rel_angle_cos": goal_rel_angle_cos,
             "land_own_goal_dx": own_goal_dx,
             "land_own_goal_dy": own_goal_dy,
-            "land_own_goal_rel_angle_sin": own_goal_rel_angle_sin,
-            "land_own_goal_rel_angle_cos": own_goal_rel_angle_cos,
+            "land_gk_dx": float(clip_signed((float(gk_x) - controlled.x) / width)),
+            "land_gk_dy": float(clip_signed((float(gk_y) - controlled.y) / height)),
+            "land_gk_dvy": float(clip_signed((float(gk_vy) - controlled.vy) / player_vel_norm)),
+            "map_anchor_dx": map_anchor_dx,
+            "map_anchor_dy": map_anchor_dy,
+            "flag_shoot_mode": float(shoot_mode_flag),
         }
+        feature_values.update(self._role_one_hot_feature_values(controlled.role))
 
-        while len(teammates) < nearest_count:
-            teammates.append(controlled)
-        while len(opponents) < nearest_count:
-            opponents.append(self.right_players[0] if self.right_players else controlled)
+        def _encode_neighbors(prefix: str, players: list[KickPlayer]) -> None:
+            for idx in range(1, nearest_count + 1):
+                if idx <= len(players):
+                    player = players[idx - 1]
+                    dx = float(clip_signed((player.x - controlled.x) / width))
+                    dy = float(clip_signed((player.y - controlled.y) / height))
+                    dvx = float(clip_signed((player.vx - controlled.vx) / player_vel_norm))
+                    dvy = float(clip_signed((player.vy - controlled.vy) / player_vel_norm))
+                else:
+                    dx = 0.0
+                    dy = 0.0
+                    dvx = 0.0
+                    dvy = 0.0
+                feature_values[f"{prefix}{idx}_dx"] = dx
+                feature_values[f"{prefix}{idx}_dy"] = dy
+                feature_values[f"{prefix}{idx}_dvx"] = dvx
+                feature_values[f"{prefix}{idx}_dvy"] = dvy
 
-        for idx, teammate in enumerate(teammates[:nearest_count], start=1):
-            feature_values[f"ally{idx}_dx"] = float(clip_signed((teammate.x - controlled.x) / width))
-            feature_values[f"ally{idx}_dy"] = float(clip_signed((teammate.y - controlled.y) / height))
-            feature_values[f"ally{idx}_dvx"] = float(clip_signed((teammate.vx - controlled.vx) / player_vel_norm))
-            feature_values[f"ally{idx}_dvy"] = float(clip_signed((teammate.vy - controlled.vy) / player_vel_norm))
-
-        for idx, opponent in enumerate(opponents[:nearest_count], start=1):
-            feature_values[f"opp{idx}_dx"] = float(clip_signed((opponent.x - controlled.x) / width))
-            feature_values[f"opp{idx}_dy"] = float(clip_signed((opponent.y - controlled.y) / height))
-            feature_values[f"opp{idx}_dvx"] = float(clip_signed((opponent.vx - controlled.vx) / player_vel_norm))
-            feature_values[f"opp{idx}_dvy"] = float(clip_signed((opponent.vy - controlled.vy) / player_vel_norm))
+        _encode_neighbors("ally", teammates)
+        _encode_neighbors("opp", opponents)
 
         obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
         if obs.shape != (self.OBS_DIM,):
@@ -2267,7 +2542,8 @@ class KickEnv(Env):
         self._human_shot_hold_start = None
         self.last_action_index = self.ACTION_STAY
         self._restart_kickoff(self.TEAM_LEFT)
-        self._initialize_z_anchor_state()
+        self._seed_easy_level_start_possession()
+        self._initialize_anchor_state()
         self._reset_progress_baseline()
         obs = self._obs()
         if self.debug_sanity_checks and self.mode != "human":
@@ -2344,6 +2620,8 @@ class KickEnv(Env):
         else:
             outer = COLOR_CORAL
             inner = COLOR_BRICK_RED
+        shoot_mode = self._player_in_shoot_mode(player)
+        charge_stage = self._player_shoot_charge_stage(player) if shoot_mode else 0
 
         draw_two_tone_tile(
             self.window_controller,
@@ -2354,6 +2632,31 @@ class KickEnv(Env):
             inner_color=inner,
             inset=float(CELL_INSET),
         )
+
+        if shoot_mode:
+            segment_count = 3
+            row_width = float(self.player_size)
+            segment_size = max(2.0, self.player_size * 0.24)
+            segment_gap = max(
+                1.0,
+                (row_width - segment_size * float(segment_count)) / float(segment_count - 1),
+            )
+            row_left = player.x - row_width * 0.5
+            row_top = player.y - self.player_half - segment_size - segment_gap
+            segment_inset = max(0.0, min(float(CELL_INSET) * 0.35, segment_size * 0.18))
+
+            for idx in range(segment_count):
+                segment_left = row_left + float(idx) * (segment_size + segment_gap)
+                segment_color = outer if idx < charge_stage else inner
+                draw_two_tone_tile(
+                    self.window_controller,
+                    top_left_x=segment_left,
+                    top_left_y=row_top,
+                    size=segment_size,
+                    outer_color=segment_color,
+                    inner_color=segment_color,
+                    inset=segment_inset,
+                )
 
         if controlled_marker:
             marker_size = max(3.0, self.player_size * 0.28)
@@ -2530,8 +2833,22 @@ class KickEnv(Env):
         parsed_action = self._decode_team_actions(action) if self.mode != "human" else self.ACTION_STAY
         prev_possession_team = self.effective_possession_team()
         prev_responsible_left_id = self._responsible_left_player_id()
+        compute_scored_breakdown = bool(self.mode != "human" or (self.show_bottom_reward_breakdown and self.show_game))
+        prev_left_positions = (
+            {
+                int(player.slot_index): (float(player.x), float(player.y))
+                for player in self.left_players
+            }
+            if compute_scored_breakdown
+            else {}
+        )
+        prev_ball_position = (
+            (float(self.ball_x), float(self.ball_y))
+            if compute_scored_breakdown
+            else (0.0, 0.0)
+        )
         self._tick(parsed_action)
-        self._update_z_anchor_state()
+        self._update_anchor_state()
         curr_owner_team = self.physical_owner_team()
         if self.steps >= self.max_steps:
             self.done = True
@@ -2546,7 +2863,6 @@ class KickEnv(Env):
                 >= float(self.DISPLAY_REWARD_UPDATE_INTERVAL_SECONDS)
             )
         )
-        compute_scored_breakdown = bool(self.mode != "human" or compute_display_breakdown)
         scored_rewards = np.zeros((len(self.left_players),), dtype=np.float32)
         scored_breakdown: dict[str, float] = {}
         if compute_scored_breakdown:
@@ -2554,6 +2870,8 @@ class KickEnv(Env):
                 prev_responsible_left_id=prev_responsible_left_id,
                 prev_possession_team=prev_possession_team,
                 curr_owner_team=curr_owner_team,
+                prev_left_positions=prev_left_positions,
+                prev_ball_position=prev_ball_position,
             )
 
         reward_vec = np.asarray(scored_rewards, dtype=np.float32)

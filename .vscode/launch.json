@@ -425,22 +425,26 @@
       "id": "captureLevel",
       "type": "pickString",
       "description": "Capture curriculum level",
-      "default": "3",
+      "default": "5",
       "options": [
         "1",
         "2",
-        "3"
+        "3",
+        "4",
+        "5"
       ]
     },
     {
       "id": "playLevel",
       "type": "pickString",
       "description": "Play level",
-      "default": "3",
+      "default": "5",
       "options": [
         "1",
         "2",
-        "3"
+        "3",
+        "4",
+        "5"
       ]
     },
     {
@@ -472,7 +476,9 @@
       "options": [
         "1",
         "2",
-        "3"
+        "3",
+        "4",
+        "5"
       ]
     }
   ]

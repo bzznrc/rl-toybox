@@ -56,7 +56,7 @@ python -m scripts.play_user --game bang
 | `frogger` | Partial-observability / memory showcase | actor-critic | Compact road-crossing game designed around local sensing, timing, and recurrent-policy friendly observations | [games/frogger/README.md](games/frogger/README.md) |
 | `cardz` | Stochastic hidden-information game | actor-critic | Two-player lane-control card game with masked actions and a scripted opponent | [games/cardz/README.md](games/cardz/README.md) |
 | `osero` | Planning and self-play capstone | search + self-play | Small Osero/Reversi implementation using MCTS, self-play, and a compact policy/value network | [games/osero/README.md](games/osero/README.md) |
-| `kick` | Experimental multi-agent football project | MARL / CTDE | Shared-policy left-team football environment kept in the repo as a paused experimental branch | [games/kick/README.md](games/kick/README.md) |
+| `kick` | Experimental multi-agent football project | MARL / CTDE | Shared-policy 7v7 left-team football environment | [games/kick/README.md](games/kick/README.md) |
 
 ## Observation Taxonomy
 
@@ -68,7 +68,7 @@ python -m scripts.play_user --game bang
   - `snake`: `self_*`, `sens_*`, `tgt_*`
   - `vroom`: `self_*`, `sens_*`, `flag_*`
   - `frogger`: `sens_patch_*` plus `self_*`, `tgt_*`, `land_*`, `flag_*`
-  - `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`
+  - `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`, `map_*`, `flag_*`
   - `osero`: `board_r*_c*`
 - Per-game `config.py` owns the exact observation/action names, order, dimensions, and default network sizes; root docs and game READMEs should mirror that config truth.
 
@@ -81,4 +81,4 @@ python -m scripts.play_user --game bang
 - `frogger` -> recurrent PPO (`recurrent_ppo`, `obs=32`, `act=5`, encoder `[32]`, lstm `64`, heads `[32]`)
 - `cardz` -> actor-critic (`a2c`, `obs=64`, `act=16`, shared trunk `[96, 96]`)
 - `osero` -> search/self-play (`search_play`, default `6x6`, `obs=36`, `act=37`, trunk `[96, 96]`; `8x8` also supported)
-- `kick` -> paused PPO/MAPPO-style project (`ppo`, `obs=48/player`, `act=12`, actor `[128, 128]`, critic `[256, 256]`)
+- `kick` -> PPO/MAPPO-style project (`ppo`, `obs=56/player`, `act=12`, actor `[96, 96]`, critic `[192, 192]`)

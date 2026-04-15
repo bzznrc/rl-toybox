@@ -8,8 +8,10 @@ Top-down arena shooter focused on movement, aiming, line of sight, and timing sh
 
 ## Algorithm / Network
 
-- Algorithm: DQN with double Q-learning, dueling heads, and prioritized replay
-- Hidden sizes: `[96, 96]`
+- Default algorithm: `dqn`
+- IO: `obs=28`, `act=8`
+- Default Q-network: `28 -> 64 -> 64 -> 8`
+- Runtime shape: double-Q, dueling head, prioritized replay
 
 ## Controls (Human)
 

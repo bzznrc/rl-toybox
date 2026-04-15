@@ -29,16 +29,14 @@ SCREEN_WIDTH = WORLD_WIDTH
 SCREEN_HEIGHT = screen_height(DEFAULT_GRID_ROWS, DEFAULT_TILE_SIZE, BB_HEIGHT)
 
 MAX_CREDITS_NORMALIZER = 60.0
-MAX_LIVES_NORMALIZER = 10.0
-MAX_WAVE_COUNT_NORMALIZER = 20.0
-DECISION_BUDGET_NORMALIZER = 6.0
-WAVE_CLEAR_CREDIT_BONUS = 6
+MAX_LIVES_NORMALIZER = 12.0
+MAX_WAVE_COUNT_NORMALIZER = 12.0
+WAVE_CLEAR_CREDIT_BONUS = 5
 ENEMY_LEAK_DAMAGE = 1
 
-SLOT_NAMES = ("left", "upper", "mid", "lower", "right")
+SLOT_NAMES = ("slot_0", "slot_1", "slot_2", "slot_3", "slot_4")
 TOWER_KINDS = ("fast", "heavy", "area")
 ENEMY_KINDS = ("light", "armored", "flying")
-ENTRY_MODES = ("left", "right", "both")
 
 
 # IO
@@ -47,54 +45,54 @@ INPUT_FEATURE_NAMES = [
     "glob_lives_norm",
     "glob_wave_norm",
     "glob_acts_left_norm",
-    "board_entry_left",
-    "board_entry_right",
-    "board_n_light_norm",
-    "board_n_armored_norm",
-    "board_n_flying_norm",
-    "board_layout_id_norm",
-    "slot_left_kind_id",
-    "slot_left_lvl_norm",
-    "slot_upper_kind_id",
-    "slot_upper_lvl_norm",
-    "slot_mid_kind_id",
-    "slot_mid_lvl_norm",
-    "slot_lower_kind_id",
-    "slot_lower_lvl_norm",
-    "slot_right_kind_id",
-    "slot_right_lvl_norm",
-    "slot_empty_n_norm",
-    "slot_upg_n_norm",
-    "legal_build_any",
-    "legal_upg_any",
+    "wave_n_light_norm",
+    "wave_n_armored_norm",
+    "wave_n_flying_norm",
+    "route_shortcut_upper_active",
+    "route_shortcut_lower_active",
+    "slot_0_kind_id",
+    "slot_0_lvl_norm",
+    "slot_0_exposure_norm",
+    "slot_1_kind_id",
+    "slot_1_lvl_norm",
+    "slot_1_exposure_norm",
+    "slot_2_kind_id",
+    "slot_2_lvl_norm",
+    "slot_2_exposure_norm",
+    "slot_3_kind_id",
+    "slot_3_lvl_norm",
+    "slot_3_exposure_norm",
+    "slot_4_kind_id",
+    "slot_4_lvl_norm",
+    "slot_4_exposure_norm",
 ]
 ACTION_NAMES = [
     "start_wave",
-    "build_fast_left",
-    "build_fast_upper",
-    "build_fast_mid",
-    "build_fast_lower",
-    "build_fast_right",
-    "build_heavy_left",
-    "build_heavy_upper",
-    "build_heavy_mid",
-    "build_heavy_lower",
-    "build_heavy_right",
-    "build_area_left",
-    "build_area_upper",
-    "build_area_mid",
-    "build_area_lower",
-    "build_area_right",
-    "upgrade_left",
-    "upgrade_upper",
-    "upgrade_mid",
-    "upgrade_lower",
-    "upgrade_right",
-    "sell_left",
-    "sell_upper",
-    "sell_mid",
-    "sell_lower",
-    "sell_right",
+    "build_fast_0",
+    "build_fast_1",
+    "build_fast_2",
+    "build_fast_3",
+    "build_fast_4",
+    "build_heavy_0",
+    "build_heavy_1",
+    "build_heavy_2",
+    "build_heavy_3",
+    "build_heavy_4",
+    "build_area_0",
+    "build_area_1",
+    "build_area_2",
+    "build_area_3",
+    "build_area_4",
+    "upgrade_0",
+    "upgrade_1",
+    "upgrade_2",
+    "upgrade_3",
+    "upgrade_4",
+    "sell_0",
+    "sell_1",
+    "sell_2",
+    "sell_3",
+    "sell_4",
 ]
 OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
@@ -112,27 +110,83 @@ CURRICULUM_PROMOTION = {
     "consecutive_checks_required": 2,
 }
 
+
+# BALANCE
+BUILD_COST = 5
+UPGRADE_COST_BY_LEVEL = {1: 5, 2: 5}
+SELL_VALUE_BY_LEVEL = {1: 4, 2: 8, 3: 12}
+
+TOWER_LEVEL_STATS = {
+    "fast": (
+        {"damage": 1.00, "cooldown_ticks": 12, "attack_range": 136.0},
+        {"damage": 1.20, "cooldown_ticks": 10,  "attack_range": 142.0},
+        {"damage": 1.40, "cooldown_ticks": 8,  "attack_range": 148.0},
+    ),
+    "heavy": (
+        {"damage": 3.60, "cooldown_ticks": 32, "attack_range": 168.0},
+        {"damage": 4.80, "cooldown_ticks": 30, "attack_range": 176.0},
+        {"damage": 6.00, "cooldown_ticks": 28, "attack_range": 184.0},
+    ),
+    "area": (
+        {"damage": 0.60, "cooldown_ticks": 22, "attack_range": 150.0, "splash_radius": 24.0},
+        {"damage": 0.80, "cooldown_ticks": 20, "attack_range": 156.0, "splash_radius": 32.0},
+        {"damage": 1.00, "cooldown_ticks": 18, "attack_range": 162.0, "splash_radius": 40.0},
+    ),
+}
+
+TOWER_MATCHUP_MULTIPLIERS = {
+    "fast":  {"light": 1.00, "armored": 0.60, "flying": 1.60},
+    "heavy": {"light": 0.80, "armored": 1.40, "flying": 0.40},
+    "area":  {"light": 1.20, "armored": 0.80, "flying": 0.00},  # cannot hit flying
+}
+
+ENEMY_STATS = {
+    "light":   {"max_hp": 2.8, "speed": 3.60, "armor": 0.00, "bounty": 0, "radius": 8.0,  "spawn_gap": 8},
+    "armored": {"max_hp": 9.0, "speed": 1.80, "armor": 0.40, "bounty": 0, "radius": 10.0, "spawn_gap": 12},
+    "flying":  {"max_hp": 3.6, "speed": 4.00, "armor": 0.20, "bounty": 0, "radius": 9.0,  "spawn_gap": 10},
+}
+
+AUTHORED_WAVE_TEMPLATES = (
+    {"light": 6,  "armored": 0, "flying": 0},
+    {"light": 6,  "armored": 0, "flying": 2},
+    {"light": 6,  "armored": 2, "flying": 2},
+    {"light": 8,  "armored": 2, "flying": 4},
+    {"light": 8,  "armored": 4, "flying": 4},
+    {"light": 10, "armored": 4, "flying": 6},
+    {"light": 10, "armored": 6, "flying": 6},
+    {"light": 12, "armored": 6, "flying": 8},
+    {"light": 12, "armored": 8, "flying": 10},
+)
+
+WAVE_ROUTE_MODES = (
+    "none",
+    "upper",
+    "lower",
+    "none",
+    "upper",
+    "lower",
+    "none",
+    "upper",
+    "lower",
+)
+
+SPAWN_TYPE_ORDER = ("light", "flying", "armored")
+
 LEVEL_SETTINGS = {
     1: {
         "start_credits": 12,
-        "start_lives": 10,
-        "num_waves": 6,
-        "wave_scale": 1.00,
-        "decision_budget": 6,
+        "start_lives": 12,
+        "num_waves": 5,
     },
     2: {
         "start_credits": 12,
-        "start_lives": 10,
+        "start_lives": 12,
         "num_waves": 7,
-        "wave_scale": 1.10,
-        "decision_budget": 6,
     },
     3: {
         "start_credits": 12,
-        "start_lives": 10,
-        "num_waves": 8,
-        "wave_scale": 1.20,
-        "decision_budget": 6,
+        "start_lives": 12,
+        "num_waves": 9,
     },
 }
 
@@ -154,7 +208,7 @@ REWARD_COMPONENT_ORDER = (
 
 
 # TRAINING
-HIDDEN_DIMENSIONS = [96, 96]
+HIDDEN_DIMENSIONS = [64, 64]
 
 TOTAL_TRAINING_STEPS = 250_000
 LEARN_START_STEPS = 2_000

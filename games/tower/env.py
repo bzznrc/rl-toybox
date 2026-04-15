@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass
 import math
 import random
@@ -19,8 +18,6 @@ from core.arcade_style import (
     COLOR_DARK_NEUTRAL,
     COLOR_DEEP_TEAL,
     COLOR_FOG_GRAY,
-    COLOR_FOREST_GREEN,
-    COLOR_LEAF_GREEN,
     COLOR_LIGHT_NEUTRAL,
     COLOR_NAVY,
     COLOR_OCHRE,
@@ -61,12 +58,15 @@ validate_curriculum_level_settings(
 )
 
 
-SIDE_LEFT = "left"
-SIDE_RIGHT = "right"
-ENTRY_BOTH = "both"
 TOWER_KIND_TO_ID = {"fast": 1.0, "heavy": 2.0, "area": 3.0}
-SELL_REFUND_BY_LEVEL = {1: 0.90, 2: 0.75, 3: 0.60}
-SPAWN_GAPS = {"light": 8, "armored": 16, "flying": 10}
+SHORTCUT_NONE = "none"
+SHORTCUT_UPPER = "upper"
+SHORTCUT_LOWER = "lower"
+SHORTCUT_LABELS = {
+    SHORTCUT_NONE: "Base",
+    SHORTCUT_UPPER: "Upper",
+    SHORTCUT_LOWER: "Lower",
+}
 
 WORLD_BG_TOP = COLOR_SLATE_GRAY
 WORLD_BG_BOTTOM = COLOR_DARK_NEUTRAL
@@ -80,13 +80,17 @@ SLOT_OUTLINE = COLOR_FOG_GRAY
 SLOT_FILL = COLOR_SLATE_GRAY
 EMPTY_SLOT_FILL = WORLD_BG_TOP
 SELECTED_SLOT_COLOR = COLOR_SAND
+SHORTCUT_INACTIVE_ALPHA = 64
+TOWER_RANGE_GHOST_FILL = COLOR_LIGHT_NEUTRAL + (28,)
+TOWER_RANGE_GHOST_OUTLINE = COLOR_LIGHT_NEUTRAL + (96,)
+SLOT_TRACK_GAP_PX = float(DEFAULT_CELL_INSET)
 TILE_SIZE = float(DEFAULT_TILE_SIZE)
+EXPOSURE_SAMPLE_STEP_PX = max(4.0, float(TILE_SIZE) * 0.25)
 CELL_INSET = float(DEFAULT_CELL_INSET)
 SLOT_SIZE = float(TILE_SIZE * 2.0)
 SLOT_INSET = float(CELL_INSET)
 ENEMY_SIZE = float(TILE_SIZE)
 ENEMY_INSET = float(CELL_INSET)
-ENTRY_SIZE = float(TILE_SIZE * 2.0)
 TRACK_WIDTH_CELLS = 2
 MENU_FILL = COLOR_DARK_NEUTRAL + (128,)
 MENU_BORDER = COLOR_LIGHT_NEUTRAL + (128,)
@@ -100,23 +104,20 @@ BLOCK_FONT_NAME = GAME_TITLE_FONT_NAME
 GRID_COLS = int(round(float(config.WORLD_WIDTH) / float(TILE_SIZE)))
 GRID_ROWS = int(round(float(config.WORLD_HEIGHT) / float(TILE_SIZE)))
 MAP_MARGIN_CELLS = 2
-CENTER_TRUNK_COL = GRID_COLS // 2 - TRACK_WIDTH_CELLS // 2
+BOARD_OFFSET_ROWS = 1
 ENTRY_MARKER_DEPTH_CELLS = max(2, TRACK_WIDTH_CELLS // 2)
 EXIT_MARKER_DEPTH_CELLS = max(2, TRACK_WIDTH_CELLS // 2)
-OUTER_MARKER_MARGIN_CELLS = ENTRY_MARKER_DEPTH_CELLS
-LEFT_ENTRY_COL = MAP_MARGIN_CELLS + OUTER_MARKER_MARGIN_CELLS
-RIGHT_ENTRY_COL = GRID_COLS - TRACK_WIDTH_CELLS - MAP_MARGIN_CELLS - OUTER_MARKER_MARGIN_CELLS
-EXIT_ROW = GRID_ROWS - TRACK_WIDTH_CELLS - MAP_MARGIN_CELLS - EXIT_MARKER_DEPTH_CELLS
-SPAWN_ROW = MAP_MARGIN_CELLS + OUTER_MARKER_MARGIN_CELLS + 4
+ENTRY_COL = MAP_MARGIN_CELLS + 6
+ENTRY_ROW = MAP_MARGIN_CELLS + BOARD_OFFSET_ROWS
+EXIT_COL = GRID_COLS // 2 + 4
+EXIT_ROW = GRID_ROWS - TRACK_WIDTH_CELLS - MAP_MARGIN_CELLS - EXIT_MARKER_DEPTH_CELLS + BOARD_OFFSET_ROWS
 
-# Tower generation uses two compact handcrafted templates:
-# - Soft S Merge: mirrored inward sweeps that meet at the center trunk.
-# - Offset S: one side joins the center earlier while the other descends farther.
-# Both keep the same fixed endpoints and the same five stable slot ids:
-# left=left_corner, upper=left_shared, mid=center_trunk, lower=right_shared, right=right_corner.
-PATH_TEMPLATES = (
-    {"name": "Soft S Merge", "kind": "soft_s"},
-    {"name": "Offset S", "kind": "offset_s"},
+# Tower uses one compact soft-S lane with two optional shortcuts.
+LAYOUT_TEMPLATES = (
+    {"name": "Upper Hooks", "left_candidate": "upper_left_bend", "right_candidate": "upper_right_bend"},
+    {"name": "Counter Sweep", "left_candidate": "upper_left_bend", "right_candidate": "mid_right_bend"},
+    {"name": "Center Hooks", "left_candidate": "mid_left_bend", "right_candidate": "upper_right_bend"},
+    {"name": "Lower Hooks", "left_candidate": "mid_left_bend", "right_candidate": "mid_right_bend"},
 )
 
 
@@ -224,23 +225,29 @@ class LayoutSpec:
     layout_id: int
     layout_norm: float
     name: str
-    ground_paths: dict[str, LanePath]
-    flying_paths: dict[str, LanePath]
-    ground_rects: tuple[tuple[int, int, int, int], ...]
+    path_variants: dict[str, LanePath]
+    base_rects: tuple[tuple[int, int, int, int], ...]
+    shortcut_rects: dict[str, tuple[tuple[int, int, int, int], ...]]
     slot_cells: dict[str, tuple[int, int]]
     slot_positions: dict[str, tuple[float, float]]
-    entry_cells: dict[str, tuple[int, int]]
-    entry_positions: dict[str, tuple[float, float]]
+    slot_render_rects: dict[str, tuple[float, float, float, float]]
+    slot_exposure_norms: dict[str, dict[str, float]]
+    candidate_slot_cells: dict[str, tuple[int, int]]
+    candidate_slot_positions: dict[str, tuple[float, float]]
+    candidate_slot_render_rects: dict[str, tuple[float, float, float, float]]
+    runtime_slot_candidates: dict[str, str]
+    entry_cell: tuple[int, int]
+    entry_position: tuple[float, float]
     exit_cell: tuple[int, int]
     exit_position: tuple[float, float]
 
 
 @dataclass(frozen=True)
 class WaveSpec:
-    entry_mode: str
     count_light: int
     count_armored: int
     count_flying: int
+    shortcut: str = SHORTCUT_NONE
 
     def count_for(self, enemy_kind: str) -> int:
         if enemy_kind == "light":
@@ -261,10 +268,7 @@ class TowerStats:
     damage: float
     cooldown_ticks: int
     attack_range: float
-    armor_pierce: float
     splash_radius: float = 0.0
-    chain_count: int = 1
-    chain_range: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -312,7 +316,6 @@ class TowerState:
 @dataclass
 class EnemyState:
     kind: str
-    side: str
     path: LanePath
     hp: float
     speed: float
@@ -348,6 +351,55 @@ class AttackEffect:
     radius: float = 0.0
     max_ttl: int = 0
     delay_ticks: int = 0
+
+
+def _build_tower_profiles() -> dict[str, TowerProfile]:
+    profiles: dict[str, TowerProfile] = {}
+    upgrade_costs = (
+        int(config.UPGRADE_COST_BY_LEVEL[1]),
+        int(config.UPGRADE_COST_BY_LEVEL[2]),
+    )
+    for tower_kind in config.TOWER_KINDS:
+        level_stats = tuple(
+            TowerStats(
+                damage=float(level_stats["damage"]),
+                cooldown_ticks=int(level_stats["cooldown_ticks"]),
+                attack_range=float(level_stats["attack_range"]),
+                splash_radius=float(level_stats.get("splash_radius", 0.0)),
+            )
+            for level_stats in config.TOWER_LEVEL_STATS[str(tower_kind)]
+        )
+        profiles[str(tower_kind)] = TowerProfile(
+            build_cost=int(config.BUILD_COST),
+            upgrade_costs=upgrade_costs,
+            level_stats=level_stats,
+        )
+    return profiles
+
+
+def _build_enemy_profiles() -> dict[str, EnemyProfile]:
+    profiles: dict[str, EnemyProfile] = {}
+    for enemy_kind in config.ENEMY_KINDS:
+        enemy_stats = dict(config.ENEMY_STATS[str(enemy_kind)])
+        profiles[str(enemy_kind)] = EnemyProfile(
+            max_hp=float(enemy_stats["max_hp"]),
+            speed=float(enemy_stats["speed"]),
+            armor=float(enemy_stats["armor"]),
+            bounty=int(enemy_stats["bounty"]),
+            radius=float(enemy_stats["radius"]),
+        )
+    return profiles
+
+
+def _build_wave_templates() -> tuple[WaveSpec, ...]:
+    return tuple(
+        WaveSpec(
+            count_light=int(wave_counts.get("light", 0)),
+            count_armored=int(wave_counts.get("armored", 0)),
+            count_flying=int(wave_counts.get("flying", 0)),
+        )
+        for wave_counts in config.AUTHORED_WAVE_TEMPLATES
+    )
 
 
 def _compress_cells(cells: tuple[tuple[int, int], ...] | list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
@@ -415,278 +467,344 @@ def _slot_touches_path(cell_top_left: tuple[int, int], path_cells: set[tuple[int
     return False
 
 
-def _pick_option(rng: random.Random, values: tuple[int | str, ...]) -> int | str:
-    return values[int(rng.randrange(len(values)))]
+def _slot_render_offset(
+    cell_top_left: tuple[int, int],
+    path_cells: set[tuple[int, int]],
+) -> tuple[float, float]:
+    block_cells = _slot_block_cells(cell_top_left)
+    touch_left = False
+    touch_right = False
+    touch_top = False
+    touch_bottom = False
+    for col, row in block_cells:
+        if (int(col) - 1, int(row)) in path_cells:
+            touch_left = True
+        if (int(col) + 1, int(row)) in path_cells:
+            touch_right = True
+        if (int(col), int(row) - 1) in path_cells:
+            touch_top = True
+        if (int(col), int(row) + 1) in path_cells:
+            touch_bottom = True
+    offset_x = 0.0
+    offset_y = 0.0
+    if touch_left and not touch_right:
+        offset_x += float(SLOT_TRACK_GAP_PX)
+    if touch_right and not touch_left:
+        offset_x -= float(SLOT_TRACK_GAP_PX)
+    if touch_top and not touch_bottom:
+        offset_y += float(SLOT_TRACK_GAP_PX)
+    if touch_bottom and not touch_top:
+        offset_y -= float(SLOT_TRACK_GAP_PX)
+    return float(offset_x), float(offset_y)
 
 
-def _build_layout_spec(
+def _slot_render_geometry(
+    cell_top_left: tuple[int, int],
+    path_cells: set[tuple[int, int]],
+) -> tuple[tuple[float, float, float, float], tuple[float, float]]:
+    left, top, width, height = _block_rect(int(cell_top_left[0]), int(cell_top_left[1]), 2, 2)
+    offset_x, offset_y = _slot_render_offset(cell_top_left, path_cells)
+    render_rect = (
+        float(left) + float(offset_x),
+        float(top) + float(offset_y),
+        float(width),
+        float(height),
+    )
+    render_center = (
+        float(render_rect[0]) + float(render_rect[2]) * 0.5,
+        float(render_rect[1]) + float(render_rect[3]) * 0.5,
+    )
+    return render_rect, render_center
+
+
+def _slot_exposure_radius_px() -> float:
+    total_range = 0.0
+    sample_count = 0
+    for tower_profile in TOWER_PROFILES.values():
+        for tower_stats in tower_profile.level_stats:
+            total_range += float(tower_stats.attack_range)
+            sample_count += 1
+    if sample_count <= 0:
+        return float(TILE_SIZE) * 6.0
+    return float(total_range) / float(sample_count)
+
+
+def _path_coverage_profile(
+    path: LanePath,
+    center: tuple[float, float],
+    radius: float,
+) -> tuple[float, float]:
+    total_length = float(max(1e-6, path.total_length))
+    step = max(1.0, min(float(EXPOSURE_SAMPLE_STEP_PX), total_length))
+    steps = max(1, int(math.ceil(total_length / step)))
+    exposure_length = 0.0
+    first_distance: float | None = None
+    for step_index in range(steps):
+        seg_start = min(total_length, float(step_index) * step)
+        seg_end = min(total_length, float(step_index + 1) * step)
+        seg_length = max(0.0, seg_end - seg_start)
+        if seg_length <= 1e-6:
+            continue
+        probe_distance = min(total_length, seg_start + seg_length * 0.5)
+        probe_x, probe_y = path.position_at(probe_distance)
+        if _distance((probe_x, probe_y), center) > float(radius):
+            continue
+        exposure_length += float(seg_length)
+        if first_distance is None:
+            first_distance = float(seg_start)
+    first_norm = 1.0 if first_distance is None else clip_unit(float(first_distance) / total_length)
+    exposure_norm = clip_unit(float(exposure_length) / total_length)
+    return float(first_norm), float(exposure_norm)
+
+
+def _runtime_slot_mapping(
     *,
-    template_index: int,
-    template_name: str,
-    left_path_cells: tuple[tuple[int, int], ...],
-    right_path_cells: tuple[tuple[int, int], ...],
-    slot_cells: dict[str, tuple[int, int]],
-    entry_cells: dict[str, tuple[int, int]],
-    exit_cell: tuple[int, int],
-) -> LayoutSpec:
-    adjusted_slot_cells = {str(slot_name): (int(cell_top_left[0]), int(cell_top_left[1])) for slot_name, cell_top_left in slot_cells.items()}
-    mid_col, mid_row = adjusted_slot_cells["mid"]
-    while True:
-        mid_block = _slot_block_cells((int(mid_col), int(mid_row)))
-        overlaps_other_slot = False
-        for slot_name, cell_top_left in adjusted_slot_cells.items():
-            if str(slot_name) == "mid":
-                continue
-            if mid_block.intersection(_slot_block_cells(cell_top_left)):
-                overlaps_other_slot = True
-                break
-        if not overlaps_other_slot or int(mid_row) >= int(EXIT_ROW) - 4:
-            break
-        mid_row += 2
-    adjusted_slot_cells["mid"] = (int(mid_col), int(mid_row))
-
-    ground_rects = _path_rects(left_path_cells, right_path_cells)
-    path_cells = _rect_cells(ground_rects)
-    slot_blocks = {
-        str(slot_name): _slot_block_cells(cell_top_left)
-        for slot_name, cell_top_left in adjusted_slot_cells.items()
+    active_candidate_names: tuple[str, ...],
+    candidate_positions: dict[str, tuple[float, float]],
+    base_path: LanePath,
+) -> dict[str, str]:
+    exposure_radius = float(_slot_exposure_radius_px())
+    ranked_candidates: list[tuple[float, float, str]] = []
+    for candidate_name in active_candidate_names:
+        first_norm, exposure_norm = _path_coverage_profile(
+            base_path,
+            center=tuple(candidate_positions[str(candidate_name)]),
+            radius=exposure_radius,
+        )
+        ranked_candidates.append((float(first_norm), -float(exposure_norm), str(candidate_name)))
+    ranked_candidates.sort()
+    ordered_candidates = [candidate_name for _, _, candidate_name in ranked_candidates]
+    if len(ordered_candidates) != len(config.SLOT_NAMES):
+        raise RuntimeError("Tower runtime slot mapping expected exactly 5 active candidates.")
+    return {
+        str(slot_name): str(candidate_name)
+        for slot_name, candidate_name in zip(config.SLOT_NAMES, ordered_candidates)
     }
+
+
+def _slot_route_exposure_norms(
+    *,
+    slot_positions: dict[str, tuple[float, float]],
+    path_variants: dict[str, LanePath],
+) -> dict[str, dict[str, float]]:
+    exposure_radius = float(_slot_exposure_radius_px())
+    exposure_norms: dict[str, dict[str, float]] = {}
+    for slot_name, center in slot_positions.items():
+        base_exposure = _path_coverage_profile(
+            path_variants[SHORTCUT_NONE],
+            center=tuple(center),
+            radius=exposure_radius,
+        )[1]
+        upper_exposure = _path_coverage_profile(
+            path_variants[SHORTCUT_UPPER],
+            center=tuple(center),
+            radius=exposure_radius,
+        )[1]
+        lower_exposure = _path_coverage_profile(
+            path_variants[SHORTCUT_LOWER],
+            center=tuple(center),
+            radius=exposure_radius,
+        )[1]
+        exposure_norms[str(slot_name)] = {
+            SHORTCUT_NONE: float(base_exposure),
+            SHORTCUT_UPPER: float(upper_exposure),
+            SHORTCUT_LOWER: float(lower_exposure),
+        }
+    return exposure_norms
+
+
+def _with_alpha(color: tuple[int, int, int], alpha: int) -> tuple[int, int, int, int]:
+    return (int(color[0]), int(color[1]), int(color[2]), int(max(0, min(255, alpha))))
+
+
+def _board_row(row: int) -> int:
+    return int(row) + int(BOARD_OFFSET_ROWS)
+
+
+def _build_soft_s_paths() -> tuple[
+    dict[str, tuple[tuple[int, int], ...]],
+    dict[str, tuple[tuple[int, int], ...]],
+]:
+    entry_cell = (int(ENTRY_COL), int(ENTRY_ROW))
+    upper_left = (int(ENTRY_COL), _board_row(6))
+    upper_right = (34, _board_row(6))
+    middle_right = (34, _board_row(13))
+    middle_left = (12, _board_row(13))
+    lower_left = (12, _board_row(20))
+    lower_right = (28, _board_row(20))
+    exit_cell = (int(EXIT_COL), int(EXIT_ROW))
+
+    path_variants = {
+        SHORTCUT_NONE: _compress_cells(
+            (
+                entry_cell,
+                upper_left,
+                upper_right,
+                middle_right,
+                middle_left,
+                lower_left,
+                lower_right,
+                exit_cell,
+            )
+        ),
+        SHORTCUT_UPPER: _compress_cells(
+            (
+                entry_cell,
+                upper_left,
+                (12, _board_row(6)),
+                (12, _board_row(13)),
+                lower_left,
+                lower_right,
+                exit_cell,
+            )
+        ),
+        SHORTCUT_LOWER: _compress_cells(
+            (
+                entry_cell,
+                upper_left,
+                upper_right,
+                middle_right,
+                (28, _board_row(13)),
+                (28, _board_row(20)),
+                exit_cell,
+            )
+        ),
+    }
+    shortcut_preview_paths = {
+        SHORTCUT_UPPER: _compress_cells(((12, _board_row(6)), (12, _board_row(13)))),
+        SHORTCUT_LOWER: _compress_cells(((28, _board_row(13)), (28, _board_row(20)))),
+    }
+    return path_variants, shortcut_preview_paths
+
+
+def _build_layout_spec(*, template_index: int) -> LayoutSpec:
+    template = dict(LAYOUT_TEMPLATES[int(template_index)])
+    path_variant_cells, shortcut_preview_paths = _build_soft_s_paths()
+    candidate_slot_cells = {
+        "upper_left_bend": (10, _board_row(8)),
+        "upper_mid_inner": (20, _board_row(8)),
+        "upper_right_bend": (32, _board_row(8)),
+        "mid_left_bend": (14, _board_row(15)),
+        "mid_center_inner": (18, _board_row(15)),
+        "mid_right_bend": (26, _board_row(22)),
+        "lower_trunk": (30, _board_row(24)),
+    }
+    shortcut_rects = {
+        str(shortcut_name): _path_rects(tuple(path_cells))
+        for shortcut_name, path_cells in shortcut_preview_paths.items()
+    }
+    base_rects = _path_rects(tuple(path_variant_cells[SHORTCUT_NONE]))
+    all_path_cells = _rect_cells(base_rects)
+    for rects in shortcut_rects.values():
+        all_path_cells.update(_rect_cells(rects))
+
     all_slot_cells: set[tuple[int, int]] = set()
-    for block_cells in slot_blocks.values():
+    for slot_name, cell_top_left in candidate_slot_cells.items():
+        block_cells = _slot_block_cells(cell_top_left)
         if all_slot_cells.intersection(block_cells):
-            raise RuntimeError("Tower layout template made slots overlap each other.")
+            raise RuntimeError(f"Tower slot '{slot_name}' overlaps another slot.")
+        if all_path_cells.intersection(block_cells):
+            raise RuntimeError(f"Tower slot '{slot_name}' overlaps the route.")
+        if not _slot_touches_path(cell_top_left, all_path_cells):
+            raise RuntimeError(f"Tower slot '{slot_name}' is detached from the route.")
         all_slot_cells.update(block_cells)
-    if any(path_cells.intersection(block_cells) for block_cells in slot_blocks.values()):
-        raise RuntimeError("Tower layout template placed a slot on the path.")
-    if not all(_slot_touches_path(cell_top_left, path_cells) for cell_top_left in slot_cells.values()):
-        raise RuntimeError("Tower layout template left a slot detached from the path.")
 
+    candidate_slot_render_geometry = {
+        str(slot_name): _slot_render_geometry(tuple(cell_top_left), all_path_cells)
+        for slot_name, cell_top_left in candidate_slot_cells.items()
+    }
+    path_variants = {
+        str(shortcut_name): _lane_path_from_cells(tuple(path_cells))
+        for shortcut_name, path_cells in path_variant_cells.items()
+    }
+    selected_candidate_names = (
+        str(template["left_candidate"]),
+        "upper_mid_inner",
+        "mid_center_inner",
+        "lower_trunk",
+        str(template["right_candidate"]),
+    )
+    runtime_slot_candidates = _runtime_slot_mapping(
+        active_candidate_names=tuple(selected_candidate_names),
+        candidate_positions={
+            str(slot_name): tuple(candidate_slot_render_geometry[str(slot_name)][1])
+            for slot_name in candidate_slot_render_geometry
+        },
+        base_path=path_variants[SHORTCUT_NONE],
+    )
+    slot_cells = {
+        str(slot_name): tuple(candidate_slot_cells[str(candidate_name)])
+        for slot_name, candidate_name in runtime_slot_candidates.items()
+    }
+    slot_render_geometry = {
+        str(slot_name): tuple(candidate_slot_render_geometry[str(candidate_name)])
+        for slot_name, candidate_name in runtime_slot_candidates.items()
+    }
     slot_positions = {
-        str(slot_name): _block_center(*cell_top_left)
-        for slot_name, cell_top_left in adjusted_slot_cells.items()
+        str(slot_name): tuple(slot_render_geometry[str(slot_name)][1]) for slot_name in runtime_slot_candidates
     }
-    entry_positions = {
-        str(side): _lane_point(*cell_top_left)
-        for side, cell_top_left in entry_cells.items()
-    }
+    slot_exposure_norms = _slot_route_exposure_norms(
+        slot_positions=slot_positions,
+        path_variants=path_variants,
+    )
 
-    max_layout_code = float(max(1, len(PATH_TEMPLATES) - 1))
+    max_layout_code = float(max(1, len(LAYOUT_TEMPLATES) - 1))
     return LayoutSpec(
         layout_id=int(template_index),
         layout_norm=clip_unit(float(template_index) / float(max_layout_code)),
-        name=str(template_name),
-        ground_paths={
-            SIDE_LEFT: _lane_path_from_cells(left_path_cells),
-            SIDE_RIGHT: _lane_path_from_cells(right_path_cells),
-        },
-        flying_paths={
-            SIDE_LEFT: _lane_path_from_cells(left_path_cells),
-            SIDE_RIGHT: _lane_path_from_cells(right_path_cells),
-        },
-        ground_rects=ground_rects,
-        slot_cells={str(slot_name): tuple(cell_top_left) for slot_name, cell_top_left in adjusted_slot_cells.items()},
+        name=f"Soft S / {str(template['name'])}",
+        path_variants=path_variants,
+        base_rects=base_rects,
+        shortcut_rects=shortcut_rects,
+        slot_cells={str(slot_name): tuple(cell_top_left) for slot_name, cell_top_left in slot_cells.items()},
         slot_positions=slot_positions,
-        entry_cells={str(side): tuple(cell_top_left) for side, cell_top_left in entry_cells.items()},
-        entry_positions=entry_positions,
-        exit_cell=tuple(exit_cell),
-        exit_position=_lane_point(*exit_cell),
-    )
-
-
-def _generate_soft_s_layout(
-    rng: random.Random,
-    *,
-    template_index: int,
-    entry_cells: dict[str, tuple[int, int]],
-    exit_cell: tuple[int, int],
-) -> LayoutSpec:
-    # Template A: mirrored inward sweeps that meet at one shared center trunk.
-    left_turn_col = int(_pick_option(rng, (9, 10, 11, 12)))
-    right_turn_col = int(_pick_option(rng, (35, 36, 37, 38)))
-    merge_row = int(_pick_option(rng, (14, 15, 16)))
-    trunk_side = str(_pick_option(rng, ("left", "right")))
-
-    left_path_cells = _compress_cells(
-        (
-            entry_cells[SIDE_LEFT],
-            (int(left_turn_col), int(SPAWN_ROW)),
-            (int(left_turn_col), int(merge_row)),
-            (int(CENTER_TRUNK_COL), int(merge_row)),
-            exit_cell,
-        )
-    )
-    right_path_cells = _compress_cells(
-        (
-            entry_cells[SIDE_RIGHT],
-            (int(right_turn_col), int(SPAWN_ROW)),
-            (int(right_turn_col), int(merge_row)),
-            (int(CENTER_TRUNK_COL), int(merge_row)),
-            exit_cell,
-        )
-    )
-
-    left_shared_col = max(int(left_turn_col) + int(TRACK_WIDTH_CELLS) + 1, int(CENTER_TRUNK_COL) - 6)
-    right_shared_col = min(int(right_turn_col) - 3, int(CENTER_TRUNK_COL) + 2)
-    trunk_row = min(int(EXIT_ROW) - 4, int(merge_row) + int(_pick_option(rng, (5, 6))))
-    slot_cells = {
-        "left": (int(left_turn_col) + int(TRACK_WIDTH_CELLS), int(SPAWN_ROW) + int(TRACK_WIDTH_CELLS)),
-        "upper": (int(left_shared_col), int(merge_row) + int(TRACK_WIDTH_CELLS)),
-        "mid": (
-            int(CENTER_TRUNK_COL) - 2
-            if trunk_side == "left"
-            else int(CENTER_TRUNK_COL) + int(TRACK_WIDTH_CELLS),
-            int(trunk_row),
-        ),
-        "lower": (int(right_shared_col), int(merge_row) + int(TRACK_WIDTH_CELLS)),
-        "right": (int(right_turn_col) - 2, int(SPAWN_ROW) + int(TRACK_WIDTH_CELLS)),
-    }
-    return _build_layout_spec(
-        template_index=int(template_index),
-        template_name="Soft S Merge",
-        left_path_cells=left_path_cells,
-        right_path_cells=right_path_cells,
-        slot_cells=slot_cells,
-        entry_cells=entry_cells,
-        exit_cell=exit_cell,
-    )
-
-
-def _generate_offset_s_layout(
-    rng: random.Random,
-    *,
-    template_index: int,
-    entry_cells: dict[str, tuple[int, int]],
-    exit_cell: tuple[int, int],
-) -> LayoutSpec:
-    # Template B: one side joins the center earlier while the other side descends farther.
-    early_side = str(_pick_option(rng, (SIDE_LEFT, SIDE_RIGHT)))
-    left_turn_col = int(_pick_option(rng, (10, 11, 12)))
-    right_turn_col = int(_pick_option(rng, (35, 36, 37)))
-    early_join_row = int(_pick_option(rng, (12, 13, 14)))
-    late_join_row = int(early_join_row + int(_pick_option(rng, (2, 3))))
-    left_join_row = int(early_join_row if early_side == SIDE_LEFT else late_join_row)
-    right_join_row = int(early_join_row if early_side == SIDE_RIGHT else late_join_row)
-    trunk_side = "right" if early_side == SIDE_LEFT else "left"
-
-    left_path_cells = _compress_cells(
-        (
-            entry_cells[SIDE_LEFT],
-            (int(left_turn_col), int(SPAWN_ROW)),
-            (int(left_turn_col), int(left_join_row)),
-            (int(CENTER_TRUNK_COL), int(left_join_row)),
-            exit_cell,
-        )
-    )
-    right_path_cells = _compress_cells(
-        (
-            entry_cells[SIDE_RIGHT],
-            (int(right_turn_col), int(SPAWN_ROW)),
-            (int(right_turn_col), int(right_join_row)),
-            (int(CENTER_TRUNK_COL), int(right_join_row)),
-            exit_cell,
-        )
-    )
-
-    left_shared_col = max(int(left_turn_col) + int(TRACK_WIDTH_CELLS) + 1, int(CENTER_TRUNK_COL) - 6)
-    right_shared_col = min(int(right_turn_col) - 3, int(CENTER_TRUNK_COL) + 2)
-    trunk_row = min(int(EXIT_ROW) - 4, int(max(left_join_row, right_join_row)) + int(_pick_option(rng, (4, 5))))
-    slot_cells = {
-        "left": (int(left_turn_col) + int(TRACK_WIDTH_CELLS), int(SPAWN_ROW) + int(TRACK_WIDTH_CELLS)),
-        "upper": (int(left_shared_col), int(left_join_row) + int(TRACK_WIDTH_CELLS)),
-        "mid": (
-            int(CENTER_TRUNK_COL) - 2
-            if trunk_side == "left"
-            else int(CENTER_TRUNK_COL) + int(TRACK_WIDTH_CELLS),
-            int(trunk_row),
-        ),
-        "lower": (int(right_shared_col), int(right_join_row) + int(TRACK_WIDTH_CELLS)),
-        "right": (int(right_turn_col) - 2, int(SPAWN_ROW) + int(TRACK_WIDTH_CELLS)),
-    }
-    return _build_layout_spec(
-        template_index=int(template_index),
-        template_name="Offset S",
-        left_path_cells=left_path_cells,
-        right_path_cells=right_path_cells,
-        slot_cells=slot_cells,
-        entry_cells=entry_cells,
-        exit_cell=exit_cell,
+        slot_render_rects={
+            str(slot_name): tuple(slot_render_geometry[str(slot_name)][0]) for slot_name in slot_cells
+        },
+        slot_exposure_norms={
+            str(slot_name): {
+                str(shortcut_name): float(exposure_value)
+                for shortcut_name, exposure_value in shortcut_exposures.items()
+            }
+            for slot_name, shortcut_exposures in slot_exposure_norms.items()
+        },
+        candidate_slot_cells={
+            str(slot_name): tuple(cell_top_left) for slot_name, cell_top_left in candidate_slot_cells.items()
+        },
+        candidate_slot_positions={
+            str(slot_name): tuple(candidate_slot_render_geometry[str(slot_name)][1]) for slot_name in candidate_slot_cells
+        },
+        candidate_slot_render_rects={
+            str(slot_name): tuple(candidate_slot_render_geometry[str(slot_name)][0]) for slot_name in candidate_slot_cells
+        },
+        runtime_slot_candidates={
+            str(slot_name): str(candidate_name) for slot_name, candidate_name in runtime_slot_candidates.items()
+        },
+        entry_cell=(int(ENTRY_COL), int(ENTRY_ROW)),
+        entry_position=_lane_point(int(ENTRY_COL), int(ENTRY_ROW)),
+        exit_cell=(int(EXIT_COL), int(EXIT_ROW)),
+        exit_position=_lane_point(int(EXIT_COL), int(EXIT_ROW)),
     )
 
 
 def _generate_layout(rng: random.Random) -> LayoutSpec:
-    template_index = int(rng.randrange(len(PATH_TEMPLATES)))
-    template = dict(PATH_TEMPLATES[int(template_index)])
-    entry_cells = {
-        SIDE_LEFT: (int(LEFT_ENTRY_COL), int(SPAWN_ROW)),
-        SIDE_RIGHT: (int(RIGHT_ENTRY_COL), int(SPAWN_ROW)),
-    }
-    exit_cell = (int(CENTER_TRUNK_COL), int(EXIT_ROW))
-    if str(template["kind"]) == "soft_s":
-        return _generate_soft_s_layout(
-            rng,
-            template_index=int(template_index),
-            entry_cells=entry_cells,
-            exit_cell=exit_cell,
-        )
-    return _generate_offset_s_layout(
-        rng,
-        template_index=int(template_index),
-        entry_cells=entry_cells,
-        exit_cell=exit_cell,
-    )
+    template_index = int(rng.randrange(len(LAYOUT_TEMPLATES)))
+    return _build_layout_spec(template_index=int(template_index))
 
-TOWER_PROFILES = {
-    "fast": TowerProfile(
-        build_cost=5,
-        upgrade_costs=(4, 7),
-        level_stats=(
-            TowerStats(damage=1.10, cooldown_ticks=13, attack_range=148.0, armor_pierce=0.05),
-            TowerStats(damage=1.35, cooldown_ticks=11, attack_range=156.0, armor_pierce=0.10),
-            TowerStats(damage=1.70, cooldown_ticks=9, attack_range=166.0, armor_pierce=0.15),
-        ),
-    ),
-    "heavy": TowerProfile(
-        build_cost=5,
-        upgrade_costs=(4, 7),
-        level_stats=(
-            TowerStats(damage=4.20, cooldown_ticks=30, attack_range=136.0, armor_pierce=1.05),
-            TowerStats(damage=5.60, cooldown_ticks=26, attack_range=144.0, armor_pierce=1.35),
-            TowerStats(damage=7.10, cooldown_ticks=22, attack_range=152.0, armor_pierce=1.70),
-        ),
-    ),
-    "area": TowerProfile(
-        build_cost=5,
-        upgrade_costs=(4, 7),
-        level_stats=(
-            TowerStats(damage=1.25, cooldown_ticks=20, attack_range=138.0, armor_pierce=0.05, splash_radius=30.0),
-            TowerStats(damage=1.50, cooldown_ticks=18, attack_range=146.0, armor_pierce=0.10, splash_radius=38.0),
-            TowerStats(damage=1.80, cooldown_ticks=16, attack_range=154.0, armor_pierce=0.15, splash_radius=46.0),
-        ),
-    ),
-}
-
+TOWER_PROFILES = _build_tower_profiles()
 TOWER_DAMAGE_MULTIPLIERS = {
-    "fast": {"light": 0.90, "armored": 0.45, "flying": 1.75},
-    "heavy": {"light": 0.60, "armored": 1.60, "flying": 0.70},
-    "area": {"light": 1.45, "armored": 0.80, "flying": 0.45},
+    str(tower_kind): {
+        str(enemy_kind): float(multiplier)
+        for enemy_kind, multiplier in dict(config.TOWER_MATCHUP_MULTIPLIERS[str(tower_kind)]).items()
+    }
+    for tower_kind in config.TOWER_KINDS
 }
-
-ENEMY_PROFILES = {
-    "light": EnemyProfile(max_hp=2.30, speed=3.35, armor=0.00, bounty=0, radius=8.0),
-    "armored": EnemyProfile(max_hp=10.00, speed=1.55, armor=0.95, bounty=0, radius=10.0),
-    "flying": EnemyProfile(max_hp=3.20, speed=3.55, armor=0.15, bounty=0, radius=9.0),
+ENEMY_PROFILES = _build_enemy_profiles()
+SPAWN_GAPS = {
+    str(enemy_kind): int(config.ENEMY_STATS[str(enemy_kind)]["spawn_gap"])
+    for enemy_kind in config.ENEMY_KINDS
 }
-
-WAVE_TEMPLATES = (
-    WaveSpec(entry_mode=SIDE_LEFT, count_light=6, count_armored=0, count_flying=0),
-    WaveSpec(entry_mode=SIDE_RIGHT, count_light=3, count_armored=0, count_flying=4),
-    WaveSpec(entry_mode=ENTRY_BOTH, count_light=7, count_armored=2, count_flying=0),
-    WaveSpec(entry_mode=SIDE_LEFT, count_light=2, count_armored=3, count_flying=2),
-    WaveSpec(entry_mode=SIDE_RIGHT, count_light=6, count_armored=2, count_flying=3),
-    WaveSpec(entry_mode=ENTRY_BOTH, count_light=8, count_armored=4, count_flying=2),
-    WaveSpec(entry_mode=SIDE_LEFT, count_light=4, count_armored=6, count_flying=4),
-    WaveSpec(entry_mode=ENTRY_BOTH, count_light=10, count_armored=5, count_flying=5),
-)
+WAVE_TEMPLATES = _build_wave_templates()
 
 TOWER_COLORS = {
     "fast": (COLOR_BLUE, COLOR_NAVY),
@@ -754,17 +872,18 @@ class TowerEnv(Env):
             if self.mode == "train"
             else int(random.SystemRandom().randrange(1 << 61))
         )
+        self._episode_rng = random.Random(int(self._session_seed))
 
         self.layout: LayoutSpec = _generate_layout(random.Random(int(self._session_seed)))
         self.wave_plan: list[WaveSpec] = []
         self.wave_index = 0
         self.credits = 0
         self.lives = 0
-        self.decision_budget = 0
-        self.actions_remaining = 0
         self.slot_towers: dict[str, TowerState | None] = {slot_name: None for slot_name in config.SLOT_NAMES}
         self._menu_slot_name: str | None = None
         self._hovered_slot_name: str | None = None
+        self.show_tower_range_ghosts = False
+        self._prev_overlay_toggle_down = False
         self._wave_in_progress = False
         self._active_enemies: list[EnemyState] = []
         self._attack_effects: list[AttackEffect] = []
@@ -777,7 +896,6 @@ class TowerEnv(Env):
     def _apply_level_settings(self, level: int) -> None:
         self._current_level = int(level)
         self._level_settings = dict(config.LEVEL_SETTINGS[int(self._current_level)])
-        self.decision_budget = int(self._level_settings["decision_budget"])
 
     def _episode_seed(self) -> int:
         return int(self._session_seed + self._episode_counter * 7919 + self._current_level * 101)
@@ -799,33 +917,22 @@ class TowerEnv(Env):
         return None
 
     def _build_wave_plan(self, rng: random.Random) -> list[WaveSpec]:
+        del rng
         wave_count = int(self._level_settings["num_waves"])
-        wave_scale = float(self._level_settings["wave_scale"])
+        if wave_count > len(WAVE_TEMPLATES):
+            raise RuntimeError("Tower authored wave list is shorter than the requested level wave count.")
         plan: list[WaveSpec] = []
         for wave_idx in range(wave_count):
             base_wave = WAVE_TEMPLATES[int(wave_idx)]
-            entry_mode = str(base_wave.entry_mode)
-            if entry_mode in {SIDE_LEFT, SIDE_RIGHT} and rng.random() < 0.5:
-                entry_mode = SIDE_RIGHT if entry_mode == SIDE_LEFT else SIDE_LEFT
-
-            growth = 1.0 + 0.05 * float(wave_idx)
-            counts: dict[str, int] = {}
-            for kind in config.ENEMY_KINDS:
-                base_count = int(base_wave.count_for(kind))
-                if base_count <= 0:
-                    counts[kind] = 0
-                    continue
-                scaled = float(base_count) * float(wave_scale) * float(growth)
-                jitter = rng.choice((-1, 0, 0, 1))
-                final_count = int(round(scaled)) + int(jitter)
-                counts[kind] = max(1, int(final_count))
-
+            if int(wave_idx) >= len(config.WAVE_ROUTE_MODES):
+                raise RuntimeError("Tower route mode list is shorter than the authored wave list.")
+            shortcut = str(config.WAVE_ROUTE_MODES[int(wave_idx)])
             plan.append(
                 WaveSpec(
-                    entry_mode=entry_mode,
-                    count_light=int(counts["light"]),
-                    count_armored=int(counts["armored"]),
-                    count_flying=int(counts["flying"]),
+                    shortcut=shortcut,
+                    count_light=int(base_wave.count_light),
+                    count_armored=int(base_wave.count_armored),
+                    count_flying=int(base_wave.count_flying),
                 )
             )
         return plan
@@ -841,28 +948,6 @@ class TowerEnv(Env):
             return 0.0
         return clip_unit(float(tower_state.level) / 3.0)
 
-    def _empty_slot_count(self) -> int:
-        return sum(1 for slot_name in config.SLOT_NAMES if self.slot_towers[str(slot_name)] is None)
-
-    def _upgradeable_slot_count(self) -> int:
-        return sum(
-            1
-            for slot_name in config.SLOT_NAMES
-            if (tower_state := self.slot_towers[str(slot_name)]) is not None and int(tower_state.level) < 3
-        )
-
-    def _legal_build_any(self) -> bool:
-        mask = self.get_action_mask()
-        build_start = 1
-        build_stop = build_start + len(config.TOWER_KINDS) * len(config.SLOT_NAMES)
-        return bool(np.any(mask[build_start:build_stop]))
-
-    def _legal_upgrade_any(self) -> bool:
-        mask = self.get_action_mask()
-        upgrade_start = 1 + len(config.TOWER_KINDS) * len(config.SLOT_NAMES)
-        upgrade_stop = upgrade_start + len(config.SLOT_NAMES)
-        return bool(np.any(mask[upgrade_start:upgrade_stop]))
-
     def _wave_number_norm(self) -> float:
         if not self.wave_plan:
             return 0.0
@@ -871,41 +956,39 @@ class TowerEnv(Env):
             next_wave_number = len(self.wave_plan)
         return clip_unit(float(next_wave_number) / float(max(1, len(self.wave_plan))))
 
+    def _acts_left_norm(self) -> float:
+        if self._last_outcome or self._wave_in_progress or self._current_wave() is None:
+            return 0.0
+        # Tower keeps the legacy feature slot for compatibility, but build phases no longer use an action budget.
+        return 1.0
+
     def _build_observation(self) -> np.ndarray:
         wave = self._current_wave()
-        empty_slot_count = int(self._empty_slot_count())
-        upgradeable_slot_count = int(self._upgradeable_slot_count())
+        shortcut = SHORTCUT_NONE if wave is None else str(wave.shortcut)
         feature_values = {
             "glob_gold_norm": clip_unit(float(self.credits) / float(config.MAX_CREDITS_NORMALIZER)),
             "glob_lives_norm": clip_unit(float(self.lives) / float(config.MAX_LIVES_NORMALIZER)),
             "glob_wave_norm": float(self._wave_number_norm()),
-            "glob_acts_left_norm": clip_unit(
-                float(self.actions_remaining) / float(config.DECISION_BUDGET_NORMALIZER)
-            ),
-            "board_entry_left": 1.0 if wave is not None and wave.entry_mode in {SIDE_LEFT, ENTRY_BOTH} else 0.0,
-            "board_entry_right": 1.0 if wave is not None and wave.entry_mode in {SIDE_RIGHT, ENTRY_BOTH} else 0.0,
-            "board_n_light_norm": clip_unit(
+            "glob_acts_left_norm": float(self._acts_left_norm()),
+            "wave_n_light_norm": clip_unit(
                 float(0 if wave is None else wave.count_light) / float(config.MAX_WAVE_COUNT_NORMALIZER)
             ),
-            "board_n_armored_norm": clip_unit(
+            "wave_n_armored_norm": clip_unit(
                 float(0 if wave is None else wave.count_armored) / float(config.MAX_WAVE_COUNT_NORMALIZER)
             ),
-            "board_n_flying_norm": clip_unit(
+            "wave_n_flying_norm": clip_unit(
                 float(0 if wave is None else wave.count_flying) / float(config.MAX_WAVE_COUNT_NORMALIZER)
             ),
-            "board_layout_id_norm": float(self.layout.layout_norm),
-            "slot_empty_n_norm": clip_unit(float(empty_slot_count) / float(max(1, len(config.SLOT_NAMES)))),
-            "slot_upg_n_norm": clip_unit(
-                float(upgradeable_slot_count) / float(max(1, len(config.SLOT_NAMES)))
-            ),
-            # These summaries intentionally mirror the live action mask, not just raw affordance.
-            "legal_build_any": 1.0 if self._legal_build_any() else 0.0,
-            "legal_upg_any": 1.0 if self._legal_upgrade_any() else 0.0,
+            "route_shortcut_upper_active": 1.0 if shortcut == SHORTCUT_UPPER else 0.0,
+            "route_shortcut_lower_active": 1.0 if shortcut == SHORTCUT_LOWER else 0.0,
         }
         for slot_name in config.SLOT_NAMES:
             tower_state = self.slot_towers[str(slot_name)]
-            feature_values[f"slot_{slot_name}_kind_id"] = float(self._tower_kind_id(tower_state))
-            feature_values[f"slot_{slot_name}_lvl_norm"] = float(self._tower_lvl_norm(tower_state))
+            feature_values[f"{slot_name}_kind_id"] = float(self._tower_kind_id(tower_state))
+            feature_values[f"{slot_name}_lvl_norm"] = float(self._tower_lvl_norm(tower_state))
+            feature_values[f"{slot_name}_exposure_norm"] = float(
+                self.layout.slot_exposure_norms[str(slot_name)][str(shortcut)]
+            )
 
         obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
         if obs.shape != (self.OBS_DIM,):
@@ -915,12 +998,12 @@ class TowerEnv(Env):
     def reset(self) -> np.ndarray:
         self._apply_level_settings(int(self._current_level))
         rng = random.Random(self._episode_seed())
+        self._episode_rng = rng
         self.layout = _generate_layout(rng)
         self.wave_plan = self._build_wave_plan(rng)
         self.wave_index = 0
         self.credits = int(self._level_settings["start_credits"])
         self.lives = int(self._level_settings["start_lives"])
-        self.actions_remaining = int(self.decision_budget)
         self.slot_towers = {slot_name: None for slot_name in config.SLOT_NAMES}
         self._menu_slot_name = None
         self._hovered_slot_name = None
@@ -972,8 +1055,6 @@ class TowerEnv(Env):
             return mask
 
         mask[0] = True
-        if int(self.actions_remaining) <= 0:
-            return mask
         for slot_name in config.SLOT_NAMES:
             tower_state = self.slot_towers[str(slot_name)]
             if tower_state is None:
@@ -1005,8 +1086,7 @@ class TowerEnv(Env):
         tower_state = self.slot_towers[str(slot_name)]
         if tower_state is None:
             return 0
-        refund_ratio = float(SELL_REFUND_BY_LEVEL.get(int(tower_state.level), 0.0))
-        return int(round(float(tower_state.total_spent) * float(refund_ratio)))
+        return int(config.SELL_VALUE_BY_LEVEL.get(int(tower_state.level), 0))
 
     def _slot_name_at(self, mouse_x: float, mouse_y_arcade: float) -> str | None:
         mouse_y = float(self.window_controller.to_top_left_y(float(mouse_y_arcade)))
@@ -1045,8 +1125,7 @@ class TowerEnv(Env):
         items = self._menu_items_for_slot(str(slot_name))
         if not items:
             return []
-        slot_left = float(self.layout.slot_cells[str(slot_name)][0]) * TILE_SIZE
-        slot_top = float(self.layout.slot_cells[str(slot_name)][1]) * TILE_SIZE
+        slot_left, slot_top, _, _ = self.layout.slot_render_rects[str(slot_name)]
         total_height = float(len(items)) * MENU_ITEM_HEIGHT + float(max(0, len(items) - 1)) * MENU_ITEM_GAP
         if slot_left + SLOT_SIZE + 6.0 + MENU_ITEM_WIDTH <= float(config.SCREEN_WIDTH) - 4.0:
             menu_left = slot_left + SLOT_SIZE + 6.0
@@ -1095,12 +1174,34 @@ class TowerEnv(Env):
             self._menu_slot_name = str(slot_name)
         return None
 
-    def _spawn_enemy(self, side: str, enemy_kind: str) -> EnemyState:
+    def _current_shortcut(self) -> str:
+        wave = self._current_wave()
+        if wave is None:
+            return SHORTCUT_NONE
+        return str(wave.shortcut)
+
+    def _can_toggle_visual_overlay(self) -> bool:
+        return bool(self.show_game and self.mode in {"human", "eval"})
+
+    def _update_visual_overlay_toggle(self) -> None:
+        if not self._can_toggle_visual_overlay():
+            self._prev_overlay_toggle_down = False
+            return
+        toggle_down = bool(self.window_controller.is_key_down(arcade.key.X))
+        if toggle_down and not self._prev_overlay_toggle_down:
+            self.show_tower_range_ghosts = not bool(self.show_tower_range_ghosts)
+        self._prev_overlay_toggle_down = bool(toggle_down)
+
+    def _should_draw_tower_range_ghosts(self) -> bool:
+        return bool(self.show_tower_range_ghosts and self.show_game and self.mode != "train")
+
+    def _spawn_enemy(self, enemy_kind: str) -> EnemyState:
         profile = ENEMY_PROFILES[str(enemy_kind)]
-        path = self.layout.ground_paths[str(side)]
+        shortcut = self._current_shortcut()
+        path_key = str(shortcut)
+        path = self.layout.path_variants[str(path_key)]
         return EnemyState(
             kind=str(enemy_kind),
-            side=str(side),
             path=path,
             hp=float(profile.max_hp),
             speed=float(profile.speed),
@@ -1111,40 +1212,20 @@ class TowerEnv(Env):
             distance_along=0.0,
         )
 
-    def _split_wave_counts(self, wave: WaveSpec, enemy_kind: str) -> dict[str, int]:
-        total = int(wave.count_for(str(enemy_kind)))
-        if wave.entry_mode == SIDE_LEFT:
-            return {SIDE_LEFT: total, SIDE_RIGHT: 0}
-        if wave.entry_mode == SIDE_RIGHT:
-            return {SIDE_LEFT: 0, SIDE_RIGHT: total}
-
-        left_count = total // 2
-        right_count = total - left_count
-        tie_break = (int(self.wave_index) + int(self.layout.layout_id) + int(config.ENEMY_KINDS.index(str(enemy_kind)))) % 2
-        if tie_break == 1:
-            left_count, right_count = right_count, left_count
-        return {SIDE_LEFT: int(left_count), SIDE_RIGHT: int(right_count)}
-
-    def _build_spawn_schedule(self, wave: WaveSpec) -> list[tuple[int, str, str]]:
-        side_queues: dict[str, deque[str]] = {SIDE_LEFT: deque(), SIDE_RIGHT: deque()}
-        for enemy_kind in ("light", "flying", "armored"):
-            split_counts = self._split_wave_counts(wave, str(enemy_kind))
-            for side in (SIDE_LEFT, SIDE_RIGHT):
-                for _ in range(max(0, int(split_counts[str(side)]))):
-                    side_queues[str(side)].append(str(enemy_kind))
-
-        ordered_spawns: list[tuple[str, str]] = []
-        while side_queues[SIDE_LEFT] or side_queues[SIDE_RIGHT]:
-            if side_queues[SIDE_LEFT]:
-                ordered_spawns.append((SIDE_LEFT, side_queues[SIDE_LEFT].popleft()))
-            if side_queues[SIDE_RIGHT]:
-                ordered_spawns.append((SIDE_RIGHT, side_queues[SIDE_RIGHT].popleft()))
-
-        schedule: list[tuple[int, str, str]] = []
+    def _build_spawn_schedule(self, wave: WaveSpec) -> list[tuple[int, str]]:
+        schedule: list[tuple[int, str]] = []
+        remaining = {
+            str(enemy_kind): max(0, int(wave.count_for(str(enemy_kind))))
+            for enemy_kind in config.ENEMY_KINDS
+        }
         tick_cursor = 0
-        for side, enemy_kind in ordered_spawns:
-            schedule.append((int(tick_cursor), str(side), str(enemy_kind)))
-            tick_cursor += int(SPAWN_GAPS[str(enemy_kind)])
+        while any(int(count) > 0 for count in remaining.values()):
+            for enemy_kind in config.SPAWN_TYPE_ORDER:
+                if int(remaining[str(enemy_kind)]) <= 0:
+                    continue
+                schedule.append((int(tick_cursor), str(enemy_kind)))
+                remaining[str(enemy_kind)] -= 1
+                tick_cursor += int(SPAWN_GAPS[str(enemy_kind)])
         return schedule
 
     @staticmethod
@@ -1169,8 +1250,7 @@ class TowerEnv(Env):
         raw_damage = float(tower_stats.damage) * float(multiplier) * float(scale)
         if raw_damage <= 0.0:
             return False
-        mitigated_armor = max(0.0, float(enemy.armor) - float(tower_stats.armor_pierce))
-        damage = max(0.05, float(raw_damage) - float(mitigated_armor))
+        damage = max(0.05, float(raw_damage) - float(enemy.armor))
         enemy.hp -= float(damage)
         if enemy.hp <= 0.0:
             enemy.alive = False
@@ -1331,8 +1411,8 @@ class TowerEnv(Env):
             self.window_controller.poll_events_or_raise()
 
             while schedule_index < len(spawn_schedule) and int(spawn_schedule[schedule_index][0]) <= int(tick_count):
-                _, side, enemy_kind = spawn_schedule[schedule_index]
-                self._active_enemies.append(self._spawn_enemy(str(side), str(enemy_kind)))
+                _, enemy_kind = spawn_schedule[schedule_index]
+                self._active_enemies.append(self._spawn_enemy(str(enemy_kind)))
                 schedule_index += 1
 
             self._tick_towers(self._active_enemies)
@@ -1367,8 +1447,6 @@ class TowerEnv(Env):
         self._wave_in_progress = False
         self._active_enemies = []
         self._attack_effects = []
-        if not self._last_outcome:
-            self.actions_remaining = int(self.decision_budget)
         return reward_breakdown
 
     def _build_tower(self, tower_kind: str, slot_name: str) -> None:
@@ -1382,7 +1460,6 @@ class TowerEnv(Env):
             cooldown_ticks=0,
             total_spent=int(profile.build_cost),
         )
-        self.actions_remaining = max(0, int(self.actions_remaining) - 1)
 
     def _upgrade_tower(self, slot_name: str) -> None:
         tower_state = self.slot_towers[str(slot_name)]
@@ -1395,7 +1472,6 @@ class TowerEnv(Env):
         tower_state.level = min(3, int(tower_state.level) + 1)
         tower_state.total_spent += int(upgrade_cost)
         tower_state.cooldown_ticks = 0
-        self.actions_remaining = max(0, int(self.actions_remaining) - 1)
 
     def _sell_tower(self, slot_name: str) -> None:
         tower_state = self.slot_towers[str(slot_name)]
@@ -1404,7 +1480,6 @@ class TowerEnv(Env):
         refund = self._sell_value(str(slot_name))
         self.credits += int(refund)
         self.slot_towers[str(slot_name)] = None
-        self.actions_remaining = max(0, int(self.actions_remaining) - 1)
 
     def _apply_build_phase_action(self, action_idx: int) -> dict[str, float]:
         reward_breakdown = self._empty_reward_breakdown()
@@ -1427,6 +1502,7 @@ class TowerEnv(Env):
             }
 
         self.window_controller.poll_events_or_raise()
+        self._update_visual_overlay_toggle()
         episode_level = int(self._current_level)
 
         if self.mode == "human":
@@ -1525,59 +1601,135 @@ class TowerEnv(Env):
             float(inner_left),
             float(self.window_controller.to_arcade_y(float(inner_top) + float(inner_height))),
             float(inner_width),
-            float(inner_height),
-            inner_color,
-        )
+                float(inner_height),
+                inner_color,
+            )
 
-    def _draw_paths(self) -> None:
-        path_cells = _rect_cells(self.layout.ground_rects)
-        for col, row in path_cells:
+    def _draw_path_outline(
+        self,
+        cells: set[tuple[int, int]],
+        *,
+        color: tuple[int, int, int] | tuple[int, int, int, int],
+        attached_cells: set[tuple[int, int]] | None = None,
+    ) -> None:
+        if not cells:
+            return
+        cell_set = {(int(col), int(row)) for col, row in cells}
+        attached = {(int(col), int(row)) for col, row in (attached_cells or set())}
+        border = max(1.0, float(CELL_INSET))
+        for col, row in cell_set:
+            left = float(col) * float(TILE_SIZE)
+            top = float(row) * float(TILE_SIZE)
+            top_open = (int(col), int(row) - 1) not in cell_set and (int(col), int(row) - 1) not in attached
+            bottom_open = (int(col), int(row) + 1) not in cell_set and (int(col), int(row) + 1) not in attached
+            left_open = (int(col) - 1, int(row)) not in cell_set and (int(col) - 1, int(row)) not in attached
+            right_open = (int(col) + 1, int(row)) not in cell_set and (int(col) + 1, int(row)) not in attached
+            if top_open:
+                arcade.draw_lbwh_rectangle_filled(
+                    left,
+                    float(self.window_controller.to_arcade_y(top + border)),
+                    float(TILE_SIZE),
+                    border,
+                    color,
+                )
+            if bottom_open:
+                arcade.draw_lbwh_rectangle_filled(
+                    left,
+                    float(self.window_controller.to_arcade_y(top + float(TILE_SIZE))),
+                    float(TILE_SIZE),
+                    border,
+                    color,
+                )
+            if left_open:
+                arcade.draw_lbwh_rectangle_filled(
+                    left,
+                    float(self.window_controller.to_arcade_y(top + float(TILE_SIZE))),
+                    border,
+                    float(TILE_SIZE),
+                    color,
+                )
+            if right_open:
+                arcade.draw_lbwh_rectangle_filled(
+                    left + float(TILE_SIZE) - border,
+                    float(self.window_controller.to_arcade_y(top + float(TILE_SIZE))),
+                    border,
+                    float(TILE_SIZE),
+                    color,
+                )
+
+    def _draw_path_cells(
+        self,
+        cells: set[tuple[int, int]],
+        *,
+        alpha: int = 255,
+        attached_cells: set[tuple[int, int]] | None = None,
+    ) -> None:
+        if not cells:
+            return
+        fill_color = GROUND_PATH_INNER if int(alpha) >= 255 else _with_alpha(GROUND_PATH_INNER, int(alpha))
+        outline_color = GROUND_PATH_OUTER if int(alpha) >= 255 else _with_alpha(GROUND_PATH_OUTER, int(alpha))
+        for col, row in cells:
             left, top, width, height = _block_rect(int(col), int(row), 1, 1)
             arcade.draw_lbwh_rectangle_filled(
                 float(left),
                 float(self.window_controller.to_arcade_y(float(top) + float(height))),
                 float(width),
                 float(height),
-                GROUND_PATH_INNER,
+                fill_color,
             )
+        if attached_cells:
+            self._draw_path_outline(cells, color=outline_color, attached_cells=attached_cells)
+            return
         draw_cell_union_outline(
             self.window_controller,
-            cells=path_cells,
+            cells=cells,
             top_left_x=0.0,
             top_left_y=0.0,
             cell_size=float(TILE_SIZE),
             border_width=float(CELL_INSET),
-            color=GROUND_PATH_OUTER,
+            color=outline_color,
         )
 
+    def _draw_paths(self) -> None:
+        base_cells = _rect_cells(self.layout.base_rects)
+        active_shortcut = self._current_shortcut()
+        active_shortcut_cells: set[tuple[int, int]] = set()
+        for shortcut_name, rects in self.layout.shortcut_rects.items():
+            shortcut_cells = _rect_cells(rects).difference(base_cells)
+            if str(shortcut_name) == str(active_shortcut):
+                active_shortcut_cells = shortcut_cells
+                continue
+            self._draw_path_cells(
+                shortcut_cells,
+                alpha=int(SHORTCUT_INACTIVE_ALPHA),
+                attached_cells=base_cells,
+            )
+        self._draw_path_cells(base_cells.union(active_shortcut_cells))
+
     def _draw_entries_and_exit(self) -> None:
-        for side, cell_top_left in self.layout.entry_cells.items():
-            label = "L" if side == SIDE_LEFT else "R"
-            marker_left = int(cell_top_left[0]) - int(ENTRY_MARKER_DEPTH_CELLS) if side == SIDE_LEFT else int(cell_top_left[0]) + int(TRACK_WIDTH_CELLS)
-            marker_top = int(cell_top_left[1])
-            marker_rect = _block_rect(
-                int(marker_left),
-                int(marker_top),
-                int(ENTRY_MARKER_DEPTH_CELLS),
-                int(TRACK_WIDTH_CELLS),
-            )
-            label_x = float(marker_rect[0]) + float(marker_rect[2]) * 0.5
-            label_y = float(marker_rect[1]) + float(marker_rect[3]) * 0.5
-            self._draw_block(
-                *marker_rect,
-                outer_color=ENTRY_OUTLINE,
-                inner_color=ENTRY_FILL,
-            )
-            self._text_cache.draw(
-                label,
-                x=float(label_x),
-                y=float(self.window_controller.to_arcade_y(float(label_y))),
-                color=COLOR_LIGHT_NEUTRAL,
-                font_size=12,
-                font_name=BLOCK_FONT_NAME,
-                anchor_x="center",
-                anchor_y="center",
-            )
+        entry_rect = _block_rect(
+            int(self.layout.entry_cell[0]),
+            int(self.layout.entry_cell[1]) - int(ENTRY_MARKER_DEPTH_CELLS),
+            int(TRACK_WIDTH_CELLS),
+            int(ENTRY_MARKER_DEPTH_CELLS),
+        )
+        entry_label_x = float(entry_rect[0]) + float(entry_rect[2]) * 0.5
+        entry_label_y = float(entry_rect[1]) + float(entry_rect[3]) * 0.5
+        self._draw_block(
+            *entry_rect,
+            outer_color=ENTRY_OUTLINE,
+            inner_color=ENTRY_FILL,
+        )
+        self._text_cache.draw(
+            "S",
+            x=float(entry_label_x),
+            y=float(self.window_controller.to_arcade_y(float(entry_label_y))),
+            color=COLOR_LIGHT_NEUTRAL,
+            font_size=12,
+            font_name=BLOCK_FONT_NAME,
+            anchor_x="center",
+            anchor_y="center",
+        )
         exit_rect = _block_rect(
             int(self.layout.exit_cell[0]),
             int(self.layout.exit_cell[1]) + int(TRACK_WIDTH_CELLS),
@@ -1604,6 +1756,21 @@ class TowerEnv(Env):
 
     def _draw_slots(self) -> None:
         tower_labels = {"fast": "F", "heavy": "H", "area": "A"}
+        active_candidate_ids = {str(candidate_name) for candidate_name in self.layout.runtime_slot_candidates.values()}
+        for candidate_name, cell_top_left in self.layout.candidate_slot_cells.items():
+            if str(candidate_name) in active_candidate_ids:
+                continue
+            left, top, width, height = self.layout.candidate_slot_render_rects[str(candidate_name)]
+            self._draw_block(
+                left,
+                top,
+                width,
+                height,
+                outer_color=_with_alpha(SLOT_OUTLINE, int(SHORTCUT_INACTIVE_ALPHA)),
+                inner_color=_with_alpha(SLOT_FILL, int(SHORTCUT_INACTIVE_ALPHA)),
+                inset=float(SLOT_INSET),
+            )
+
         for slot_name in config.SLOT_NAMES:
             x, y = self.layout.slot_positions[str(slot_name)]
             tower_state = self.slot_towers[str(slot_name)]
@@ -1616,12 +1783,7 @@ class TowerEnv(Env):
             if highlighted and self.mode == "human":
                 tower_outline = SELECTED_SLOT_COLOR
             self._draw_block(
-                *_block_rect(
-                    int(self.layout.slot_cells[str(slot_name)][0]),
-                    int(self.layout.slot_cells[str(slot_name)][1]),
-                    2,
-                    2,
-                ),
+                *self.layout.slot_render_rects[str(slot_name)],
                 outer_color=tower_outline,
                 inner_color=tower_fill,
                 inset=float(SLOT_INSET),
@@ -1638,6 +1800,29 @@ class TowerEnv(Env):
                 font_name=BLOCK_FONT_NAME,
                 anchor_x="center",
                 anchor_y="center",
+            )
+
+    def _draw_tower_range_ghosts(self) -> None:
+        if not self._should_draw_tower_range_ghosts():
+            return
+        for slot_name in config.SLOT_NAMES:
+            tower_state = self.slot_towers[str(slot_name)]
+            if tower_state is None:
+                continue
+            center_x, center_y = self.layout.slot_positions[str(slot_name)]
+            radius = max(float(TILE_SIZE), float(tower_state.stats.attack_range))
+            arcade.draw_circle_filled(
+                float(center_x),
+                float(self.window_controller.to_arcade_y(float(center_y))),
+                float(radius),
+                TOWER_RANGE_GHOST_FILL,
+            )
+            arcade.draw_circle_outline(
+                float(center_x),
+                float(self.window_controller.to_arcade_y(float(center_y))),
+                float(radius),
+                TOWER_RANGE_GHOST_OUTLINE,
+                2.0,
             )
 
     def _draw_context_menu(self) -> None:
@@ -1754,6 +1939,7 @@ class TowerEnv(Env):
         )
         self._draw_paths()
         self._draw_entries_and_exit()
+        self._draw_tower_range_ghosts()
         self._draw_slots()
         for enemy in self._active_enemies:
             self._draw_enemy(enemy)
@@ -1763,18 +1949,13 @@ class TowerEnv(Env):
     def _draw_hud(self) -> None:
         wave = self._current_wave()
         wave_label = "Done" if wave is None else f"{int(self.wave_index) + 1}/{len(self.wave_plan)}"
-        preview_entry = "-"
-        if wave is not None:
-            preview_entry = {
-                SIDE_LEFT: "Left",
-                SIDE_RIGHT: "Right",
-                ENTRY_BOTH: "Both",
-            }.get(str(wave.entry_mode), str(wave.entry_mode).title())
+        preview_shortcut = "-" if wave is None else str(SHORTCUT_LABELS.get(str(wave.shortcut), str(wave.shortcut).title()))
         entries: list[tuple[str, object]] = [
             ("Credits", int(self.credits)),
             ("Lives", int(self.lives)),
             ("Wave", wave_label),
-            ("NextWave", preview_entry),
+            ("Layout", str(self.layout.name).replace("Soft S / ", "")),
+            ("Shortcut", preview_shortcut),
             ("Light", 0 if wave is None else int(wave.count_light)),
             ("Armored", 0 if wave is None else int(wave.count_armored)),
             ("Flying", 0 if wave is None else int(wave.count_flying)),

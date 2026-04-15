@@ -8,12 +8,12 @@ No clip is currently checked into the repo for `frogger`.
 
 ## Algorithm / Network
 
-- Algorithm: recurrent PPO (`recurrent_ppo`)
-- Shared encoder: `[32]`
-- Recurrent hidden size: `64`
-- Actor head: `[32]`
-- Critic head: `[32]`
-- Action space: `Discrete(5)`
+- Default algorithm: `recurrent_ppo`
+- IO: `obs=32`, `act=5`
+- Encoder: `32 -> 32`
+- Recurrent core: `LSTM(64)`
+- Actor head: `64 -> 32 -> 5`
+- Critic head: `64 -> 32 -> 1`
 
 ## Controls (Human)
 

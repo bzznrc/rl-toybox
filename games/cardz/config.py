@@ -231,8 +231,8 @@ REWARD_COMPONENT_NAMES = (
 
 
 # TRAINING
-# Default actor-critic trunk: 64 -> 96 -> 96, then actor/critic heads.
-HIDDEN_DIMENSIONS = [96, 96]
+# Default actor-critic trunk: 64 -> 64 -> 64, then actor/critic heads.
+HIDDEN_DIMENSIONS = [64, 64]
 SHARE_BACKBONE = True
 
 MAX_TRAINING_ITERATIONS = 8000

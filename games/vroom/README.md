@@ -8,9 +8,10 @@ Top-down one-lap racing with procedural closed-loop tracks and continuous `steer
 
 ## Algorithm / Network
 
-- Algorithm: soft actor-critic (`sac`)
+- Default algorithm: `sac`
+- IO: `obs=20`, `act=3`
 - Actor: `20 -> 64 -> 64 -> 3`
-- Critic Q1/Q2: `(20 + 3) -> 64 -> 64 -> 1`
+- Twin critics: `(20 + 3) -> 64 -> 64 -> 1`
 
 ## Controls (Human)
 

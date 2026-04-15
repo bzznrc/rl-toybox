@@ -8,15 +8,15 @@ No clip is currently checked into the repo for `osero`.
 
 ## Algorithm / Network
 
-- Algorithm family: `search_play`
+- Default algorithm: `search_play`
 - Search: lightweight PUCT MCTS with policy priors and value estimates from the shared network
 - Training flow: self-play games produce MCTS visit-count policy targets and final-outcome value targets
 - Default board: `6x6`
 - Supported boards: `4x4`, `6x6`, `8x8`
-- Default networks:
-  - `4x4`: input `16`, trunk `[64, 64]`, policy `17`, value `1`
-  - `6x6`: input `36`, trunk `[96, 96]`, policy `37`, value `1`
-  - `8x8`: input `64`, trunk `[128, 128]`, policy `65`, value `1`
+- IO / network by board size:
+  - `4x4`: `obs=16`, `act=17`, net `16 -> 48 -> 48 -> (17 + 1)`
+  - `6x6`: `obs=36`, `act=37`, net `36 -> 64 -> 64 -> (37 + 1)`
+  - `8x8`: `obs=64`, `act=65`, net `64 -> 96 -> 96 -> (65 + 1)`
 
 ## Controls (Human)
 

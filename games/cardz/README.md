@@ -8,8 +8,10 @@ No clip is currently checked into the repo for `cardz`.
 
 ## Algorithm / Network
 
-- Algorithm: `a2c` on the shared on-policy actor-critic stack
-- Network: shared trunk `[96, 96]`, actor head `16`, critic head `1`
+- Default algorithm: `a2c`
+- IO: `obs=64`, `act=16`
+- Default network: shared actor-critic backbone `64 -> 64 -> 64` with direct policy/value heads
+- Backbone sharing: `SHARE_BACKBONE=True`
 
 ## Controls (Human)
 

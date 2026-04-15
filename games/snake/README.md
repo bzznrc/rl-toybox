@@ -8,8 +8,9 @@ Classic grid Snake with a small obstacle curriculum, compact observations, and l
 
 ## Algorithm / Network
 
-- Algorithm: linear Q-learning (`qlearn`)
-- Hidden sizes: `[32]`
+- Default algorithm: `qlearn`
+- IO: `obs=12`, `act=3`
+- Default Q-network: `12 -> 32 -> 3`
 
 ## Controls (Human)
 

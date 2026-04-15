@@ -1,6 +1,6 @@
 # Kick
 
-Top-down football environment with a shared LEFT-team policy and a centralized critic during training. `kick` now uses a true `7v7` max setup on both sides, and it remains in the repo as a paused experimental branch because it exercises the multi-agent and CTDE pieces more directly than the other games.
+Top-down football environment with a shared LEFT-team policy and a centralized critic during training. `kick` uses a true `7v7` max setup on both sides and is the repo's active multi-agent / CTDE showcase.
 
 ## Clip
 
@@ -8,13 +8,13 @@ No clip is currently checked into the repo for `kick`.
 
 ## Algorithm / Network
 
-- Algorithm: PPO with MAPPO-style training
+- Default algorithm: `ppo`
 - Teams: true `7v7` max on both sides
 - Roles: `GK LB RB LM CM RM CS`
-- Actor MLP: `[96, 96]`
-- Critic MLP: `[192, 192]`
-- Actor output: `Discrete(12)` logits per LEFT player
-- Critic input: centralized state plus local agent context
+- Per-player IO: `obs=56`, `act=12`
+- Shared actor: `56 -> 96 -> 96 -> 12`
+- Centralized critic: `405 -> 192 -> 192 -> 1`
+- Critic input: padded team state plus local agent context
 
 ## Controls (Human)
 

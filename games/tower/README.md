@@ -8,12 +8,10 @@ No clip is currently checked into the repo for `tower`.
 
 ## Algorithm / Network
 
-- Algorithm family: value-based discrete control
 - Default algorithm: `dqn`
-- Recommended runtime shape: masked Double DQN with a dueling head
-- Hidden sizes: `[96, 96]`
-- Observation size: `24`
-- Action count: `26`
+- IO: `obs=24`, `act=26`
+- Default Q-network: `24 -> 64 -> 64 -> 26`
+- Runtime shape: masked Double DQN with a dueling head
 
 ## Controls (Human)
 
@@ -22,6 +20,7 @@ No clip is currently checked into the repo for `tower`.
 - `Mouse Left` on a menu item: apply it if valid
 - `Mouse Left` elsewhere: close the active menu
 - `Space`: start the previewed wave
+- `X`: toggle turret-range ghosts for deployed towers
 
 ## Observation / Actions
 
@@ -29,56 +28,51 @@ Canonical `INPUT_FEATURE_NAMES` order:
 
 ```python
 [
-    # GLOB
     "glob_gold_norm",
     "glob_lives_norm",
     "glob_wave_norm",
     "glob_acts_left_norm",
-    # BOARD
-    "board_entry_left",
-    "board_entry_right",
-    "board_n_light_norm",
-    "board_n_armored_norm",
-    "board_n_flying_norm",
-    "board_layout_id_norm",
-    # SLOT
-    "slot_left_kind_id",
-    "slot_left_lvl_norm",
-    "slot_upper_kind_id",
-    "slot_upper_lvl_norm",
-    "slot_mid_kind_id",
-    "slot_mid_lvl_norm",
-    "slot_lower_kind_id",
-    "slot_lower_lvl_norm",
-    "slot_right_kind_id",
-    "slot_right_lvl_norm",
-    # LEGAL
-    "slot_empty_n_norm",
-    "slot_upg_n_norm",
-    "legal_build_any",
-    "legal_upg_any",
+    "wave_n_light_norm",
+    "wave_n_armored_norm",
+    "wave_n_flying_norm",
+    "route_shortcut_upper_active",
+    "route_shortcut_lower_active",
+    "slot_0_kind_id",
+    "slot_0_lvl_norm",
+    "slot_0_exposure_norm",
+    "slot_1_kind_id",
+    "slot_1_lvl_norm",
+    "slot_1_exposure_norm",
+    "slot_2_kind_id",
+    "slot_2_lvl_norm",
+    "slot_2_exposure_norm",
+    "slot_3_kind_id",
+    "slot_3_lvl_norm",
+    "slot_3_exposure_norm",
+    "slot_4_kind_id",
+    "slot_4_lvl_norm",
+    "slot_4_exposure_norm",
 ]
 ```
 
 - `kind_id` encoding: `0=empty`, `1=fast`, `2=heavy`, `3=area`
 - `lvl_norm`: `0.0` for empty, otherwise `level / 3`
-- `slot_empty_n_norm = empty_slots / 5`
-- `slot_upg_n_norm = upgradeable_slots / 5`
-- `legal_build_any` means at least one build action is mask-legal now under the current game state.
-- `legal_upg_any` means at least one upgrade action is mask-legal now under the current game state.
-- The `legal_*` summaries respect the same gating as `get_action_mask()`, including build/wave phase, terminal state, actions remaining, affordability, and slot-specific legality.
-- The game still uses the same fixed 5-slot topology: `left`, `upper`, `mid`, `lower`, `right`.
+- `glob_acts_left_norm` is kept as a compatibility feature slot; because Tower no longer uses a build-phase action budget, it is `1.0` during playable build phases.
+- `route_shortcut_upper_active` and `route_shortcut_lower_active` show which route setup is active for the next wave.
+- `slot_i_exposure_norm` is the main topology feature: it is the normalized route length inside that slot's coverage for the upcoming wave route.
+- Runtime slots are always ordered from earliest to latest exposure timing on the base S path.
+- `slot_0` is the earliest slot and `slot_4` is the latest cleanup slot.
 
 Action space:
 
 ```python
 [
     "start_wave",
-    "build_fast_left", "build_fast_upper", "build_fast_mid", "build_fast_lower", "build_fast_right",
-    "build_heavy_left", "build_heavy_upper", "build_heavy_mid", "build_heavy_lower", "build_heavy_right",
-    "build_area_left", "build_area_upper", "build_area_mid", "build_area_lower", "build_area_right",
-    "upgrade_left", "upgrade_upper", "upgrade_mid", "upgrade_lower", "upgrade_right",
-    "sell_left", "sell_upper", "sell_mid", "sell_lower", "sell_right",
+    "build_fast_0", "build_fast_1", "build_fast_2", "build_fast_3", "build_fast_4",
+    "build_heavy_0", "build_heavy_1", "build_heavy_2", "build_heavy_3", "build_heavy_4",
+    "build_area_0", "build_area_1", "build_area_2", "build_area_3", "build_area_4",
+    "upgrade_0", "upgrade_1", "upgrade_2", "upgrade_3", "upgrade_4",
+    "sell_0", "sell_1", "sell_2", "sell_3", "sell_4",
 ]
 ```
 
@@ -95,19 +89,49 @@ The gameplay loop is:
 5. Return to the next build phase.
 
 The policy never acts during the live wave itself.
+Build phases no longer use an action budget: you can keep building, upgrading, and selling until you start the wave or run out of credits.
 
-Each run picks one of two handcrafted layouts:
+Tower now uses one compact soft-S lane:
 
-- `Soft S Merge`
-- `Offset S`
+- top entry into an upper sweep
+- right-side bend into a middle sweep back
+- left-side bend into a lower sweep
+- short final trunk to the exit
 
-The five slot ids keep the same semantic roles across both layouts:
+Two shortcuts are always visible on the board:
 
-- `left`
+- `Upper`: drops vertically from the first corner into the fourth, bypassing corners `2` and `3`
+- `Lower`: drops vertically from the third corner into the sixth, bypassing corners `4` and `5`
+
+At most one shortcut is active for a wave. Inactive shortcuts are drawn with the normal path styling at reduced opacity; the active shortcut is drawn exactly like the base path, with the fork rendered as one continuous outlined union so the branch reads as a smooth bifurcation.
+
+Like the other repo games with optional helper overlays, Tower also supports an `X`-toggled ghost view during rendered play and eval: each deployed tower shows a restrained translucent circle for its current attack range.
+
+Each wave uses exactly one route mode for all enemies:
+
+- `none`
 - `upper`
-- `mid`
 - `lower`
-- `right`
+
+The next wave's route is chosen before the build phase and previewed in the HUD.
+
+The board still uses 7 candidate tower pads, with 5 active in a run and 2 shown as faded unavailable pads:
+
+- `upper_left_bend`
+- `upper_mid_inner`
+- `upper_right_bend`
+- `mid_left_bend`
+- `mid_center_inner`
+- `mid_right_bend`
+- `lower_trunk`
+
+At run start, the active 5 candidate pads are sorted by path order / exposure timing and remapped to the 5 runtime slot ids:
+
+- `slot_0`
+- `slot_1`
+- `slot_2`
+- `slot_3`
+- `slot_4`
 
 ### Roles
 
@@ -128,17 +152,28 @@ Each tower has levels `1` to `3`.
 ### Economy
 
 - Build cost: `5`
-- Level 2 upgrade cost: `4`
-- Level 3 upgrade cost: `7`
+- Level 2 upgrade cost: `5`
+- Level 3 upgrade cost: `5`
 - Start credits: `12`
-- Wave-clear credits: `+6`
+- Start lives: `12`
+- Wave-clear credits: `+5`
 - Kills do not grant credits
+- Leak damage: `1` life per enemy
 
-Sell refund rates:
+Sell values:
 
-- Level 1: `90%`
-- Level 2: `75%`
-- Level 3: `60%`
+- Level 1 tower: `4`
+- Level 2 tower: `8`
+- Level 3 tower: `12`
+
+Tower damage no longer uses armor piercing. Damage is now:
+
+```python
+raw_damage = base_damage * matchup_multiplier
+final_damage = max(0.05, raw_damage - enemy_armor)
+```
+
+Spawn order is interleaved instead of grouped by type: Tower cycles remaining pools in `light -> flying -> armored` order and skips exhausted types.
 
 ## Rewards (Training)
 
@@ -152,10 +187,23 @@ Build, upgrade, and sell actions do not receive direct reward. Episode totals ar
 
 ## Curriculum (Train)
 
-- Level 1: `start_credits=12`, `start_lives=10`, `num_waves=6`, `wave_scale=1.00`
-- Level 2: `start_credits=12`, `start_lives=10`, `num_waves=7`, `wave_scale=1.10`
-- Level 3: `start_credits=12`, `start_lives=10`, `num_waves=8`, `wave_scale=1.20`
-- All levels use `decision_budget=6`
+- Level 1: `start_credits=12`, `start_lives=12`, `num_waves=5`
+- Level 2: `start_credits=12`, `start_lives=12`, `num_waves=7`
+- Level 3: `start_credits=12`, `start_lives=12`, `num_waves=9`
+
+Wave templates are fully authored in `games/tower/config.py`; Tower no longer scales wave counts procedurally and no longer adds per-wave count jitter.
+
+Authored wave list:
+
+1. `6 light`
+2. `4 light, 3 flying`
+3. `6 light, 2 armored`
+4. `4 light, 2 armored, 2 flying`
+5. `8 light, 3 armored, 3 flying`
+6. `6 light, 5 armored, 4 flying`
+7. `10 light, 5 armored, 5 flying`
+8. `12 light, 6 armored, 6 flying`
+9. `8 light, 8 armored, 6 flying`
 
 ## Run Commands
 

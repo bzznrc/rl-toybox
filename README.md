@@ -7,7 +7,7 @@
 - `core/value_discrete/` contains the shared value-based stack used by `snake`, `bang`, and `tower`.
 - `core/actor_critic/` contains the shared actor-critic stack used by `vroom`, `frogger`, and `cardz`.
 - `core/search_play/` contains the compact MCTS, policy/value, and self-play stack used by `osero`.
-- `core/marl_ctde/` contains paused multi-agent CTDE helpers used by `kick`.
+- `core/marl_ctde/` contains the shared multi-agent CTDE helpers used by `kick`.
 - `core/game.py` owns the active game registry, metadata, and shared run preparation.
 - `games/<name>/` contains each game's environment, configuration, spec, and game-specific README.
 
@@ -56,7 +56,7 @@ python -m scripts.play_user --game bang
 | `frogger` | Partial-observability / memory showcase | actor-critic | Compact road-crossing game designed around local sensing, timing, and recurrent-policy friendly observations | [games/frogger/README.md](games/frogger/README.md) |
 | `cardz` | Stochastic hidden-information game | actor-critic | Two-player lane-control card game with masked actions and a scripted opponent | [games/cardz/README.md](games/cardz/README.md) |
 | `osero` | Planning and self-play capstone | search + self-play | Small Osero/Reversi implementation using MCTS, self-play, and a compact policy/value network | [games/osero/README.md](games/osero/README.md) |
-| `kick` | Experimental multi-agent football project | MARL / CTDE | Shared-policy 7v7 left-team football environment | [games/kick/README.md](games/kick/README.md) |
+| `kick` | Multi-agent football / CTDE showcase | MARL / CTDE | Shared-policy 7v7 left-team football environment with centralized-critic training | [games/kick/README.md](games/kick/README.md) |
 
 ## Observation Taxonomy
 
@@ -74,11 +74,11 @@ python -m scripts.play_user --game bang
 
 ## Default Plans
 
-- `snake` -> linear Q-learning (`qlearn`, `obs=12`, `act=3`, hidden `[32]`)
-- `bang` -> DQN (`dqn`, `obs=28`, `act=8`, hidden `[96, 96]`)
-- `tower` -> masked Double DQN (`dqn`, `obs=24`, `act=26`, hidden `[96, 96]`)
-- `vroom` -> SAC (`sac`, `obs=20`, `act=3`, hidden `[64, 64]`)
-- `frogger` -> recurrent PPO (`recurrent_ppo`, `obs=32`, `act=5`, encoder `[32]`, lstm `64`, heads `[32]`)
-- `cardz` -> actor-critic (`a2c`, `obs=64`, `act=16`, shared trunk `[96, 96]`)
-- `osero` -> search/self-play (`search_play`, default `6x6`, `obs=36`, `act=37`, trunk `[96, 96]`; `8x8` also supported)
-- `kick` -> PPO/MAPPO-style project (`ppo`, `obs=56/player`, `act=12`, actor `[96, 96]`, critic `[192, 192]`)
+- `snake` -> `qlearn`, `obs=12`, `act=3`, Q-network `12 -> 32 -> 3`
+- `bang` -> `dqn`, `obs=28`, `act=8`, Q-network `28 -> 64 -> 64 -> 8` with double-Q, dueling, and prioritized replay
+- `tower` -> `dqn`, `obs=24`, `act=26`, masked Q-network `24 -> 64 -> 64 -> 26` with double-Q and a dueling head
+- `vroom` -> `sac`, `obs=20`, `act=3`, actor `20 -> 64 -> 64 -> 3`, twin critics `(20 + 3) -> 64 -> 64 -> 1`
+- `frogger` -> `recurrent_ppo`, `obs=32`, `act=5`, encoder `32 -> 32`, LSTM `64`, actor head `64 -> 32 -> 5`, critic head `64 -> 32 -> 1`
+- `cardz` -> `a2c`, `obs=64`, `act=16`, shared actor-critic backbone `64 -> 64 -> 64` with direct policy/value heads
+- `osero` -> `search_play`, default `6x6`, `obs=36`, `act=37`, policy/value net `36 -> 64 -> 64 -> (37 + 1)`; `4x4` uses `48 -> 48`, `8x8` uses `96 -> 96`
+- `kick` -> `ppo`, `obs=56/player`, `act=12`, shared actor `56 -> 96 -> 96 -> 12`, centralized critic `405 -> 192 -> 192 -> 1`

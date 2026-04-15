@@ -13,7 +13,7 @@
         "--game",
         "snake",
         "--level",
-        "${input:playLevel}"
+        "${input:playLevel3}"
       ]
     },
     {
@@ -28,7 +28,7 @@
         "--game",
         "snake",
         "--level",
-        "${input:playLevel}",
+        "${input:playLevel3}",
         "--render"
       ]
     },
@@ -46,7 +46,7 @@
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",
-        "${input:trainResumeLevel}"
+        "${input:trainResumeLevel3}"
       ]
     },
     {
@@ -61,7 +61,7 @@
         "--game",
         "vroom",
         "--level",
-        "${input:playLevel}"
+        "${input:playLevel3}"
       ]
     },
     {
@@ -76,7 +76,7 @@
         "--game",
         "vroom",
         "--level",
-        "${input:playLevel}",
+        "${input:playLevel3}",
         "--render"
       ]
     },
@@ -94,7 +94,7 @@
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",
-        "${input:trainResumeLevel}"
+        "${input:trainResumeLevel3}"
       ]
     },
     {
@@ -109,7 +109,7 @@
         "--game",
         "bang",
         "--level",
-        "${input:playLevel}"
+        "${input:playLevel3}"
       ]
     },
     {
@@ -124,7 +124,7 @@
         "--game",
         "bang",
         "--level",
-        "${input:playLevel}",
+        "${input:playLevel3}",
         "--render"
       ]
     },
@@ -142,7 +142,7 @@
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",
-        "${input:trainResumeLevel}"
+        "${input:trainResumeLevel3}"
       ]
     },
     {
@@ -157,7 +157,7 @@
         "--game",
         "tower",
         "--level",
-        "${input:playLevel}"
+        "${input:playLevel3}"
       ]
     },
     {
@@ -172,7 +172,7 @@
         "--game",
         "tower",
         "--level",
-        "${input:playLevel}",
+        "${input:playLevel3}",
         "--render"
       ]
     },
@@ -190,7 +190,7 @@
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",
-        "${input:trainResumeLevel}"
+        "${input:trainResumeLevel3}"
       ]
     },
     {
@@ -205,7 +205,7 @@
         "--game",
         "kick",
         "--level",
-        "${input:playLevel}"
+        "${input:playLevel5}"
       ]
     },
     {
@@ -220,7 +220,7 @@
         "--game",
         "kick",
         "--level",
-        "${input:playLevel}",
+        "${input:playLevel5}",
         "--render"
       ]
     },
@@ -238,7 +238,7 @@
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",
-        "${input:trainResumeLevel}"
+        "${input:trainResumeLevel5}"
       ]
     },
     {
@@ -253,7 +253,7 @@
         "--game",
         "frogger",
         "--level",
-        "${input:playLevel}"
+        "${input:playLevel3}"
       ]
     },
     {
@@ -268,7 +268,7 @@
         "--game",
         "frogger",
         "--level",
-        "${input:playLevel}",
+        "${input:playLevel3}",
         "--render"
       ]
     },
@@ -286,7 +286,7 @@
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",
-        "${input:trainResumeLevel}"
+        "${input:trainResumeLevel3}"
       ]
     },
     {
@@ -301,7 +301,7 @@
         "--game",
         "cardz",
         "--level",
-        "${input:playLevel}"
+        "${input:playLevel3}"
       ]
     },
     {
@@ -316,7 +316,7 @@
         "--game",
         "cardz",
         "--level",
-        "${input:playLevel}",
+        "${input:playLevel3}",
         "--render"
       ]
     },
@@ -334,7 +334,7 @@
         "--resume",
         "${input:trainResumeMode}",
         "--resume-level",
-        "${input:trainResumeLevel}"
+        "${input:trainResumeLevel3}"
       ]
     },
     {
@@ -389,7 +389,7 @@
       ]
     },
     {
-      "name": "Capture Demo - Play AI",
+      "name": "Capture Demo - Play AI (3-Level Games)",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
@@ -398,17 +398,48 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "${input:captureGame}",
+        "${input:captureGame3}",
         "--level",
-        "${input:captureLevel}"
+        "${input:captureLevel3}"
+      ]
+    },
+    {
+      "name": "Capture Demo - Play AI (Kick)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.capture_demo_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick",
+        "--level",
+        "${input:captureLevel5}"
+      ]
+    },
+    {
+      "name": "Capture Demo - Play AI (Osero)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.capture_demo_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
+      },
+      "args": [
+        "--game",
+        "osero"
       ]
     }
   ],
   "inputs": [
     {
-      "id": "captureGame",
+      "id": "captureGame3",
       "type": "pickString",
-      "description": "Capture game",
+      "description": "Capture game (3-level curriculum)",
       "default": "snake",
       "options": [
         "snake",
@@ -416,15 +447,24 @@
         "tower",
         "vroom",
         "frogger",
-        "cardz",
-        "osero",
-        "kick"
+        "cardz"
       ]
     },
     {
-      "id": "captureLevel",
+      "id": "captureLevel3",
       "type": "pickString",
-      "description": "Capture curriculum level",
+      "description": "Capture curriculum level (3-level games)",
+      "default": "3",
+      "options": [
+        "1",
+        "2",
+        "3"
+      ]
+    },
+    {
+      "id": "captureLevel5",
+      "type": "pickString",
+      "description": "Capture curriculum level (Kick)",
       "default": "5",
       "options": [
         "1",
@@ -435,9 +475,20 @@
       ]
     },
     {
-      "id": "playLevel",
+      "id": "playLevel3",
       "type": "pickString",
-      "description": "Play level",
+      "description": "Play level (3-level games)",
+      "default": "3",
+      "options": [
+        "1",
+        "2",
+        "3"
+      ]
+    },
+    {
+      "id": "playLevel5",
+      "type": "pickString",
+      "description": "Play level (Kick)",
       "default": "5",
       "options": [
         "1",
@@ -469,10 +520,21 @@
       ]
     },
     {
-      "id": "trainResumeLevel",
+      "id": "trainResumeLevel3",
       "type": "pickString",
-      "description": "Resume level (used for Best)",
-      "default": "1",
+      "description": "Resume level for Best (3-level games)",
+      "default": "3",
+      "options": [
+        "1",
+        "2",
+        "3"
+      ]
+    },
+    {
+      "id": "trainResumeLevel5",
+      "type": "pickString",
+      "description": "Resume level for Best (Kick)",
+      "default": "5",
       "options": [
         "1",
         "2",

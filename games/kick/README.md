@@ -152,11 +152,11 @@ An episode counts as a success if LEFT scores more than it concedes.
 
 ```bash
 rl-toybox-train --game kick
-rl-toybox-play-ai --game kick --model best --render
+rl-toybox-play-ai --game kick --render
 rl-toybox-play-user --game kick
 python -m scripts.train --game kick
-python -m scripts.play_ai --game kick --model best --render
+python -m scripts.play_ai --game kick --render
 python -m scripts.play_user --game kick
 ```
 
-See `games/kick/config.py` and `games/kick/env.py` for the full PPO, CTDE, reward, and curriculum settings.
+See `games/kick/config.py` and `games/kick/env.py` for the CTDE runtime, rewards, and curriculum settings. Shared PPO defaults live in `core/game.py`, and the remaining Kick-specific PPO deltas live in `core/pair_overrides.py`.

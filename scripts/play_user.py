@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import argparse
 
-from core.game import get_game_spec
+from core.game import (
+    apply_seed_from_config,
+    build_env_from_config,
+    compose_run_config,
+    parse_override_assignments,
+    set_nested_override,
+)
 from core.logging_utils import configure_logging, log_run_context
 
 
@@ -12,23 +18,43 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Play a game in human-control mode")
     parser.add_argument("--game", required=True, help="Game id")
     parser.add_argument("--level", type=int, default=3, help="Play level selector (defaults to 3)")
+    parser.add_argument("--seed", type=int, default=None, help="Global random seed")
     parser.add_argument("--headless", action="store_true", help="Disable rendering")
+    parser.add_argument(
+        "--set",
+        dest="set_values",
+        action="append",
+        default=[],
+        help="Generic override in dotted.path=value form, e.g. --set common.render=false",
+    )
     return parser.parse_args()
+
+
+def _build_play_overrides(args: argparse.Namespace) -> dict[str, object]:
+    overrides = parse_override_assignments(args.set_values)
+    set_nested_override(overrides, "common.mode", "play")
+    set_nested_override(overrides, "common.render", not bool(args.headless))
+    set_nested_override(overrides, "common.headless", bool(args.headless))
+    if args.seed is not None:
+        set_nested_override(overrides, "common.seed", int(args.seed))
+    return overrides
 
 
 def main() -> None:
     args = parse_args()
     configure_logging()
 
-    spec = get_game_spec(args.game)
-    render = not bool(args.headless)
-    level = 1 if spec.family == "search_play" else int(args.level)
-    env = spec.make_env(mode="human", render=render, level=int(level))
+    composed_config = compose_run_config(args.game, mode="play", user_overrides=_build_play_overrides(args))
+    apply_seed_from_config(composed_config)
+    render = bool(dict(composed_config.get("common", {})).get("render", not bool(args.headless)))
+    runner_kind = str(dict(composed_config.get("algo", {})).get("runner_kind", ""))
+    level = 1 if runner_kind == "search_play" else int(args.level)
+    env = build_env_from_config(composed_config, mode="human", render=render, level=int(level))
 
     log_run_context(
         "play-user",
         {
-            "game": spec.game_id,
+            "game": str(dict(composed_config.get("game", {})).get("id", args.game)),
             "level": int(level),
             "render": render,
         },

@@ -50,27 +50,7 @@ def resolve_exploration_config(
     if isinstance(value, ExplorationConfig):
         return value
 
-    config_data = dict(value)
-    # Backward compatibility for older config payloads using decay steps.
-    legacy_decay_steps = config_data.pop("eps_decay_steps", None)
-    if "eps_decay" not in config_data and legacy_decay_steps is not None:
-        config_data["eps_decay"] = compute_eps_decay(
-            eps_start=float(config_data["eps_start"]),
-            eps_min=float(config_data["eps_min"]),
-            eps_decay_steps=int(legacy_decay_steps),
-        )
-    # Backward compatibility for older config payloads.
-    legacy_bump = config_data.pop("bump_epsilon", None)
-    if "eps_bump_cap" not in config_data and legacy_bump is not None:
-        config_data["eps_bump_cap"] = float(legacy_bump)
-    # Removed in favor of always-on decay with cooldown-only bump gating.
-    config_data.pop("bump_hold_steps", None)
-    # Backward compatibility for older cooldown key.
-    legacy_cooldown_episodes = config_data.pop("bump_cooldown_episodes", None)
-    if "bump_cooldown_steps" not in config_data and legacy_cooldown_episodes is not None:
-        config_data["bump_cooldown_steps"] = int(legacy_cooldown_episodes)
-
-    return ExplorationConfig(**config_data)
+    return ExplorationConfig(**dict(value))
 
 
 class EpsilonController:
@@ -146,21 +126,9 @@ class EpsilonController:
 
     def load_state_dict(self, state: Mapping[str, object]) -> None:
         self.set_epsilon(float(state.get("epsilon", self.epsilon)))
-        self._cooldown_steps_remaining = max(
-            0,
-            int(
-                state.get(
-                    "cooldown_steps_remaining",
-                    state.get("cooldown_episodes_remaining", 0),
-                )
-            ),
-        )
-        self._episodes_since_best = max(
-            0,
-            int(state.get("episodes_since_best", state.get("episodes_since_improvement", 0))),
-        )
-
-        best = state.get("best_avg_reward", state.get("reference_avg_reward"))
+        self._cooldown_steps_remaining = max(0, int(state.get("cooldown_steps_remaining", 0)))
+        self._episodes_since_best = max(0, int(state.get("episodes_since_best", 0)))
+        best = state.get("best_avg_reward")
         self._best_avg_reward = None if best is None else float(best)
 
 

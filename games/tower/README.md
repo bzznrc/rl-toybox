@@ -209,11 +209,11 @@ Authored wave list:
 
 ```bash
 rl-toybox-train --game tower
-rl-toybox-play-ai --game tower --model best --render
+rl-toybox-play-ai --game tower --render
 rl-toybox-play-user --game tower
 python -m scripts.train --game tower
-python -m scripts.play_ai --game tower --model best --render
+python -m scripts.play_ai --game tower --render
 python -m scripts.play_user --game tower
 ```
 
-See `games/tower/config.py` and `games/tower/env.py` for the full wave plan, reward constants, and map-layout logic.
+See `games/tower/config.py` and `games/tower/env.py` for the wave plan, rewards, and map-layout logic. Shared DQN defaults live in `core/game.py`.

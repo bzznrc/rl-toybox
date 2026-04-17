@@ -91,11 +91,11 @@ An episode counts as a success if the player wins the race set.
 
 ```bash
 rl-toybox-train --game vroom
-rl-toybox-play-ai --game vroom --model best --render
+rl-toybox-play-ai --game vroom --render
 rl-toybox-play-user --game vroom
 python -m scripts.train --game vroom
-python -m scripts.play_ai --game vroom --model best --render
+python -m scripts.play_ai --game vroom --render
 python -m scripts.play_user --game vroom
 ```
 
-See `games/vroom/config.py` for the full set of physics parameters, track-generation settings, and curriculum knobs.
+See `games/vroom/config.py` for the physics parameters, track-generation settings, and curriculum knobs. Shared SAC defaults live in `core/game.py`.

@@ -104,16 +104,15 @@ from games.bang.config import (
     WINDOW_TITLE,
 )
 from core.runtime import (
+    ArcadeSquareObstacleField,
     ArcadeFrameClock,
     ArcadeWindowController,
     Vec2,
-    collides_with_square_arena,
     heading_to_vector,
     length_squared,
     normalize_angle_degrees,
     rect_from_center,
     rotate_degrees,
-    square_obstacle_between_points,
 )
 from core.utils import resolve_play_level, validate_level_settings
 
@@ -499,6 +498,7 @@ class BaseGame:
         self.scripted_players: list[Actor] = []
         self.target_states: dict[str, TargetState] = {}
         self.scripted_move_states: dict[str, ScriptedMoveState] = {}
+        self.obstacle_field = ArcadeSquareObstacleField(TILE_SIZE)
 
         self.renderer = Renderer(
             game=self,
@@ -792,14 +792,7 @@ class BaseGame:
         previous_position = actor.position
         new_position = actor.position + movement
         actor_rect = rect_from_center(new_position, TILE_SIZE)
-        if collides_with_square_arena(
-            rect=actor_rect,
-            obstacles=self.obstacles,
-            tile_size=TILE_SIZE,
-            arena_width=self.width,
-            arena_height=self.height,
-            bottom_bar_height=BB_HEIGHT,
-        ):
+        if self._collides_with_playfield_or_obstacle(actor_rect):
             actor.vx = 0.0
             actor.vy = 0.0
             return
@@ -823,14 +816,7 @@ class BaseGame:
 
         new_position = actor.position + movement
         actor_rect = rect_from_center(new_position, TILE_SIZE)
-        if collides_with_square_arena(
-            rect=actor_rect,
-            obstacles=self.obstacles,
-            tile_size=TILE_SIZE,
-            arena_width=self.width,
-            arena_height=self.height,
-            bottom_bar_height=BB_HEIGHT,
-        ):
+        if self._collides_with_playfield_or_obstacle(actor_rect):
             return True
 
         for other in self.players:
@@ -841,16 +827,20 @@ class BaseGame:
                 return True
         return False
 
+    def _collides_with_playfield_or_obstacle(self, rect) -> bool:
+        if (
+            rect.left < 0
+            or rect.right > self.width
+            or rect.top < 0
+            or rect.bottom > self.height - BB_HEIGHT
+        ):
+            return True
+        return self.obstacle_field.collides_with_rect(rect)
+
     def _point_blocked_for_ray(self, x: float, y: float) -> bool:
         if x < 0.0 or x >= float(self.width) or y < 0.0 or y >= float(self.height - BB_HEIGHT):
             return True
-        for obstacle in self.obstacles:
-            if (
-                obstacle.x <= float(x) < obstacle.x + float(TILE_SIZE)
-                and obstacle.y <= float(y) < obstacle.y + float(TILE_SIZE)
-            ):
-                return True
-        return False
+        return self.obstacle_field.contains_point(float(x), float(y))
 
     def _ray_distance(self, angle_degrees: float) -> float:
         radians = math.radians(float(angle_degrees))
@@ -893,6 +883,7 @@ class BaseGame:
         )
         for shape in shapes:
             self.obstacles.extend(shape)
+        self.obstacle_field.rebuild(self.obstacles)
 
     def _sample_valid_obstacle_start(self):
         for _ in range(OBSTACLE_START_ATTEMPTS):
@@ -946,12 +937,7 @@ class BaseGame:
         return self._has_clear_path_between_points(actor.position, target.position)
 
     def _has_clear_path_between_points(self, point_a: Vec2, point_b: Vec2) -> bool:
-        return not square_obstacle_between_points(
-            point_a=point_a,
-            point_b=point_b,
-            obstacles=self.obstacles,
-            tile_size=TILE_SIZE,
-        )
+        return not self.obstacle_field.segment_intersects(point_a, point_b)
 
     @staticmethod
     def _is_actor_aimed_at_target(actor: Actor, target: Actor) -> bool:
@@ -1295,14 +1281,7 @@ class BaseGame:
         for projectile in self.projectiles:
             projectile["pos"] += projectile["velocity"]
             projectile_rect = rect_from_center(projectile["pos"], PROJECTILE_HITBOX_SIZE)
-            if collides_with_square_arena(
-                rect=projectile_rect,
-                obstacles=self.obstacles,
-                tile_size=TILE_SIZE,
-                arena_width=self.width,
-                arena_height=self.height,
-                bottom_bar_height=BB_HEIGHT,
-            ):
+            if self._collides_with_playfield_or_obstacle(projectile_rect):
                 continue
 
             owner_id = str(projectile["owner"])

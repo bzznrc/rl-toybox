@@ -113,11 +113,11 @@ The scripted opponent uses a simple lane-value heuristic, with `opp_random_move_
 
 ```bash
 rl-toybox-train --game cardz
-rl-toybox-play-ai --game cardz --model best --render
+rl-toybox-play-ai --game cardz --render
 rl-toybox-play-user --game cardz
 python -m scripts.train --game cardz
-python -m scripts.play_ai --game cardz --model best --render
+python -m scripts.play_ai --game cardz --render
 python -m scripts.play_user --game cardz
 ```
 
-See `games/cardz/config.py` for the full card tables, reward constants, and curriculum settings.
+See `games/cardz/config.py` for the card tables, rewards, and curriculum settings. Shared A2C defaults live in `core/game.py`, and the remaining Cardz-specific A2C deltas live in `core/pair_overrides.py`.

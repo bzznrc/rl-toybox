@@ -85,11 +85,11 @@ A run counts as a success if the frog scores at least one crossing before the ru
 
 ```bash
 rl-toybox-train --game frogger
-rl-toybox-play-ai --game frogger --model best --render
+rl-toybox-play-ai --game frogger --render
 rl-toybox-play-user --game frogger
 python -m scripts.train --game frogger
-python -m scripts.play_ai --game frogger --model best --render
+python -m scripts.play_ai --game frogger --render
 python -m scripts.play_user --game frogger
 ```
 
-See `games/frogger/config.py` for the full lane-generation, reward, and recurrent PPO settings.
+See `games/frogger/config.py` for the lane-generation, rewards, and curriculum settings. Shared recurrent PPO defaults live in `core/game.py`.

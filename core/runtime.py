@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 import os
 from pathlib import Path
@@ -12,7 +12,6 @@ from typing import Any, Iterable
 
 import arcade
 from pyglet.math import Vec2
-from pyglet.window import key as pyglet_key
 
 
 _LOADED_FONT_PATHS: set[str] = set()
@@ -32,6 +31,25 @@ def load_font_once(font_path: str | Path) -> None:
     if Path(resolved).exists():
         arcade.load_font(resolved)
         _LOADED_FONT_PATHS.add(resolved)
+
+
+def _open_arcade_window(
+    width: int,
+    height: int,
+    title: str,
+    *,
+    vsync: bool,
+    visible: bool,
+) -> arcade.Window:
+    arcade.close_window()
+    return arcade.open_window(
+        int(width),
+        int(height),
+        title,
+        vsync=bool(vsync),
+        enable_polling=True,
+        visible=_env_visible_default(bool(visible)),
+    )
 
 
 class ArcadeFrameClock:
@@ -83,49 +101,39 @@ class ArcadeWindowController:
         self.queue_input_events = bool(queue_input_events)
 
         self.window: arcade.Window | None = None
-        self._key_state: pyglet_key.KeyStateHandler | None = None
         self._key_presses: list[int] = []
         self._mouse_presses: list[MousePress] = []
-        self._mouse_buttons_down: set[int] = set()
-        self._mouse_x: float | None = None
-        self._mouse_y: float | None = None
+        self._mouse_position: tuple[float, float] | None = None
 
         if not self.enabled:
             return
 
-        self.window = arcade.Window(
+        self.window = _open_arcade_window(
             self.width,
             self.height,
             title,
             vsync=bool(vsync),
-            enable_polling=True,
-            visible=_env_visible_default(bool(visible)),
+            visible=bool(visible),
         )
-        self._key_state = pyglet_key.KeyStateHandler()
-        self.window.push_handlers(self._key_state)
-        # Always attach event handlers so mouse position/button state is available.
-        self.window.push_handlers(self)
+        if self.queue_input_events:
+            self.window.push_handlers(self)
 
     def on_key_press(self, symbol: int, modifiers: int) -> None:
         if self.queue_input_events:
             self._key_presses.append(symbol)
 
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int) -> None:
-        self._mouse_x = float(x)
-        self._mouse_y = float(y)
-        self._mouse_buttons_down.add(int(button))
+        self._mouse_position = (float(x), float(y))
         if self.queue_input_events:
             self._mouse_presses.append(MousePress(x=x, y=y, button=button, modifiers=modifiers))
 
     def on_mouse_release(self, x: float, y: float, button: int, modifiers: int) -> None:
-        self._mouse_x = float(x)
-        self._mouse_y = float(y)
-        self._mouse_buttons_down.discard(int(button))
+        del button, modifiers
+        self._mouse_position = (float(x), float(y))
 
     def on_mouse_motion(self, x: float, y: float, dx: float, dy: float) -> None:
         del dx, dy
-        self._mouse_x = float(x)
-        self._mouse_y = float(y)
+        self._mouse_position = (float(x), float(y))
 
     def on_mouse_drag(
         self,
@@ -137,8 +145,7 @@ class ArcadeWindowController:
         modifiers: int,
     ) -> None:
         del dx, dy, buttons, modifiers
-        self._mouse_x = float(x)
-        self._mouse_y = float(y)
+        self._mouse_position = (float(x), float(y))
 
     def poll_events(self) -> bool:
         if self.window is None:
@@ -162,19 +169,12 @@ class ArcadeWindowController:
         return mouse_presses
 
     def is_key_down(self, symbol: int) -> bool:
-        if self._key_state is None:
-            return False
-        return bool(self._key_state[symbol])
-
-    def is_mouse_button_down(self, button: int) -> bool:
         if self.window is None:
             return False
-        return int(button) in self._mouse_buttons_down
+        return bool(self.window.keyboard[symbol])
 
     def mouse_position(self) -> tuple[float, float] | None:
-        if self.window is None or self._mouse_x is None or self._mouse_y is None:
-            return None
-        return self._mouse_x, self._mouse_y
+        return self._mouse_position
 
     def clear(self, color: tuple[int, int, int] | tuple[int, int, int, int]) -> None:
         if self.window is None:
@@ -189,14 +189,18 @@ class ArcadeWindowController:
     def close(self) -> None:
         if self.window is None:
             return
-        self.window.close()
+        try:
+            active_window = arcade.get_window()
+        except RuntimeError:
+            active_window = None
+        if active_window is self.window:
+            arcade.close_window()
+        else:
+            self.window.close()
         self.window = None
-        self._key_state = None
         self._key_presses = []
         self._mouse_presses = []
-        self._mouse_buttons_down = set()
-        self._mouse_x = None
-        self._mouse_y = None
+        self._mouse_position = None
 
     def to_arcade_y(self, y_top: float) -> float:
         return float(self.height) - float(y_top)
@@ -213,7 +217,7 @@ class TextCache:
 
     def __init__(self, max_entries: int = 1024) -> None:
         self.max_entries = max(1, int(max_entries))
-        self._cache: OrderedDict[tuple, arcade.Text] = OrderedDict()
+        self._cached_text = lru_cache(maxsize=self.max_entries)(self._build_text)
 
     @staticmethod
     def _normalized_color(
@@ -229,6 +233,26 @@ class TextCache:
             return (font_name,)
         return tuple(str(name) for name in font_name)
 
+    @staticmethod
+    def _build_text(
+        text: str,
+        color: tuple[int, int, int, int],
+        font_size: int,
+        font_name: tuple[str, ...],
+        anchor_x: str,
+        anchor_y: str,
+    ) -> arcade.Text:
+        return arcade.Text(
+            text=text,
+            x=0,
+            y=0,
+            color=color,
+            font_size=font_size,
+            font_name=font_name,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+        )
+
     def get_text(
         self,
         text: str,
@@ -238,7 +262,7 @@ class TextCache:
         anchor_x: str = "left",
         anchor_y: str = "baseline",
     ) -> arcade.Text:
-        key = (
+        return self._cached_text(
             str(text),
             self._normalized_color(color),
             int(font_size),
@@ -246,25 +270,6 @@ class TextCache:
             str(anchor_x),
             str(anchor_y),
         )
-        cached = self._cache.get(key)
-        if cached is not None:
-            self._cache.move_to_end(key)
-            return cached
-
-        cached = arcade.Text(
-            text=str(text),
-            x=0,
-            y=0,
-            color=self._normalized_color(color),
-            font_size=int(font_size),
-            font_name=key[3],
-            anchor_x=str(anchor_x),
-            anchor_y=str(anchor_y),
-        )
-        self._cache[key] = cached
-        if len(self._cache) > self.max_entries:
-            self._cache.popitem(last=False)
-        return cached
 
     def draw(
         self,
@@ -346,28 +351,85 @@ def _obstacle_xy(obstacle: Any) -> tuple[float, float]:
     raise TypeError(f"Unsupported obstacle type: {type(obstacle)!r}")
 
 
-def collides_with_square_arena(
-    rect: Rect,
-    obstacles: Iterable[Any],
-    tile_size: int,
-    arena_width: int,
-    arena_height: int,
-    bottom_bar_height: int,
-) -> bool:
-    if (
-        rect.left < 0
-        or rect.right > arena_width
-        or rect.top < 0
-        or rect.bottom > arena_height - bottom_bar_height
-    ):
-        return True
+class ArcadeSquareObstacleField:
+    """Thin Arcade-backed adapter for square obstacle spatial queries."""
 
-    for obstacle in obstacles:
-        x, y = _obstacle_xy(obstacle)
-        obstacle_rect = Rect(x, y, tile_size, tile_size)
-        if rect.colliderect(obstacle_rect):
-            return True
-    return False
+    def __init__(self, tile_size: int) -> None:
+        self.tile_size = max(1, int(tile_size))
+        self._sprites = arcade.SpriteList(
+            use_spatial_hash=True,
+            spatial_hash_cell_size=self.tile_size,
+            visible=False,
+        )
+
+    @staticmethod
+    def _sprite_rect(sprite: arcade.BasicSprite) -> Rect:
+        return Rect(
+            float(sprite.left),
+            float(sprite.bottom),
+            float(sprite.width),
+            float(sprite.height),
+        )
+
+    @staticmethod
+    def _overlaps_rect(rect: Rect, sprite: arcade.BasicSprite) -> bool:
+        return rect.colliderect(ArcadeSquareObstacleField._sprite_rect(sprite))
+
+    def _query_rect(self, rect: Rect) -> arcade.Rect:
+        return arcade.LRBT(
+            float(rect.left),
+            float(rect.right),
+            float(rect.top),
+            float(rect.bottom),
+        )
+
+    def rebuild(self, obstacles: Iterable[Any]) -> None:
+        self._sprites = arcade.SpriteList(
+            use_spatial_hash=True,
+            spatial_hash_cell_size=self.tile_size,
+            visible=False,
+        )
+        half = float(self.tile_size) * 0.5
+        for obstacle in obstacles:
+            obstacle_x, obstacle_y = _obstacle_xy(obstacle)
+            self._sprites.append(
+                arcade.SpriteSolidColor(
+                    self.tile_size,
+                    self.tile_size,
+                    center_x=float(obstacle_x) + half,
+                    center_y=float(obstacle_y) + half,
+                    color=(255, 255, 255, 0),
+                )
+            )
+
+    def collides_with_rect(self, rect: Rect) -> bool:
+        return any(
+            self._overlaps_rect(rect, sprite)
+            for sprite in arcade.get_sprites_in_rect(self._query_rect(rect), self._sprites)
+        )
+
+    def contains_point(self, x: float, y: float) -> bool:
+        point_x = float(x)
+        point_y = float(y)
+        for sprite in arcade.get_sprites_at_point((point_x, point_y), self._sprites):
+            if (
+                float(sprite.left) <= point_x < float(sprite.right)
+                and float(sprite.bottom) <= point_y < float(sprite.top)
+            ):
+                return True
+        return False
+
+    def segment_intersects(self, point_a: Vec2, point_b: Vec2) -> bool:
+        bounds = Rect(
+            left=min(float(point_a.x), float(point_b.x)),
+            top=min(float(point_a.y), float(point_b.y)),
+            width=max(1.0, abs(float(point_a.x) - float(point_b.x))),
+            height=max(1.0, abs(float(point_a.y) - float(point_b.y))),
+        )
+        for sprite in arcade.get_sprites_in_rect(self._query_rect(bounds), self._sprites):
+            if _line_intersects_rect(point_a, point_b, self._sprite_rect(sprite)):
+                return True
+        return False
 
 
 def _line_intersects_rect(point_a: Vec2, point_b: Vec2, rect: Rect) -> bool:
@@ -399,17 +461,3 @@ def _line_intersects_rect(point_a: Vec2, point_b: Vec2, rect: Rect) -> bool:
             u2 = min(u2, t)
 
     return True
-
-
-def square_obstacle_between_points(
-    point_a: Vec2,
-    point_b: Vec2,
-    obstacles: Iterable[Any],
-    tile_size: int,
-) -> bool:
-    for obstacle in obstacles:
-        x, y = _obstacle_xy(obstacle)
-        obstacle_rect = Rect(x, y, tile_size, tile_size)
-        if _line_intersects_rect(point_a, point_b, obstacle_rect):
-            return True
-    return False

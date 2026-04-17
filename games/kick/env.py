@@ -434,25 +434,12 @@ class KickEnv(Env):
         if "entropy_coef" not in settings:
             raise ValueError("Kick LEVEL_SETTINGS entries must define 'entropy_coef'.")
         raw_entropy_coef = settings["entropy_coef"]
-        if goals_size_scale is None:
-            # Backward compatibility with prior two-key format.
-            own_goal_size_scale = settings.get("own_goal_size_scale", 1.0)
-            opp_goal_size_scale = settings.get("opp_goal_size_scale", 1.0)
-            try:
-                own_goal_scale = max(0.1, float(own_goal_size_scale))
-            except (TypeError, ValueError):
-                own_goal_scale = 1.0
-            try:
-                opp_goal_scale = max(0.1, float(opp_goal_size_scale))
-            except (TypeError, ValueError):
-                opp_goal_scale = 1.0
-        else:
-            try:
-                goals_scale = max(0.1, float(goals_size_scale))
-            except (TypeError, ValueError):
-                goals_scale = 1.0
-            own_goal_scale = 1.0 / goals_scale
-            opp_goal_scale = goals_scale
+        try:
+            goals_scale = max(0.1, float(goals_size_scale))
+        except (TypeError, ValueError):
+            goals_scale = 1.0
+        own_goal_scale = 1.0 / goals_scale
+        opp_goal_scale = goals_scale
         try:
             enemy_stamina_scale_value = float(enemy_stamina_scale)
         except (TypeError, ValueError):

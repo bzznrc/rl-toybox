@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field
+import json
+import math
 from pathlib import Path
+import random
 import sys
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from core.algorithms.exploration import compute_eps_decay
 from core.envs.base import Env
-from core.envs.scaffold import ScaffoldEnv
-from core.envs.spaces import Space
+from core.envs.spaces import Box, Discrete, Space
 from core.io.runs import RunPaths, normalize_model_kind, resolve_run_paths
 
 if TYPE_CHECKING:
@@ -43,52 +46,53 @@ ACTIVE_GAME_ORDER: tuple[str, ...] = (
 @dataclass(frozen=True)
 class GameSpec:
     game_id: str
-    display_name: str
     default_algo: str
     make_env: Callable[..., Env]
     obs_dim: int
     action_space: Space
-    run_name: str
-    family: str
-    role: str
-    summary: str
-    primary_algo_label: str
-    status: str = "active"
-    implementation_stage: str = "implemented"
-    train_config: dict[str, object] = field(default_factory=dict)
-    algo_config: dict[str, object] = field(default_factory=dict)
+    capabilities: "GameCapabilities"
+    device: str = "cpu"
+    env_metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class GameCapabilities:
+    masked_actions: bool = False
+    multi_agent: bool = False
+    self_play: bool = False
+    recurrent_friendly: bool = False
+    centralized_critic_required: bool = False
+
+
+@dataclass(frozen=True)
+class AlgoCapabilities:
+    supported_action_spaces: tuple[str, ...]
+    supports_masked_actions: bool = False
+    supports_multi_agent: bool = False
+    supports_self_play: bool = False
+    supports_centralized_critic: bool = False
+    requires_multi_agent: bool = False
+    requires_self_play: bool = False
+    requires_recurrent_friendly: bool = False
+
+
+@dataclass(frozen=True)
+class AlgoSpec:
+    algo_id: str
+    runner_kind: str
+    capabilities: AlgoCapabilities
+    defaults: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class PreparedRun:
-    spec: GameSpec
-    algo_id: str
     run_paths: RunPaths
-    algorithm: "Algorithm"
+    config: dict[str, object]
 
 
 def build_env_factory(env_type: type[Env]) -> Callable[..., Env]:
     def make_env(mode: str, render: bool, level: int | None = None) -> Env:
         return env_type(mode=mode, render=render, level=level)
-
-    return make_env
-
-
-def build_scaffold_env_factory(
-    *,
-    game_id: str,
-    obs_dim: int,
-    note: str,
-) -> Callable[..., Env]:
-    def make_env(mode: str, render: bool, level: int | None = None) -> Env:
-        return ScaffoldEnv(
-            game_id=game_id,
-            obs_dim=int(obs_dim),
-            mode=mode,
-            render=render,
-            level=level,
-            note=note,
-        )
 
     return make_env
 
@@ -198,7 +202,608 @@ def build_on_policy_train_config(
     }
 
 
+ALGO_RUNNER_OFF_POLICY = "off_policy"
+ALGO_RUNNER_ON_POLICY = "on_policy"
+ALGO_RUNNER_SEARCH_PLAY = "search_play"
+
+_ALGO_SPECS: dict[str, AlgoSpec] | None = None
 _GAME_SPECS: dict[str, GameSpec] | None = None
+
+
+def _build_algo_specs() -> dict[str, AlgoSpec]:
+    return {
+        "qlearn": AlgoSpec(
+            algo_id="qlearn",
+            runner_kind=ALGO_RUNNER_OFF_POLICY,
+            capabilities=AlgoCapabilities(supported_action_spaces=("discrete",)),
+            defaults={
+                "algo": {
+                    "config": {
+                        "hidden_sizes": [32],
+                        "learning_rate": 1e-3,
+                        "gamma": 0.95,
+                        "max_memory": 100_000,
+                        "batch_size": 512,
+                        "exploration": build_exploration_config(
+                            1.0,
+                            0.05,
+                            300_000,
+                            patience_episodes=200,
+                            min_improvement=0.10,
+                            eps_bump_cap=0.25,
+                            bump_cooldown_steps=150_000,
+                        ),
+                    }
+                },
+                "run": {
+                    "train": build_off_policy_train_config(
+                        max_steps=3_000_000,
+                        checkpoint_every_steps=100_000,
+                        reward_window=100,
+                    )
+                },
+            },
+        ),
+        "dqn": AlgoSpec(
+            algo_id="dqn",
+            runner_kind=ALGO_RUNNER_OFF_POLICY,
+            capabilities=AlgoCapabilities(
+                supported_action_spaces=("discrete",),
+                supports_masked_actions=True,
+            ),
+            defaults={
+                "algo": {
+                    "config": {
+                        "hidden_sizes": [64, 64],
+                        "learning_rate": 2.5e-4,
+                        "weight_decay": 0.0,
+                        "gamma": 0.99,
+                        "batch_size": 128,
+                        "replay_size": 80_000,
+                        "target_sync_every": 500,
+                        "grad_clip_norm": 10.0,
+                        "exploration": build_exploration_config(
+                            1.0,
+                            0.05,
+                            80_000,
+                            patience_episodes=40,
+                            min_improvement=0.08,
+                            eps_bump_cap=0.30,
+                            bump_cooldown_steps=4_000,
+                        ),
+                        "dueling": True,
+                        "double_dqn": True,
+                        "prioritized_replay": False,
+                    }
+                },
+                "run": {
+                    "train": build_off_policy_train_config(
+                        max_steps=250_000,
+                        checkpoint_every_steps=20_000,
+                        reward_window=100,
+                        train_after_steps=2_000,
+                        update_every_steps=1,
+                        updates_per_step=1,
+                    )
+                },
+            },
+        ),
+        "sac": AlgoSpec(
+            algo_id="sac",
+            runner_kind=ALGO_RUNNER_OFF_POLICY,
+            capabilities=AlgoCapabilities(supported_action_spaces=("continuous",)),
+            defaults={
+                "algo": {
+                    "config": {
+                        "hidden_sizes": [64, 64],
+                        "learning_rate": 3e-4,
+                        "gamma": 0.99,
+                        "batch_size": 256,
+                        "replay_size": 200_000,
+                        "tau": 0.005,
+                        "grad_clip_norm": 10.0,
+                        "init_alpha": 0.20,
+                    }
+                },
+                "run": {
+                    "train": build_off_policy_train_config(
+                        max_steps=10_000_000,
+                        checkpoint_every_steps=100_000,
+                        reward_window=100,
+                        train_after_steps=10_000,
+                        update_every_steps=1,
+                        updates_per_step=1,
+                    )
+                },
+            },
+        ),
+        "ppo": AlgoSpec(
+            algo_id="ppo",
+            runner_kind=ALGO_RUNNER_ON_POLICY,
+            capabilities=AlgoCapabilities(
+                supported_action_spaces=("discrete", "continuous"),
+                supports_masked_actions=True,
+                supports_centralized_critic=True,
+            ),
+            defaults={
+                "algo": {
+                    "config": {
+                        "hidden_sizes": [64, 64],
+                        "learning_rate": 3e-4,
+                        "gamma": 0.99,
+                        "gae_lambda": 0.95,
+                        "clip_ratio": 0.2,
+                        "update_epochs": 4,
+                        "minibatch_size": 256,
+                        "entropy_coef": 0.015,
+                        "value_coef": 0.5,
+                        "max_grad_norm": 0.5,
+                    }
+                },
+                "run": {
+                    "train": build_on_policy_train_config(
+                        max_iterations=8_000,
+                        rollout_steps=1_024,
+                        checkpoint_every_iterations=10,
+                        reward_window=100,
+                        min_episodes_for_stats=100,
+                    )
+                },
+            },
+        ),
+        "a2c": AlgoSpec(
+            algo_id="a2c",
+            runner_kind=ALGO_RUNNER_ON_POLICY,
+            capabilities=AlgoCapabilities(
+                supported_action_spaces=("discrete", "continuous"),
+                supports_masked_actions=True,
+                supports_centralized_critic=True,
+            ),
+            defaults={
+                "algo": {
+                    "config": {
+                        "hidden_sizes": [64, 64],
+                        "learning_rate": 3e-4,
+                        "gamma": 0.99,
+                        "gae_lambda": 0.95,
+                        "clip_ratio": 0.2,
+                        "update_epochs": 4,
+                        "minibatch_size": 256,
+                        "entropy_coef": 0.01,
+                        "value_coef": 0.5,
+                        "max_grad_norm": 0.5,
+                    }
+                },
+                "run": {
+                    "train": build_on_policy_train_config(
+                        max_iterations=8_000,
+                        rollout_steps=1_024,
+                        checkpoint_every_iterations=10,
+                        reward_window=100,
+                        min_episodes_for_stats=100,
+                    )
+                },
+            },
+        ),
+        "recurrent_ppo": AlgoSpec(
+            algo_id="recurrent_ppo",
+            runner_kind=ALGO_RUNNER_ON_POLICY,
+            capabilities=AlgoCapabilities(
+                supported_action_spaces=("discrete", "continuous"),
+                supports_masked_actions=True,
+                requires_recurrent_friendly=True,
+            ),
+            defaults={
+                "algo": {
+                    "config": {
+                        "hidden_sizes": [32],
+                        "learning_rate": 3e-4,
+                        "gamma": 0.99,
+                        "gae_lambda": 0.95,
+                        "clip_ratio": 0.2,
+                        "update_epochs": 4,
+                        "minibatch_size": 256,
+                        "entropy_coef": 0.04,
+                        "value_coef": 0.5,
+                        "max_grad_norm": 0.5,
+                        "recurrent_type": "lstm",
+                        "recurrent_hidden_size": 64,
+                        "actor_head_hidden_sizes": [32],
+                        "critic_head_hidden_sizes": [32],
+                        "recurrent_seq_len": 64,
+                    }
+                },
+                "run": {
+                    "train": build_on_policy_train_config(
+                        max_iterations=12_000,
+                        rollout_steps=1_024,
+                        checkpoint_every_iterations=10,
+                        reward_window=100,
+                        min_episodes_for_stats=100,
+                    )
+                },
+            },
+        ),
+        "mappo": AlgoSpec(
+            algo_id="mappo",
+            runner_kind=ALGO_RUNNER_ON_POLICY,
+            capabilities=AlgoCapabilities(
+                supported_action_spaces=("discrete", "continuous"),
+                supports_masked_actions=True,
+                supports_multi_agent=True,
+                supports_centralized_critic=True,
+                requires_multi_agent=True,
+            ),
+            defaults={
+                "algo": {
+                    "config": {
+                        "hidden_sizes": [64, 64],
+                        "critic_hidden_sizes": [64, 64],
+                        "centralized_critic": True,
+                        "critic_condition_on_agent_obs": True,
+                        "learning_rate": 3e-4,
+                        "gamma": 0.99,
+                        "gae_lambda": 0.95,
+                        "clip_ratio": 0.2,
+                        "update_epochs": 4,
+                        "minibatch_size": 256,
+                        "entropy_coef": 0.01,
+                        "value_coef": 0.5,
+                        "max_grad_norm": 0.5,
+                    }
+                },
+                "run": {
+                    "train": build_on_policy_train_config(
+                        max_iterations=8_000,
+                        rollout_steps=1_024,
+                        checkpoint_every_iterations=10,
+                        reward_window=100,
+                        min_episodes_for_stats=100,
+                    )
+                },
+            },
+        ),
+        "search_play": AlgoSpec(
+            algo_id="search_play",
+            runner_kind=ALGO_RUNNER_SEARCH_PLAY,
+            capabilities=AlgoCapabilities(
+                supported_action_spaces=("discrete",),
+                supports_masked_actions=True,
+                supports_self_play=True,
+                requires_self_play=True,
+            ),
+            defaults={
+                "algo": {
+                    "config": {
+                        "hidden_sizes": [64, 64],
+                        "learning_rate": 1e-3,
+                        "weight_decay": 1e-4,
+                        "batch_size": 128,
+                        "replay_size": 20_000,
+                        "min_replay_to_train": 128,
+                        "value_loss_weight": 1.0,
+                        "grad_clip_norm": 5.0,
+                        "simulations_per_move": 48,
+                        "c_puct": 1.25,
+                        "dirichlet_alpha": 0.35,
+                        "dirichlet_epsilon": 0.25,
+                        "temperature_sample_moves": 10,
+                    }
+                },
+                "run": {
+                    "train": {
+                        "max_games": 10_000,
+                        "train_after_games": 8,
+                        "updates_per_game": 2,
+                        "checkpoint_every_games": 25,
+                    }
+                },
+            },
+        ),
+}
+
+
+def _algo_specs() -> dict[str, AlgoSpec]:
+    global _ALGO_SPECS
+    if _ALGO_SPECS is None:
+        _ALGO_SPECS = _build_algo_specs()
+    return _ALGO_SPECS
+
+
+def get_algo_spec(algo_id: str) -> AlgoSpec:
+    algo_key = str(algo_id).strip().lower()
+    specs = _algo_specs()
+    if algo_key not in specs:
+        valid = ", ".join(sorted(specs.keys()))
+        raise KeyError(f"Unknown algorithm '{algo_id}'. Valid options: {valid}")
+    return specs[algo_key]
+
+
+def _space_kind(space: Space) -> str:
+    if isinstance(space, Discrete):
+        return "discrete"
+    if isinstance(space, Box):
+        return "continuous"
+    raise TypeError(f"Unsupported action space type '{type(space).__name__}'.")
+
+
+def _capability_mismatch_reasons(spec: GameSpec, algo_spec: AlgoSpec) -> list[str]:
+    game_caps = spec.capabilities
+    algo_caps = algo_spec.capabilities
+    space_kind = _space_kind(spec.action_space)
+    reasons: list[str] = []
+
+    if str(space_kind) not in tuple(str(value) for value in algo_caps.supported_action_spaces):
+        reasons.append(
+            f"game action_space={space_kind} is not supported by {algo_spec.algo_id} "
+            f"({', '.join(algo_caps.supported_action_spaces)})"
+        )
+    if bool(game_caps.masked_actions) and not bool(algo_caps.supports_masked_actions):
+        reasons.append("game requires masked action support")
+    if bool(game_caps.multi_agent) and not bool(algo_caps.supports_multi_agent):
+        reasons.append("game requires multi-agent support")
+    if bool(game_caps.self_play) and not bool(algo_caps.supports_self_play):
+        reasons.append("game requires self-play support")
+    if bool(game_caps.centralized_critic_required) and not bool(algo_caps.supports_centralized_critic):
+        reasons.append("game requires centralized critic support")
+    if bool(algo_caps.requires_multi_agent) and not bool(game_caps.multi_agent):
+        reasons.append(f"{algo_spec.algo_id} requires multi-agent game support")
+    if bool(algo_caps.requires_self_play) and not bool(game_caps.self_play):
+        reasons.append(f"{algo_spec.algo_id} requires self-play game support")
+    if bool(algo_caps.requires_recurrent_friendly) and not bool(game_caps.recurrent_friendly):
+        reasons.append(f"{algo_spec.algo_id} requires recurrent-friendly game support")
+    return reasons
+
+
+def validate_game_algo_compatibility(game_id: str, algo_id: str) -> None:
+    spec = get_game_spec(game_id)
+    algo_spec = get_algo_spec(algo_id)
+    reasons = _capability_mismatch_reasons(spec, algo_spec)
+    if reasons:
+        reason_text = "; ".join(reasons)
+        raise ValueError(
+            f"Unsupported game/algo combination '{spec.game_id}/{algo_spec.algo_id}': {reason_text}."
+        )
+def _deep_merge_dicts(*layers: dict[str, object]) -> dict[str, object]:
+    merged: dict[str, object] = {}
+    for layer in layers:
+        for key, value in dict(layer).items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = _deep_merge_dicts(
+                    dict(merged[key]),
+                    dict(value),
+                )
+            else:
+                merged[key] = deepcopy(value)
+    return merged
+
+
+def _int_list(values: object | None, *, default: Iterable[int] | None = None) -> list[int]:
+    if values is None:
+        values = [] if default is None else list(default)
+    if isinstance(values, (list, tuple)):
+        return [int(value) for value in values]
+    return [int(values)]
+
+
+def parse_override_value(raw_value: str) -> object:
+    text = str(raw_value).strip()
+    lowered = text.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered in {"none", "null"}:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def set_nested_override(target: dict[str, object], path: str, value: object) -> None:
+    parts = [part.strip() for part in str(path).split(".") if part.strip()]
+    if not parts:
+        raise ValueError("Override path must not be empty.")
+    cursor = target
+    for part in parts[:-1]:
+        existing = cursor.get(part)
+        if not isinstance(existing, dict):
+            existing = {}
+            cursor[part] = existing
+        cursor = existing
+    cursor[parts[-1]] = value
+
+
+def parse_override_assignments(assignments: Iterable[str] | None) -> dict[str, object]:
+    overrides: dict[str, object] = {}
+    for assignment in assignments or ():
+        if "=" not in str(assignment):
+            raise ValueError(
+                f"Invalid override '{assignment}'. Expected dotted.path=value, for example algo.config.learning_rate=0.0003."
+            )
+        path, raw_value = str(assignment).split("=", 1)
+        set_nested_override(overrides, path.strip(), parse_override_value(raw_value))
+    return overrides
+
+
+def _normalize_mode(mode: str) -> str:
+    mode_key = str(mode).strip().lower()
+    if mode_key not in {"train", "eval", "play"}:
+        raise ValueError(f"Unsupported mode '{mode}'. Expected train, eval, or play.")
+    return mode_key
+
+
+def _normalize_device(device: str) -> str:
+    device_key = str(device).strip().lower()
+    if device_key in {"cuda", "gpu"}:
+        return "cuda"
+    if device_key in {"cpu", ""}:
+        return "cpu"
+    if device_key == "auto":
+        return "auto"
+    raise ValueError(f"Unsupported device '{device}'. Expected cpu, cuda, or auto.")
+
+
+def _runtime_uses_gpu(device: str) -> bool:
+    normalized = _normalize_device(device)
+    if normalized == "cuda":
+        return True
+    if normalized != "auto":
+        return False
+    try:
+        import torch
+    except ModuleNotFoundError:
+        return False
+    return bool(torch.cuda.is_available())
+
+
+def _game_defaults(spec: GameSpec) -> dict[str, object]:
+    env_block = {
+        "obs_dim": int(spec.obs_dim),
+        "action_space": spec.action_space,
+    }
+    if spec.env_metadata:
+        env_block = _deep_merge_dicts(env_block, dict(spec.env_metadata))
+    return {
+        "game": {
+            "id": spec.game_id,
+            "capabilities": asdict(spec.capabilities),
+            "env": env_block,
+        }
+    }
+
+
+def _algo_defaults(algo_spec: AlgoSpec) -> dict[str, object]:
+    algo_layer: dict[str, object] = {
+        "algo": {
+            "id": algo_spec.algo_id,
+            "runner_kind": algo_spec.runner_kind,
+            "capabilities": asdict(algo_spec.capabilities),
+            "config": {},
+        },
+        "run": {
+            "name": "",
+            "train": {},
+            "paths": {},
+        },
+    }
+    if algo_spec.defaults:
+        algo_layer = _deep_merge_dicts(algo_layer, deepcopy(algo_spec.defaults))
+    return algo_layer
+
+
+def _derive_search_play_board_size(game_env: dict[str, object], algo_config: dict[str, object]) -> int:
+    board_size = algo_config.get("board_size", game_env.get("board_size"))
+    if board_size is not None:
+        return max(1, int(board_size))
+    obs_dim = int(game_env.get("obs_dim", 0))
+    if obs_dim <= 0:
+        raise ValueError("Unable to derive search_play board_size without game.env.board_size or obs_dim.")
+    inferred = max(1, int(round(math.sqrt(float(obs_dim)))))
+    if int(inferred) * int(inferred) != int(obs_dim):
+        raise ValueError(f"Unable to derive square board_size from obs_dim={obs_dim}.")
+    return int(inferred)
+
+
+def _derive_run_name(spec: GameSpec, algo_spec: AlgoSpec, composed: dict[str, object]) -> str:
+    game_env = dict(dict(composed.get("game", {})).get("env", {}))
+    algo_config = dict(dict(composed.get("algo", {})).get("config", {}))
+    hidden_sizes = _int_list(algo_config.get("hidden_sizes"))
+
+    if algo_spec.algo_id == "search_play":
+        board_size = _derive_search_play_board_size(game_env, algo_config)
+        if hidden_sizes:
+            return f"b{int(board_size)}_{'_'.join(str(size) for size in hidden_sizes)}"
+        return f"b{int(board_size)}"
+
+    recurrent_type = str(algo_config.get("recurrent_type", "none")).strip().lower()
+    if recurrent_type in {"lstm", "gru"}:
+        actor_head_hidden_sizes = _int_list(algo_config.get("actor_head_hidden_sizes"), default=[32])
+        critic_head_hidden_sizes = _int_list(algo_config.get("critic_head_hidden_sizes"), default=[32])
+        recurrent_hidden_size = int(algo_config.get("recurrent_hidden_size", 64))
+        encoder_hidden_sizes = hidden_sizes or [32]
+        return build_recurrent_run_name(
+            encoder_hidden_sizes,
+            recurrent_type=recurrent_type,
+            recurrent_hidden_size=recurrent_hidden_size,
+            actor_head_hidden_sizes=actor_head_hidden_sizes,
+            critic_head_hidden_sizes=critic_head_hidden_sizes,
+        )
+
+    critic_hidden_sizes = _int_list(algo_config.get("critic_hidden_sizes"))
+    if hidden_sizes and critic_hidden_sizes and critic_hidden_sizes != hidden_sizes:
+        return build_actor_critic_run_name(hidden_sizes, critic_hidden_sizes)
+    if hidden_sizes:
+        return build_hidden_run_name(hidden_sizes)
+    return f"{spec.game_id}_{algo_spec.algo_id}"
+
+
+def compose_run_config(
+    game_id: str,
+    algo_override: str | None = None,
+    *,
+    mode: str = "train",
+    user_overrides: dict[str, object] | None = None,
+) -> dict[str, object]:
+    from core.pair_overrides import PAIR_OVERRIDES
+
+    spec = get_game_spec(game_id)
+    resolved_mode = _normalize_mode(mode)
+    algo_id = str(algo_override or spec.default_algo).strip().lower()
+    algo_spec = get_algo_spec(algo_id)
+    validate_game_algo_compatibility(spec.game_id, algo_spec.algo_id)
+    pair_override = dict(PAIR_OVERRIDES.get((spec.game_id, algo_id), {}))
+
+    composed = _deep_merge_dicts(
+        {
+            "common": {
+                "mode": resolved_mode,
+                "seed": None,
+                "device": spec.device,
+                "render": False,
+                "headless": False,
+                "total_steps": None,
+                "episodes": None,
+                "checkpoint_path": None,
+                "save_every": None,
+            }
+        },
+        _game_defaults(spec),
+        _algo_defaults(algo_spec),
+        pair_override,
+        {} if user_overrides is None else dict(user_overrides),
+    )
+
+    common = dict(composed.setdefault("common", {}))
+    common["mode"] = resolved_mode
+    common["device"] = _normalize_device(str(common.get("device", "cpu")))
+    common["render"] = bool(common.get("render", False))
+    common["headless"] = bool(common.get("headless", False))
+    if bool(common["headless"]):
+        common["render"] = False
+    composed["common"] = common
+
+    algo_block = dict(composed.setdefault("algo", {}))
+    algo_block["id"] = algo_spec.algo_id
+    algo_block["runner_kind"] = algo_spec.runner_kind
+    composed["algo"] = algo_block
+
+    run_block = dict(composed.setdefault("run", {}))
+    run_block.setdefault("train", {})
+    run_block.setdefault("paths", {})
+    if not str(run_block.get("name", "")).strip():
+        run_block["name"] = _derive_run_name(spec, algo_spec, composed)
+    composed["run"] = run_block
+    return composed
 
 
 def _build_game_specs() -> dict[str, GameSpec]:
@@ -226,35 +831,186 @@ def _build_game_specs() -> dict[str, GameSpec]:
     return {spec.game_id: spec for spec in specs}
 
 
-def all_game_specs() -> dict[str, GameSpec]:
+def _game_specs() -> dict[str, GameSpec]:
     global _GAME_SPECS
     if _GAME_SPECS is None:
         _GAME_SPECS = _build_game_specs()
-    return dict(_GAME_SPECS)
+    return _GAME_SPECS
 
 
 def get_game_spec(game_id: str) -> GameSpec:
     game_key = str(game_id).strip().lower()
-    specs = all_game_specs()
+    specs = _game_specs()
     if game_key not in specs:
         valid = ", ".join(sorted(specs.keys()))
         raise KeyError(f"Unknown game '{game_id}'. Valid options: {valid}")
     return specs[game_key]
 
 
-def prepare_run(game_id: str, algo_override: str | None = None) -> PreparedRun:
+def _attach_run_paths(config: dict[str, object], run_paths: RunPaths) -> dict[str, object]:
+    attached = _deep_merge_dicts(config)
+    run_block = dict(attached.get("run", {}))
+    run_paths_block = dict(run_block.get("paths", {}))
+    run_paths_block.update(
+        {
+            "dir": str(run_paths.run_dir),
+            "metrics": str(run_paths.metrics_path),
+        }
+    )
+    run_block["paths"] = run_paths_block
+    attached["run"] = run_block
+    return attached
+
+
+def build_env_from_config(
+    config: dict[str, object],
+    *,
+    mode: str | None = None,
+    render: bool | None = None,
+    level: int | None = None,
+) -> Env:
+    game_id = str(dict(config.get("game", {})).get("id", "")).strip().lower()
+    spec = get_game_spec(game_id)
+    common = dict(config.get("common", {}))
+    if mode is None:
+        resolved_mode = _normalize_mode(str(common.get("mode", "train")))
+    else:
+        resolved_mode = str(mode).strip().lower()
+        if resolved_mode not in {"train", "eval", "play", "human"}:
+            raise ValueError(f"Unsupported env mode '{mode}'. Expected train, eval, play, or human.")
+    resolved_render = bool(common.get("render", False) if render is None else render)
+    if bool(common.get("headless", False)):
+        resolved_render = False
+    return spec.make_env(mode=resolved_mode, render=bool(resolved_render), level=level)
+
+
+def _resolve_algo_runtime_config(config: dict[str, object]) -> tuple[str, int, Space, dict[str, object]]:
+    game_block = dict(config.get("game", {}))
+    game_env = dict(game_block.get("env", {}))
+    common = dict(config.get("common", {}))
+    algo_block = dict(config.get("algo", {}))
+    algo_id = str(algo_block.get("id", "")).strip().lower()
+    algo_config = dict(algo_block.get("config", {}))
+    algo_config["use_gpu"] = _runtime_uses_gpu(str(common.get("device", "cpu")))
+
+    if bool(dict(game_block.get("capabilities", {})).get("centralized_critic_required", False)):
+        algo_config.setdefault("centralized_critic", True)
+        algo_config.setdefault("critic_condition_on_agent_obs", True)
+        if "critic_obs_dim" not in algo_config and game_env.get("central_obs_dim") is not None:
+            algo_config["critic_obs_dim"] = int(game_env["central_obs_dim"])
+
+    if algo_id == "search_play" and "board_size" not in algo_config:
+        algo_config["board_size"] = _derive_search_play_board_size(game_env, algo_config)
+
+    obs_dim = int(game_env.get("obs_dim", 0))
+    action_space = game_env.get("action_space")
+    if not isinstance(action_space, Space):
+        raise TypeError("Composed config is missing a valid game.env.action_space.")
+    return algo_id, int(obs_dim), action_space, algo_config
+
+
+def build_algo_from_config(config: dict[str, object]):
     from core.algorithms.factory import build_algorithm
 
-    spec = get_game_spec(game_id)
-    algo_id = str(algo_override or spec.default_algo).strip().lower()
-    run_paths = resolve_run_paths(spec.game_id, algo_id, spec.run_name, create=True)
-    algorithm = build_algorithm(
+    algo_id, obs_dim, action_space, algo_config = _resolve_algo_runtime_config(config)
+    return build_algorithm(
         algo_id=algo_id,
-        obs_dim=spec.obs_dim,
-        action_space=spec.action_space,
-        algo_config=spec.algo_config,
+        obs_dim=int(obs_dim),
+        action_space=action_space,
+        algo_config=algo_config,
     )
-    return PreparedRun(spec=spec, algo_id=algo_id, run_paths=run_paths, algorithm=algorithm)
+
+
+def build_runner_from_config(config: dict[str, object]) -> Callable[[Env, "Algorithm", RunPaths], dict[str, object]]:
+    common = dict(config.get("common", {}))
+    algo_block = dict(config.get("algo", {}))
+    runner_kind = str(algo_block.get("runner_kind", "")).strip().lower()
+    train_block = dict(dict(config.get("run", {})).get("train", {}))
+
+    save_every = common.get("save_every")
+    if save_every is not None:
+        cadence = max(1, int(save_every))
+        if runner_kind == ALGO_RUNNER_OFF_POLICY:
+            train_block["checkpoint_every_steps"] = cadence
+        elif runner_kind == ALGO_RUNNER_ON_POLICY:
+            train_block["checkpoint_every_iterations"] = cadence
+        elif runner_kind == ALGO_RUNNER_SEARCH_PLAY:
+            train_block["checkpoint_every_games"] = cadence
+
+    if runner_kind == ALGO_RUNNER_OFF_POLICY:
+        from core.runners.off_policy import OffPolicyConfig, run_off_policy_training
+
+        total_steps = common.get("total_steps")
+        if total_steps is not None:
+            train_block["max_steps"] = max(1, int(total_steps))
+        episodes = common.get("episodes")
+        if episodes is not None:
+            train_block["max_episodes"] = max(1, int(episodes))
+        runner_config = OffPolicyConfig(**train_block)
+        return lambda env, algorithm, run_paths: run_off_policy_training(env, algorithm, run_paths, runner_config)
+
+    if runner_kind == ALGO_RUNNER_ON_POLICY:
+        from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
+
+        total_steps = common.get("total_steps")
+        if total_steps is not None:
+            rollout_steps = max(1, int(train_block.get("rollout_steps", 1024)))
+            train_block["max_iterations"] = max(1, int(math.ceil(float(total_steps) / float(rollout_steps))))
+        runner_config = OnPolicyConfig(**train_block)
+        return lambda env, algorithm, run_paths: run_on_policy_training(env, algorithm, run_paths, runner_config)
+
+    if runner_kind == ALGO_RUNNER_SEARCH_PLAY:
+        from core.search_play.interfaces import SearchPlayTrainConfig
+        from core.search_play.trainer import run_search_play_training
+
+        episodes = common.get("episodes")
+        if episodes is not None:
+            train_block["max_games"] = max(1, int(episodes))
+        elif common.get("total_steps") is not None:
+            train_block["max_games"] = max(1, int(common["total_steps"]))
+        runner_config = SearchPlayTrainConfig(**train_block)
+        return lambda env, algorithm, run_paths: run_search_play_training(env, algorithm, run_paths, runner_config)
+
+    raise ValueError(f"Unsupported runner kind '{runner_kind}'.")
+
+
+def apply_seed_from_config(config: dict[str, object]) -> int | None:
+    seed = dict(config.get("common", {})).get("seed")
+    if seed is None:
+        return None
+    seed_value = int(seed)
+    random.seed(seed_value)
+    try:
+        import numpy as np
+
+        np.random.seed(seed_value)
+    except ModuleNotFoundError:
+        pass
+    try:
+        import torch
+
+        torch.manual_seed(seed_value)
+        if bool(torch.cuda.is_available()):
+            torch.cuda.manual_seed_all(seed_value)
+    except ModuleNotFoundError:
+        pass
+    return seed_value
+
+
+def prepare_run(
+    game_id: str,
+    algo_override: str | None = None,
+    *,
+    mode: str = "train",
+    user_overrides: dict[str, object] | None = None,
+) -> PreparedRun:
+    config = compose_run_config(game_id, algo_override, mode=mode, user_overrides=user_overrides)
+    algo_id = str(config["algo"]["id"]).strip().lower()
+    game_id = str(config["game"]["id"]).strip().lower()
+    run_name = str(dict(config.get("run", {})).get("name", "")).strip()
+    run_paths = resolve_run_paths(game_id, algo_id, run_name, create=True)
+    attached_config = _attach_run_paths(config, run_paths)
+    return PreparedRun(run_paths=run_paths, config=attached_config)
 
 
 def resolve_current_level(env: object, *, default: int = 1) -> int:
@@ -266,15 +1022,6 @@ def resolve_current_level(env: object, *, default: int = 1) -> int:
         return max(1, int(level_value))
     except (TypeError, ValueError):
         return max(1, int(default))
-
-
-def normalize_resume_mode(mode: str) -> str:
-    mode_key = str(mode).strip().lower()
-    if mode_key == "new":
-        return "none"
-    if mode_key == "checkpoint":
-        return "check"
-    return mode_key
 
 
 def resume_level_bounds(env: object) -> tuple[int, int]:
@@ -370,7 +1117,7 @@ def resolve_resume_path(mode: str, run_paths: RunPaths, level: int) -> Path | No
     check_path = run_paths.model_path(level_value, "check")
     if mode_key == "none":
         return None
-    if mode_key in {"check", "checkpoint"}:
+    if mode_key == "check":
         return check_path if check_path.exists() else None
     if mode_key == "best":
         return best_path if best_path.exists() else None
@@ -413,25 +1160,34 @@ def resolve_latest_play_model_path(run_paths: RunPaths, level: int) -> Path:
 
 
 __all__ = [
+    "ALGO_RUNNER_OFF_POLICY",
+    "ALGO_RUNNER_ON_POLICY",
+    "ALGO_RUNNER_SEARCH_PLAY",
     "EXPLORATION_AVG_WINDOW_EPISODES",
     "MIN_EPISODES_FOR_STATS",
     "OFF_POLICY_TRAIN_DEFAULTS",
     "ACTIVE_GAME_ORDER",
     "GameSpec",
+    "GameCapabilities",
+    "AlgoSpec",
+    "AlgoCapabilities",
     "PreparedRun",
     "build_env_factory",
-    "build_scaffold_env_factory",
-    "build_hidden_run_name",
-    "build_actor_critic_run_name",
-    "build_recurrent_run_name",
     "build_exploration_config",
     "build_off_policy_train_config",
     "build_on_policy_train_config",
-    "all_game_specs",
+    "apply_seed_from_config",
+    "build_algo_from_config",
+    "build_env_from_config",
+    "build_runner_from_config",
+    "compose_run_config",
+    "get_algo_spec",
     "get_game_spec",
+    "parse_override_assignments",
     "prepare_run",
+    "set_nested_override",
+    "validate_game_algo_compatibility",
     "resolve_current_level",
-    "normalize_resume_mode",
     "resume_level_bounds",
     "resolve_best_resume_level",
     "apply_training_start_level",

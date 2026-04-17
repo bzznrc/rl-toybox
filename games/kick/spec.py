@@ -3,54 +3,20 @@
 from __future__ import annotations
 
 from core.envs.spaces import Discrete
-from core.game import (
-    GameSpec,
-    build_actor_critic_run_name,
-    build_env_factory,
-    build_on_policy_train_config,
-)
+from core.game import GameCapabilities, GameSpec, build_env_factory
 from games.kick import config
 from games.kick.env import KickEnv
 
 
 SPEC = GameSpec(
     game_id="kick",
-    display_name="Kick",
     default_algo="ppo",
     make_env=build_env_factory(KickEnv),
     obs_dim=config.OBS_DIM,
     action_space=Discrete(config.ACT_DIM),
-    run_name=build_actor_critic_run_name(
-        config.HIDDEN_DIMENSIONS,
-        config.CRITIC_HIDDEN_DIMENSIONS,
+    capabilities=GameCapabilities(
+        centralized_critic_required=True,
     ),
-    family="marl_ctde",
-    role="Paused multi-agent CTDE / MAPPO-style project.",
-    summary="Experimental shared-team football project retained in the repo but no longer part of the main progression.",
-    primary_algo_label="MAPPO-style PPO / CTDE",
-    status="paused",
-    algo_config={
-        "hidden_sizes": list(config.HIDDEN_DIMENSIONS),
-        "critic_hidden_sizes": list(config.CRITIC_HIDDEN_DIMENSIONS),
-        "critic_obs_dim": int(config.CENTRAL_OBS_DIM),
-        "centralized_critic": True,
-        "critic_condition_on_agent_obs": True,
-        "learning_rate": config.LEARNING_RATE,
-        "gamma": config.GAMMA,
-        "gae_lambda": config.GAE_LAMBDA,
-        "clip_ratio": config.CLIP_RATIO,
-        "update_epochs": config.UPDATE_EPOCHS,
-        "minibatch_size": config.MINIBATCH_SIZE,
-        "entropy_coef": float(config.LEVEL_SETTINGS[int(config.MIN_LEVEL)]["entropy_coef"]),
-        "value_coef": config.VALUE_COEF,
-        "max_grad_norm": config.MAX_GRAD_NORM,
-        "use_gpu": config.USE_GPU,
-    },
-    train_config=build_on_policy_train_config(
-        max_iterations=config.MAX_TRAINING_ITERATIONS,
-        rollout_steps=config.ROLLOUT_STEPS,
-        checkpoint_every_iterations=config.CHECKPOINT_EVERY_ITERATIONS,
-        reward_window=config.REWARD_ROLLING_WINDOW,
-        min_episodes_for_stats=config.MIN_EPISODES_FOR_STATS,
-    ),
+    device="cuda" if config.USE_GPU else "cpu",
+    env_metadata={"central_obs_dim": int(config.CENTRAL_OBS_DIM)},
 )

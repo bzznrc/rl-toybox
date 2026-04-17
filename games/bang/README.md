@@ -110,11 +110,11 @@ An episode counts as a success when the player wins the match.
 
 ```bash
 rl-toybox-train --game bang
-rl-toybox-play-ai --game bang --model best --render
+rl-toybox-play-ai --game bang --render
 rl-toybox-play-user --game bang
 python -m scripts.train --game bang
-python -m scripts.play_ai --game bang --model best --render
+python -m scripts.play_ai --game bang --render
 python -m scripts.play_user --game bang
 ```
 
-See `games/bang/config.py` for the full reward constants, curriculum settings, and DQN hyperparameters.
+See `games/bang/config.py` for the game constants, rewards, and curriculum settings. Shared DQN defaults live in `core/game.py`, and the remaining Bang-specific DQN deltas live in `core/pair_overrides.py`.

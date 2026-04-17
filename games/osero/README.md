@@ -79,20 +79,20 @@ There is no environment curriculum for `osero`. Board sizes are separate runtime
 Choose the board before running train or play commands:
 
 ```bash
-OSERO_BOARD_SIZE=4 rl-toybox-train --game osero
-OSERO_BOARD_SIZE=6 rl-toybox-train --game osero
-OSERO_BOARD_SIZE=8 rl-toybox-train --game osero
+$env:OSERO_BOARD_SIZE='4x4'; rl-toybox-train --game osero
+$env:OSERO_BOARD_SIZE='6x6'; rl-toybox-train --game osero
+$env:OSERO_BOARD_SIZE='8x8'; rl-toybox-train --game osero
 ```
 
 ## Run Commands
 
 ```bash
 rl-toybox-train --game osero
-rl-toybox-play-ai --game osero --model best --render
+rl-toybox-play-ai --game osero --render
 rl-toybox-play-user --game osero
 python -m scripts.train --game osero
-python -m scripts.play_ai --game osero --model best --render
+python -m scripts.play_ai --game osero --render
 python -m scripts.play_user --game osero
 ```
 
-See `games/osero/config.py` and `games/osero/rules.py` for board-size selection, reward settings, and the compact rules implementation.
+See `games/osero/config.py` and `games/osero/rules.py` for board-size selection, rewards, and the compact rules implementation. Shared search-play defaults live in `core/game.py`, and the remaining Osero-specific search-play deltas live in `core/pair_overrides.py`.

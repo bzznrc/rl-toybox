@@ -16,7 +16,6 @@ MODEL_KIND_CHECK = "check"
 _MODEL_KIND_ALIASES = {
     "best": MODEL_KIND_BEST,
     "check": MODEL_KIND_CHECK,
-    "checkpoint": MODEL_KIND_CHECK,
 }
 
 

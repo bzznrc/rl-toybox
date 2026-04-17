@@ -3,38 +3,50 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
-from core.algorithms.factory import is_on_policy_algo
 from core.game import (
     ACTIVE_GAME_ORDER,
+    apply_seed_from_config,
     apply_training_start_level,
-    normalize_resume_mode,
+    build_algo_from_config,
+    build_env_from_config,
+    build_runner_from_config,
+    parse_override_assignments,
     prepare_run,
     resolve_best_resume_level,
     resolve_current_level,
     resolve_resume_path,
+    set_nested_override,
 )
 from core.logging_utils import configure_logging, log_key_values, log_run_context
-from core.runners.off_policy import OffPolicyConfig, run_off_policy_training
-from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
-from core.search_play.interfaces import SearchPlayTrainConfig
-from core.search_play.trainer import run_search_play_training
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an RL toybox game")
     parser.add_argument("--game", required=True, help=f"Game id ({', '.join(ACTIVE_GAME_ORDER)})")
     parser.add_argument("--algo", default=None, help="Override algorithm id")
+    parser.add_argument("--steps", type=int, default=None, help="Normalized training step budget")
+    parser.add_argument("--episodes", type=int, default=None, help="Normalized episode/game budget")
+    parser.add_argument("--seed", type=int, default=None, help="Global random seed")
     parser.add_argument("--render", action="store_true", help="Show Arcade window during training")
+    parser.add_argument("--headless", action="store_true", help="Force headless training mode")
+    parser.add_argument("--checkpoint", default=None, help="Explicit checkpoint path to load before training")
+    parser.add_argument("--save-every", type=int, default=None, help="Normalized checkpoint cadence override")
+    parser.add_argument(
+        "--set",
+        dest="set_values",
+        action="append",
+        default=[],
+        help="Generic override in dotted.path=value form, e.g. --set algo.config.learning_rate=0.0003",
+    )
     parser.add_argument(
         "--resume",
-        default="new",
-        type=normalize_resume_mode,
+        default="none",
         choices=["auto", "none", "check", "best"],
         help=(
             "Resume source for model weights. "
-            "Default is 'new' (start from scratch). "
-            "Accepted values: New, Best, Check, Checkpoint, None, Auto. "
+            "Use 'best', 'check', or 'auto' to reuse saved weights. "
             "When best is loaded, epsilon resets to eps_bump_cap for epsilon-based algos."
         ),
     )
@@ -47,11 +59,26 @@ def parse_args() -> argparse.Namespace:
             "Loads L<level>_best and starts training from that level."
         ),
     )
-    parser.add_argument("--max-steps", type=int, default=None, help="Override off-policy max training steps")
-    parser.add_argument("--max-games", type=int, default=None, help="Override self-play game count")
-    parser.add_argument("--max-iterations", type=int, default=None, help="Override on-policy iteration count")
-    parser.add_argument("--checkpoint-every", type=int, default=None, help="Override checkpoint cadence")
     return parser.parse_args()
+
+
+def _build_train_overrides(args: argparse.Namespace) -> dict[str, object]:
+    overrides = parse_override_assignments(args.set_values)
+    render_enabled = bool(args.render) and not bool(args.headless)
+    set_nested_override(overrides, "common.mode", "train")
+    set_nested_override(overrides, "common.render", bool(render_enabled))
+    set_nested_override(overrides, "common.headless", bool(args.headless or not render_enabled))
+    if args.steps is not None:
+        set_nested_override(overrides, "common.total_steps", int(args.steps))
+    if args.episodes is not None:
+        set_nested_override(overrides, "common.episodes", int(args.episodes))
+    if args.seed is not None:
+        set_nested_override(overrides, "common.seed", int(args.seed))
+    if args.save_every is not None:
+        set_nested_override(overrides, "common.save_every", int(args.save_every))
+    if args.checkpoint:
+        set_nested_override(overrides, "common.checkpoint_path", str(Path(args.checkpoint)))
+    return overrides
 
 
 def _set_resume_best_epsilon_to_bump_cap(algorithm: object) -> float | None:
@@ -75,15 +102,18 @@ def main() -> None:
     args = parse_args()
     configure_logging()
 
-    prepared = prepare_run(args.game, args.algo)
-    spec = prepared.spec
-    algo_id = prepared.algo_id
+    prepared = prepare_run(args.game, args.algo, mode="train", user_overrides=_build_train_overrides(args))
     run_paths = prepared.run_paths
-    algorithm = prepared.algorithm
+    composed_config = prepared.config
+    game_id = str(dict(composed_config.get("game", {})).get("id", args.game))
+    algo_id = str(dict(composed_config.get("algo", {})).get("id", args.algo or ""))
+    apply_seed_from_config(composed_config)
+    algorithm = build_algo_from_config(composed_config)
+    runner = build_runner_from_config(composed_config)
 
     resume_mode = args.resume
 
-    env = spec.make_env(mode="train", render=bool(args.render))
+    env = build_env_from_config(composed_config, mode="train")
     try:
         if resume_mode == "best":
             target_level = int(
@@ -93,7 +123,12 @@ def main() -> None:
         else:
             current_level = resolve_current_level(env, default=1)
         best_path_for_level = run_paths.model_path(current_level, "best")
-        resume_path = resolve_resume_path(resume_mode, run_paths, current_level)
+        explicit_checkpoint = dict(composed_config.get("common", {})).get("checkpoint_path")
+        resume_path = Path(str(explicit_checkpoint)) if explicit_checkpoint else resolve_resume_path(
+            resume_mode,
+            run_paths,
+            current_level,
+        )
         if resume_mode == "best" and resume_path is None:
             log_key_values(
                 "rl_toybox.train",
@@ -109,7 +144,10 @@ def main() -> None:
                 key_value_separator=":",
             )
         if resume_path is not None:
+            if not Path(resume_path).exists():
+                raise FileNotFoundError(f"Checkpoint not found at '{resume_path}'.")
             algorithm.load(str(resume_path))
+            composed_config["common"]["checkpoint_path"] = str(resume_path)
             resumed_from_best = resume_path == best_path_for_level
             if resumed_from_best:
                 bumped_epsilon = _set_resume_best_epsilon_to_bump_cap(algorithm)
@@ -127,54 +165,16 @@ def main() -> None:
         log_run_context(
             "train",
             {
-                "game": spec.game_id,
+                "game": game_id,
                 "algo": algo_id,
                 "run": run_paths.run_dir,
                 "level": int(current_level),
                 "resume": resume_path if resume_path is not None else "scratch",
-                "render": bool(args.render),
+                "render": bool(dict(composed_config.get("common", {})).get("render", False)),
             },
         )
 
-        if algo_id == "search_play":
-            train_config = dict(spec.train_config)
-            if args.max_games is not None:
-                train_config["max_games"] = int(args.max_games)
-            elif args.max_steps is not None:
-                train_config["max_games"] = int(args.max_steps)
-            if args.checkpoint_every is not None:
-                train_config["checkpoint_every_games"] = int(args.checkpoint_every)
-            metrics = run_search_play_training(
-                env,
-                algorithm,
-                run_paths,
-                SearchPlayTrainConfig(**train_config),
-            )
-        elif is_on_policy_algo(algo_id):
-            train_config = dict(spec.train_config)
-            if args.max_iterations is not None:
-                train_config["max_iterations"] = int(args.max_iterations)
-            if args.checkpoint_every is not None:
-                train_config["checkpoint_every_iterations"] = int(args.checkpoint_every)
-            metrics = run_on_policy_training(
-                env,
-                algorithm,
-                run_paths,
-                OnPolicyConfig(**train_config),
-            )
-        else:
-            train_config = dict(spec.train_config)
-            if args.max_steps is not None:
-                train_config["max_steps"] = int(args.max_steps)
-            if args.checkpoint_every is not None:
-                train_config["checkpoint_every_steps"] = int(args.checkpoint_every)
-            metrics = run_off_policy_training(
-                env,
-                algorithm,
-                run_paths,
-                OffPolicyConfig(**train_config),
-            )
-
+        metrics = runner(env, algorithm, run_paths)
         log_key_values("rl_toybox.train", metrics, prefix="Train Summary")
     finally:
         env.close()

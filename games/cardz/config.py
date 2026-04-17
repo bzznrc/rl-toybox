@@ -228,22 +228,3 @@ REWARD_COMPONENT_NAMES = (
     "reward_terminal_match_draw",
     "reward_terminal_match_loss",
 )
-
-
-# TRAINING
-# Default actor-critic trunk: 64 -> 64 -> 64, then actor/critic heads.
-HIDDEN_DIMENSIONS = [64, 64]
-SHARE_BACKBONE = True
-
-MAX_TRAINING_ITERATIONS = 8000
-ROLLOUT_STEPS = 1024
-CHECKPOINT_EVERY_ITERATIONS = 10
-
-LEARNING_RATE = 3e-4
-GAMMA = 0.99
-GAE_LAMBDA = 0.95
-CLIP_RATIO = 0.2
-UPDATE_EPOCHS = 4
-MINIBATCH_SIZE = 256
-VALUE_COEF = 0.5
-MAX_GRAD_NORM = 0.5

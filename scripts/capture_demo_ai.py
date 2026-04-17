@@ -10,7 +10,15 @@ from pathlib import Path
 import arcade
 from PIL import Image
 
-from core.game import prepare_run, resolve_latest_play_model_path
+from core.game import (
+    apply_seed_from_config,
+    build_algo_from_config,
+    build_env_from_config,
+    parse_override_assignments,
+    prepare_run,
+    resolve_latest_play_model_path,
+    set_nested_override,
+)
 from core.logging_utils import configure_logging, log_key_values, log_run_context
 from core.runners.eval import reset_eval_policy_state, select_eval_action
 from core.utils import PROJECT_ROOT
@@ -24,12 +32,33 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture a short rendered AI demo")
     parser.add_argument("--game", required=True, help="Game id")
     parser.add_argument("--algo", default=None, help="Override algorithm id")
+    parser.add_argument("--seed", type=int, default=None, help="Global random seed")
+    parser.add_argument("--checkpoint", default=None, help="Explicit checkpoint path to load")
     parser.add_argument("--level", type=int, default=3, help="Curriculum level selector")
+    parser.add_argument(
+        "--set",
+        dest="set_values",
+        action="append",
+        default=[],
+        help="Generic override in dotted.path=value form, e.g. --set algo.config.learning_rate=0.0003",
+    )
     return parser.parse_args()
 
 
-def _resolve_level(spec_family: str, requested_level: int) -> int:
-    return 1 if str(spec_family).strip().lower() == "search_play" else max(1, int(requested_level))
+def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
+    overrides = parse_override_assignments(args.set_values)
+    set_nested_override(overrides, "common.mode", "eval")
+    set_nested_override(overrides, "common.render", True)
+    set_nested_override(overrides, "common.headless", False)
+    if args.seed is not None:
+        set_nested_override(overrides, "common.seed", int(args.seed))
+    if args.checkpoint:
+        set_nested_override(overrides, "common.checkpoint_path", str(Path(args.checkpoint)))
+    return overrides
+
+
+def _resolve_level(runner_kind: str, requested_level: int) -> int:
+    return 1 if str(runner_kind).strip().lower() == "search_play" else max(1, int(requested_level))
 
 
 def _resolve_game_fps(game_id: str) -> int:
@@ -84,24 +113,34 @@ def main() -> None:
     args = parse_args()
     configure_logging()
 
-    prepared = prepare_run(args.game, args.algo)
-    spec = prepared.spec
-    algo_id = prepared.algo_id
+    prepared = prepare_run(args.game, args.algo, mode="eval", user_overrides=_build_eval_overrides(args))
     run_paths = prepared.run_paths
-    algorithm = prepared.algorithm
+    composed_config = prepared.config
+    game_id = str(dict(composed_config.get("game", {})).get("id", args.game))
+    algo_id = str(dict(composed_config.get("algo", {})).get("id", args.algo or ""))
+    runner_kind = str(dict(composed_config.get("algo", {})).get("runner_kind", ""))
+    apply_seed_from_config(composed_config)
+    algorithm = build_algo_from_config(composed_config)
 
-    level = _resolve_level(spec.family, int(args.level))
-    model_path = resolve_latest_play_model_path(run_paths, level)
+    level = _resolve_level(runner_kind, int(args.level))
+    explicit_checkpoint = dict(composed_config.get("common", {})).get("checkpoint_path")
+    if explicit_checkpoint:
+        model_path = Path(str(explicit_checkpoint))
+        if not model_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found at '{model_path}'.")
+    else:
+        model_path = resolve_latest_play_model_path(run_paths, level)
+    composed_config["common"]["checkpoint_path"] = str(model_path)
     algorithm.load(str(model_path))
 
-    native_fps = _resolve_game_fps(spec.game_id)
+    native_fps = _resolve_game_fps(game_id)
     capture_fps = int(CAPTURE_FPS)
     capture_period_frames = float(native_fps) / float(capture_fps)
     target_frame_count = max(1, int(CAPTURE_DURATION_SECONDS) * int(capture_fps))
-    output_path = _build_output_path(spec.game_id, level)
+    output_path = _build_output_path(game_id, level)
 
     os.environ["RL_TOYBOX_RENDER_VISIBLE"] = "0"
-    env = spec.make_env(mode="eval", render=True, level=int(level))
+    env = build_env_from_config(composed_config, mode="eval", render=True, level=int(level))
     frames: list[Image.Image] = []
     step_index = 0
     next_capture_step = 0.0
@@ -116,7 +155,7 @@ def main() -> None:
         log_run_context(
             "capture-demo-ai",
             {
-                "game": spec.game_id,
+                "game": game_id,
                 "algo": algo_id,
                 "level": int(level),
                 "native_fps": int(native_fps),

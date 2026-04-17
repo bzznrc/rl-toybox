@@ -60,11 +60,11 @@ An episode counts as a success if the snake eats at least `5` foods (`SUCCESS_FO
 
 ```bash
 rl-toybox-train --game snake
-rl-toybox-play-ai --game snake --model best --render
+rl-toybox-play-ai --game snake --render
 rl-toybox-play-user --game snake
 python -m scripts.train --game snake
-python -m scripts.play_ai --game snake --model best --render
+python -m scripts.play_ai --game snake --render
 python -m scripts.play_user --game snake
 ```
 
-See `games/snake/config.py` for the full set of hyperparameters, reward constants, and curriculum thresholds.
+See `games/snake/config.py` for the game constants, reward values, and curriculum thresholds. Shared Q-learning defaults live in `core/game.py`.

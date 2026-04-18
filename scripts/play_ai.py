@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from core.game import (
+    apply_generic_launch_level,
     apply_seed_from_config,
     build_algo_from_config,
     build_env_from_config,
@@ -66,17 +67,16 @@ def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     configure_logging()
+    level = int(apply_generic_launch_level(args.game, args.level))
 
     prepared = prepare_run(args.game, args.algo, mode="eval", user_overrides=_build_eval_overrides(args))
     run_paths = prepared.run_paths
     composed_config = prepared.config
     game_id = str(dict(composed_config.get("game", {})).get("id", args.game))
     algo_id = str(dict(composed_config.get("algo", {})).get("id", args.algo or ""))
-    runner_kind = str(dict(composed_config.get("algo", {})).get("runner_kind", ""))
     apply_seed_from_config(composed_config)
     algorithm = build_algo_from_config(composed_config)
 
-    level = 1 if runner_kind == "search_play" else int(args.level)
     explicit_checkpoint = dict(composed_config.get("common", {})).get("checkpoint_path")
     if explicit_checkpoint:
         model_path = Path(str(explicit_checkpoint))

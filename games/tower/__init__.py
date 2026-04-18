@@ -1,1 +1,0 @@
-"""Tower game package."""

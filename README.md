@@ -8,9 +8,9 @@ Compact Arcade-based RL toybox with one shared composition path, one shared runt
 | --- | --- | --- | --- |
 | `snake` | `qlearn` | Intro discrete control | [games/snake/README.md](games/snake/README.md) |
 | `bang` | `dqn` | Flagship discrete arena shooter | [games/bang/README.md](games/bang/README.md) |
-| `tower` | `dqn` | Masked tower-defense decisions | [games/tower/README.md](games/tower/README.md) |
+| `fuse` | `dqn` | Masked bomb-duel survival and chain reactions | [games/fuse/README.md](games/fuse/README.md) |
 | `vroom` | `sac` | Continuous-control racing | [games/vroom/README.md](games/vroom/README.md) |
-| `frogger` | `recurrent_ppo` | Partial observability and memory | [games/frogger/README.md](games/frogger/README.md) |
+| `trail` | `ppo` | Adversarial spatial control and territory pressure | [games/trail/README.md](games/trail/README.md) |
 | `cardz` | `a2c` | Hidden-information masked card game | [games/cardz/README.md](games/cardz/README.md) |
 | `osero` | `search_play` | Board self-play and search | [games/osero/README.md](games/osero/README.md) |
 | `kick` | `ppo` | Centralized-critic football project | [games/kick/README.md](games/kick/README.md) |
@@ -47,8 +47,8 @@ rl-toybox-play-user --game bang
 Common overrides:
 
 ```bash
-python -m scripts.train --game tower --algo dqn --steps 500000 --save-every 20000
-python -m scripts.train --game frogger --seed 7 --set algo.config.learning_rate=0.0001
+python -m scripts.train --game fuse --algo dqn --steps 500000 --save-every 20000
+python -m scripts.train --game trail --seed 7 --set algo.config.learning_rate=0.0001
 python -m scripts.play_ai --game bang --episodes 10 --checkpoint runs/bang/dqn/64_64/L3_best.pth
 ```
 

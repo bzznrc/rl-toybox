@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import json
 import math
+import os
 from pathlib import Path
 import random
 import sys
@@ -34,13 +35,23 @@ OFF_POLICY_TRAIN_DEFAULTS: dict[str, Any] = {
 ACTIVE_GAME_ORDER: tuple[str, ...] = (
     "snake",
     "bang",
-    "tower",
+    "fuse",
     "vroom",
-    "frogger",
+    "trail",
     "cardz",
     "osero",
     "kick",
 )
+GENERIC_LAUNCH_LEVEL_TO_KICK_LEVEL = {
+    1: 1,
+    2: 3,
+    3: 5,
+}
+GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE = {
+    1: 4,
+    2: 6,
+    3: 8,
+}
 
 
 @dataclass(frozen=True)
@@ -95,6 +106,40 @@ def build_env_factory(env_type: type[Env]) -> Callable[..., Env]:
         return env_type(mode=mode, render=render, level=level)
 
     return make_env
+
+
+def resolve_generic_launch_level(game_id: str, generic_level: int) -> int:
+    game_key = str(game_id).strip().lower()
+    level_key = max(1, min(3, int(generic_level)))
+    if game_key == "kick":
+        return int(GENERIC_LAUNCH_LEVEL_TO_KICK_LEVEL[int(level_key)])
+    if game_key == "osero":
+        return 1
+    return int(level_key)
+
+
+def _refresh_osero_launch_modules() -> None:
+    global _GAME_SPECS
+    _GAME_SPECS = None
+    for module_name in (
+        "core.pair_overrides",
+        "games.osero",
+        "games.osero.config",
+        "games.osero.rules",
+        "games.osero.env",
+        "games.osero.spec",
+    ):
+        sys.modules.pop(module_name, None)
+
+
+def apply_generic_launch_level(game_id: str, generic_level: int) -> int:
+    game_key = str(game_id).strip().lower()
+    level_key = max(1, min(3, int(generic_level)))
+    if game_key == "osero":
+        board_size = int(GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE[int(level_key)])
+        os.environ["OSERO_BOARD_SIZE"] = f"{int(board_size)}x{int(board_size)}"
+        _refresh_osero_launch_modules()
+    return int(resolve_generic_launch_level(game_key, level_key))
 
 
 def build_hidden_run_name(hidden_sizes: Iterable[int]) -> str:
@@ -811,19 +856,19 @@ def _build_game_specs() -> dict[str, GameSpec]:
     # from each game spec without triggering a circular import.
     from games.bang.spec import SPEC as bang_spec
     from games.cardz.spec import SPEC as cardz_spec
-    from games.frogger.spec import SPEC as frogger_spec
+    from games.fuse.spec import SPEC as fuse_spec
     from games.kick.spec import SPEC as kick_spec
     from games.osero.spec import SPEC as osero_spec
     from games.snake.spec import SPEC as snake_spec
-    from games.tower.spec import SPEC as tower_spec
+    from games.trail.spec import SPEC as trail_spec
     from games.vroom.spec import SPEC as vroom_spec
 
     specs = (
         snake_spec,
         bang_spec,
-        tower_spec,
+        fuse_spec,
         vroom_spec,
-        frogger_spec,
+        trail_spec,
         cardz_spec,
         osero_spec,
         kick_spec,

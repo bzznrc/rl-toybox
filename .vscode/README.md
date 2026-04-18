@@ -1,6 +1,6 @@
 # VS Code Launch Notes
 
-The launch configs now mirror the canonical CLI flow:
+The launch configs mirror the canonical CLI flow:
 
 - `scripts.train`
 - `scripts.play_user`
@@ -16,52 +16,33 @@ There are four everyday actions:
 - `Run - Play AI`
 - `Run - Capture Demo`
 
-Those cover the shared 1-3 level games:
+All games now use the same shared launch shape:
 
 - `snake`
 - `bang`
-- `tower`
+- `fuse`
 - `vroom`
-- `frogger`
+- `trail`
 - `cardz`
+- `osero`
+- `kick`
 
-Two small sets of dedicated entries remain:
+The generic `level3` input is remapped in shared runtime code:
 
-- `... - Kick`
-- `... - Osero`
-
-That is intentional.
-
-## Why Kick And Osero Still Have Dedicated Entries
-
-VS Code input dropdowns are static. They cannot change their options based on another dropdown.
-
-We keep dedicated entries only where the runtime shape is genuinely different:
-
-- `kick` uses a `1-5` level range instead of `1-3`
-- `osero` does not use curriculum levels here and still needs the `OSERO_BOARD_SIZE` env input
-
-Everything else shares the same canonical launch shape.
+- normal games: `1 -> 1`, `2 -> 2`, `3 -> 3`
+- `kick`: `1 -> 1`, `2 -> 3`, `3 -> 5`
+- `osero`: `1 -> 4x4`, `2 -> 6x6`, `3 -> 8x8`
 
 ## Algo Dropdowns
 
 The train / play-ai / capture configs keep an algo dropdown because the CLI supports `--algo`.
 
-Those dropdowns are intentionally static as well. That means VS Code will not auto-filter incompatible game/algo pairs. If you pick an invalid pair, the repo's compatibility checks will fail fast with a clear error.
+Those dropdowns are intentionally static as well. VS Code will not auto-filter incompatible game/algo pairs. If you pick an invalid pair, the repo's compatibility checks will fail fast with a clear error.
 
-The defaults are chosen to match the default game in each launch group:
+The defaults are chosen to match the default launch game:
 
 - `Run - *` defaults to `bang + dqn`
-- `Run - * - Kick` defaults to `kick + ppo`
-- `Run - * - Osero` defaults to `osero + search_play`
 
 ## Adding A New Game Later
 
-If a new game:
-
-- uses the normal `1-3` level flow
-- does not need extra env vars
-
-add it to the `gameLevel3` input only.
-
-If a new game needs a different level range or extra env wiring, add one small dedicated set like `Kick` or `Osero` instead of bringing back per-game triplets for everything.
+If a new game can use the shared 3-level launch flow, add it to the `gameLevel3` input only.

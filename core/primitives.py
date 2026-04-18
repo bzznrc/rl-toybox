@@ -143,9 +143,33 @@ def draw_two_tone_tile(
     outer_color: tuple[int, int, int] | tuple[int, int, int, int],
     inner_color: tuple[int, int, int] | tuple[int, int, int, int],
     inset: float,
+    glow_color: tuple[int, int, int] | tuple[int, int, int, int] | None = None,
+    glow_radius: float = 0.0,
+    glow_alpha: int = 92,
+    glow_layers: int = 4,
+    glow_inside_bounds: bool = False,
+    glow_source_inset: float = 0.0,
+    draw_outer_fill: bool = True,
+    draw_inner_fill: bool = True,
 ) -> None:
     bottom = window_controller.top_left_to_bottom(top_left_y, size)
-    arcade.draw_lbwh_rectangle_filled(top_left_x, bottom, size, size, outer_color)
+    if bool(draw_outer_fill):
+        arcade.draw_lbwh_rectangle_filled(top_left_x, bottom, size, size, outer_color)
+    if glow_color is not None and float(glow_radius) > 0.0:
+        draw_soft_glow_rect(
+            left=float(top_left_x),
+            bottom=float(bottom),
+            width=float(size),
+            height=float(size),
+            color=glow_color,
+            glow_radius=float(glow_radius),
+            max_alpha=int(glow_alpha),
+            layers=int(glow_layers),
+            inside_bounds=bool(glow_inside_bounds),
+            source_inset=float(glow_source_inset),
+        )
+    if not bool(draw_inner_fill):
+        return
     inner_size = size - 2.0 * float(inset)
     if inner_size <= 0:
         return
@@ -156,6 +180,97 @@ def draw_two_tone_tile(
         inner_size,
         inner_color,
     )
+
+
+def draw_two_tone_square_block(
+    window_controller: ArcadeWindowController,
+    *,
+    top_left_x: float,
+    top_left_y: float,
+    tile_size: float,
+    tiles_per_side: int,
+    outer_color: tuple[int, int, int] | tuple[int, int, int, int],
+    inner_color: tuple[int, int, int] | tuple[int, int, int, int],
+    inset: float,
+) -> None:
+    side_tiles = max(1, int(tiles_per_side))
+    draw_two_tone_tile(
+        window_controller,
+        top_left_x=float(top_left_x),
+        top_left_y=float(top_left_y),
+        size=float(tile_size) * float(side_tiles),
+        outer_color=outer_color,
+        inner_color=inner_color,
+        inset=float(inset),
+    )
+
+
+def _color_rgba(
+    color: tuple[int, int, int] | tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    if len(color) == 4:
+        return int(color[0]), int(color[1]), int(color[2]), int(color[3])
+    return int(color[0]), int(color[1]), int(color[2]), 255
+
+
+def with_alpha(
+    color: tuple[int, int, int] | tuple[int, int, int, int],
+    alpha: int | float,
+) -> tuple[int, int, int, int]:
+    red, green, blue, _ = _color_rgba(color)
+    return red, green, blue, int(max(0, min(255, round(float(alpha)))))
+
+
+def draw_soft_glow_rect(
+    *,
+    left: float,
+    bottom: float,
+    width: float,
+    height: float,
+    color: tuple[int, int, int] | tuple[int, int, int, int],
+    glow_radius: float,
+    max_alpha: int = 92,
+    layers: int = 4,
+    inside_bounds: bool = False,
+    source_inset: float = 0.0,
+) -> None:
+    source_pad = max(0.0, float(source_inset))
+    rect_left = float(left) + source_pad
+    rect_bottom = float(bottom) + source_pad
+    rect_width = max(0.0, float(width) - 2.0 * source_pad)
+    rect_height = max(0.0, float(height) - 2.0 * source_pad)
+    radius = max(0.0, float(glow_radius))
+    layer_count = max(0, int(layers))
+    if rect_width <= 0.0 or rect_height <= 0.0 or radius <= 0.0 or layer_count <= 0:
+        return
+
+    peak_alpha = max(0, min(255, int(max_alpha)))
+    for layer in range(layer_count, 0, -1):
+        strength = float(layer) / float(layer_count)
+        layer_alpha = peak_alpha * (strength * strength)
+        if bool(inside_bounds):
+            inset = radius * (1.0 - strength)
+            layer_width = rect_width - 2.0 * inset
+            layer_height = rect_height - 2.0 * inset
+            if layer_width <= 0.0 or layer_height <= 0.0:
+                continue
+            arcade.draw_lbwh_rectangle_filled(
+                rect_left + inset,
+                rect_bottom + inset,
+                layer_width,
+                layer_height,
+                with_alpha(color, layer_alpha),
+            )
+            continue
+
+        expand = radius * strength
+        arcade.draw_lbwh_rectangle_filled(
+            rect_left - expand,
+            rect_bottom - expand,
+            rect_width + 2.0 * expand,
+            rect_height + 2.0 * expand,
+            with_alpha(color, layer_alpha),
+        )
 
 
 def draw_cell_union_outline(

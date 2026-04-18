@@ -14,47 +14,8 @@
         "${input:gameLevel3}",
         "--algo",
         "${input:algoLevel3}",
-        "--resume",
-        "${input:resumeMode}",
-        "--resume-level",
-        "${input:resumeLevel3}"
-      ]
-    },
-    {
-      "name": "Run - Train - Kick",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.train",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "args": [
-        "--game",
-        "kick",
-        "--algo",
-        "${input:algoKick}",
-        "--resume",
-        "${input:resumeMode}",
-        "--resume-level",
-        "${input:resumeLevel5}"
-      ]
-    },
-    {
-      "name": "Run - Train - Osero",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.train",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "env": {
-        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
-      },
-      "args": [
-        "--game",
-        "osero",
-        "--algo",
-        "${input:algoOsero}",
+        "--level",
+        "${input:level3}",
         "--resume",
         "${input:resumeMode}"
       ]
@@ -72,37 +33,6 @@
         "${input:gameLevel3}",
         "--level",
         "${input:level3}"
-      ]
-    },
-    {
-      "name": "Run - Play User - Kick",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.play_user",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "args": [
-        "--game",
-        "kick",
-        "--level",
-        "${input:level5}"
-      ]
-    },
-    {
-      "name": "Run - Play User - Osero",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.play_user",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "env": {
-        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
-      },
-      "args": [
-        "--game",
-        "osero"
       ]
     },
     {
@@ -124,43 +54,6 @@
       ]
     },
     {
-      "name": "Run - Play AI - Kick",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.play_ai",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "args": [
-        "--game",
-        "kick",
-        "--algo",
-        "${input:algoKick}",
-        "--level",
-        "${input:level5}",
-        "--render"
-      ]
-    },
-    {
-      "name": "Run - Play AI - Osero",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.play_ai",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "env": {
-        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
-      },
-      "args": [
-        "--game",
-        "osero",
-        "--algo",
-        "${input:algoOsero}",
-        "--render"
-      ]
-    },
-    {
       "name": "Run - Capture Demo",
       "type": "debugpy",
       "request": "launch",
@@ -176,62 +69,29 @@
         "--level",
         "${input:level3}"
       ]
-    },
-    {
-      "name": "Run - Capture Demo - Kick",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.capture_demo_ai",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "args": [
-        "--game",
-        "kick",
-        "--algo",
-        "${input:algoKick}",
-        "--level",
-        "${input:level5}"
-      ]
-    },
-    {
-      "name": "Run - Capture Demo - Osero",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.capture_demo_ai",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "env": {
-        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
-      },
-      "args": [
-        "--game",
-        "osero",
-        "--algo",
-        "${input:algoOsero}"
-      ]
     }
   ],
   "inputs": [
     {
       "id": "gameLevel3",
       "type": "pickString",
-      "description": "Game with a 1-3 level curriculum",
+      "description": "Game using the shared 3-level launch flow",
       "default": "bang",
       "options": [
         "snake",
         "bang",
-        "tower",
+        "fuse",
         "vroom",
-        "frogger",
-        "cardz"
+        "trail",
+        "cardz",
+        "osero",
+        "kick"
       ]
     },
     {
       "id": "algoLevel3",
       "type": "pickString",
-      "description": "Algorithm override for 1-3 level games",
+      "description": "Algorithm override for the selected game",
       "default": "dqn",
       "options": [
         "qlearn",
@@ -245,59 +105,14 @@
       ]
     },
     {
-      "id": "algoKick",
-      "type": "pickString",
-      "description": "Algorithm override for Kick",
-      "default": "ppo",
-      "options": [
-        "ppo",
-        "a2c",
-        "mappo",
-        "dqn",
-        "qlearn",
-        "sac",
-        "recurrent_ppo",
-        "search_play"
-      ]
-    },
-    {
-      "id": "algoOsero",
-      "type": "pickString",
-      "description": "Algorithm override for Osero",
-      "default": "search_play",
-      "options": [
-        "search_play",
-        "dqn",
-        "qlearn",
-        "ppo",
-        "a2c",
-        "recurrent_ppo",
-        "mappo",
-        "sac"
-      ]
-    },
-    {
       "id": "level3",
       "type": "pickString",
-      "description": "Play or capture level for 1-3 level games",
+      "description": "Shared difficulty level (maps per game)",
       "default": "3",
       "options": [
         "1",
         "2",
         "3"
-      ]
-    },
-    {
-      "id": "level5",
-      "type": "pickString",
-      "description": "Play or capture level for Kick",
-      "default": "5",
-      "options": [
-        "1",
-        "2",
-        "3",
-        "4",
-        "5"
       ]
     },
     {
@@ -310,41 +125,6 @@
         "best",
         "check",
         "auto"
-      ]
-    },
-    {
-      "id": "resumeLevel3",
-      "type": "pickString",
-      "description": "Resume level for 1-3 level games when using best",
-      "default": "3",
-      "options": [
-        "1",
-        "2",
-        "3"
-      ]
-    },
-    {
-      "id": "resumeLevel5",
-      "type": "pickString",
-      "description": "Resume level for Kick when using best",
-      "default": "5",
-      "options": [
-        "1",
-        "2",
-        "3",
-        "4",
-        "5"
-      ]
-    },
-    {
-      "id": "oseroBoardSize",
-      "type": "pickString",
-      "description": "Osero board size",
-      "default": "6x6",
-      "options": [
-        "4x4",
-        "6x6",
-        "8x8"
       ]
     }
   ]

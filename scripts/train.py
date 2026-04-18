@@ -7,6 +7,7 @@ from pathlib import Path
 
 from core.game import (
     ACTIVE_GAME_ORDER,
+    apply_generic_launch_level,
     apply_seed_from_config,
     apply_training_start_level,
     build_algo_from_config,
@@ -15,7 +16,6 @@ from core.game import (
     parse_override_assignments,
     prepare_run,
     resolve_best_resume_level,
-    resolve_current_level,
     resolve_resume_path,
     set_nested_override,
 )
@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an RL toybox game")
     parser.add_argument("--game", required=True, help=f"Game id ({', '.join(ACTIVE_GAME_ORDER)})")
     parser.add_argument("--algo", default=None, help="Override algorithm id")
+    parser.add_argument("--level", type=int, default=1, help="Shared difficulty selector (defaults to 1)")
     parser.add_argument("--steps", type=int, default=None, help="Normalized training step budget")
     parser.add_argument("--episodes", type=int, default=None, help="Normalized episode/game budget")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
@@ -101,6 +102,7 @@ def _set_resume_best_epsilon_to_bump_cap(algorithm: object) -> float | None:
 def main() -> None:
     args = parse_args()
     configure_logging()
+    launch_level = int(apply_generic_launch_level(args.game, args.level))
 
     prepared = prepare_run(args.game, args.algo, mode="train", user_overrides=_build_train_overrides(args))
     run_paths = prepared.run_paths
@@ -117,11 +119,15 @@ def main() -> None:
     try:
         if resume_mode == "best":
             target_level = int(
-                resolve_best_resume_level(env, explicit_level=args.resume_level, allow_prompt=False)
+                resolve_best_resume_level(
+                    env,
+                    explicit_level=args.resume_level if args.resume_level is not None else int(launch_level),
+                    allow_prompt=False,
+                )
             )
             current_level = apply_training_start_level(env, target_level)
         else:
-            current_level = resolve_current_level(env, default=1)
+            current_level = apply_training_start_level(env, int(launch_level))
         best_path_for_level = run_paths.model_path(current_level, "best")
         explicit_checkpoint = dict(composed_config.get("common", {})).get("checkpoint_path")
         resume_path = Path(str(explicit_checkpoint)) if explicit_checkpoint else resolve_resume_path(

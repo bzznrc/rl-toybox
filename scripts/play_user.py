@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 
 from core.game import (
+    apply_generic_launch_level,
     apply_seed_from_config,
     build_env_from_config,
     compose_run_config,
@@ -43,12 +44,11 @@ def _build_play_overrides(args: argparse.Namespace) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     configure_logging()
+    level = int(apply_generic_launch_level(args.game, args.level))
 
     composed_config = compose_run_config(args.game, mode="play", user_overrides=_build_play_overrides(args))
     apply_seed_from_config(composed_config)
     render = bool(dict(composed_config.get("common", {})).get("render", not bool(args.headless)))
-    runner_kind = str(dict(composed_config.get("algo", {})).get("runner_kind", ""))
-    level = 1 if runner_kind == "search_play" else int(args.level)
     env = build_env_from_config(composed_config, mode="human", render=render, level=int(level))
 
     log_run_context(

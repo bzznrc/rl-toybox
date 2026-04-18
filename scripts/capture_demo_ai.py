@@ -11,6 +11,7 @@ import arcade
 from PIL import Image
 
 from core.game import (
+    apply_generic_launch_level,
     apply_seed_from_config,
     build_algo_from_config,
     build_env_from_config,
@@ -55,10 +56,6 @@ def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
     if args.checkpoint:
         set_nested_override(overrides, "common.checkpoint_path", str(Path(args.checkpoint)))
     return overrides
-
-
-def _resolve_level(runner_kind: str, requested_level: int) -> int:
-    return 1 if str(runner_kind).strip().lower() == "search_play" else max(1, int(requested_level))
 
 
 def _resolve_game_fps(game_id: str) -> int:
@@ -112,17 +109,16 @@ def _save_gif(frames: list[Image.Image], output_path: Path, capture_fps: int) ->
 def main() -> None:
     args = parse_args()
     configure_logging()
+    level = int(apply_generic_launch_level(args.game, args.level))
 
     prepared = prepare_run(args.game, args.algo, mode="eval", user_overrides=_build_eval_overrides(args))
     run_paths = prepared.run_paths
     composed_config = prepared.config
     game_id = str(dict(composed_config.get("game", {})).get("id", args.game))
     algo_id = str(dict(composed_config.get("algo", {})).get("id", args.algo or ""))
-    runner_kind = str(dict(composed_config.get("algo", {})).get("runner_kind", ""))
     apply_seed_from_config(composed_config)
     algorithm = build_algo_from_config(composed_config)
 
-    level = _resolve_level(runner_kind, int(args.level))
     explicit_checkpoint = dict(composed_config.get("common", {})).get("checkpoint_path")
     if explicit_checkpoint:
         model_path = Path(str(explicit_checkpoint))

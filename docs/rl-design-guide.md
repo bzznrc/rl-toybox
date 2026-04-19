@@ -110,7 +110,7 @@ For board self-play, the action mask stays outside the observation.
 ### Current repo examples
 
 - `snake`: `self_*`, `sens_*`, `tgt_*`
-- `fuse`: `self_*`, `sens_*`, `opp_*`, `map_*`, `haz_*`, `flag_*`
+- `bang`: `self_*`, `sens_*`, `opp_*`, `haz_*`
 - `vroom`: `self_*`, `sens_*`, `flag_*`
 - `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`
 - `osero`: `board_r*_c*`
@@ -143,12 +143,9 @@ When docs enumerate the active lineup, use:
 
 1. `snake`
 2. `bang`
-3. `fuse`
-4. `vroom`
-5. `trail`
-6. `cardz`
-7. `osero`
-8. `kick`
+3. `vroom`
+4. `osero`
+5. `kick`
 
 ### Required top-level section order
 

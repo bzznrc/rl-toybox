@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from core.game import build_exploration_config
-from games.cardz import config as cardz_config
 from games.kick import config as kick_config
 from games.osero import config as osero_config
 
@@ -54,17 +53,6 @@ PAIR_OVERRIDES: dict[tuple[str, str], dict[str, object]] = {
                 "hidden_sizes": list(osero_config.POLICY_VALUE_HIDDEN_DIMENSIONS),
                 "simulations_per_move": int(osero_config.SIMULATIONS_PER_MOVE),
                 "dirichlet_alpha": float(osero_config.DIRICHLET_ALPHA),
-            }
-        },
-    },
-    (
-        "cardz",
-        "a2c",
-    ): {
-        "algo": {
-            "config": {
-                "share_backbone": True,
-                "entropy_coef": float(cardz_config.LEVEL_SETTINGS[int(cardz_config.MIN_LEVEL)]["entropy_coef"]),
             }
         },
     },

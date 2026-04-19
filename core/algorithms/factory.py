@@ -1,50 +1,11 @@
-"""Algorithm factory helpers driven by GameSpec and algo id."""
+"""Algorithm factory helpers that dispatch into the family-specific implementations."""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Mapping
-
-import numpy as np
 
 from core.algorithms.base import Algorithm
 from core.envs.spaces import Box, Discrete, Space
-
-
-ON_POLICY_ALGO_IDS = frozenset({"ppo", "recurrent_ppo", "a2c", "mappo"})
-OFF_POLICY_ALGO_IDS = frozenset({"qlearn", "dqn", "sac", "search_play"})
-
-
-def is_on_policy_algo(algo_id: str) -> bool:
-    return str(algo_id).strip().lower() in ON_POLICY_ALGO_IDS
-
-
-class PlaceholderAlgorithm(Algorithm):
-    """No-op algorithm used for scaffold-first entries that are not implemented yet."""
-
-    def __init__(self, *, algo_id: str, action_space: Space):
-        self.algo_id = str(algo_id)
-        self._action_space = action_space
-
-    def act(self, obs: np.ndarray, explore: bool) -> int | np.ndarray:
-        del obs, explore
-        if isinstance(self._action_space, Discrete):
-            return 0
-        return np.zeros(self._action_space.shape, dtype=np.float32)
-
-    def observe(self, transition: dict[str, object]) -> None:
-        del transition
-
-    def update(self) -> dict[str, float]:
-        return {}
-
-    def save(self, path: str) -> None:
-        payload = {"algo_id": self.algo_id, "placeholder": True}
-        Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    def load(self, path: str) -> None:
-        _ = Path(path).read_text(encoding="utf-8")
 
 
 def build_algorithm(

@@ -35,10 +35,7 @@ OFF_POLICY_TRAIN_DEFAULTS: dict[str, Any] = {
 ACTIVE_GAME_ORDER: tuple[str, ...] = (
     "snake",
     "bang",
-    "fuse",
     "vroom",
-    "trail",
-    "cardz",
     "osero",
     "kick",
 )
@@ -855,21 +852,15 @@ def _build_game_specs() -> dict[str, GameSpec]:
     # Import game specs lazily so the shared builders above can be imported
     # from each game spec without triggering a circular import.
     from games.bang.spec import SPEC as bang_spec
-    from games.cardz.spec import SPEC as cardz_spec
-    from games.fuse.spec import SPEC as fuse_spec
     from games.kick.spec import SPEC as kick_spec
     from games.osero.spec import SPEC as osero_spec
     from games.snake.spec import SPEC as snake_spec
-    from games.trail.spec import SPEC as trail_spec
     from games.vroom.spec import SPEC as vroom_spec
 
     specs = (
         snake_spec,
         bang_spec,
-        fuse_spec,
         vroom_spec,
-        trail_spec,
-        cardz_spec,
         osero_spec,
         kick_spec,
     )

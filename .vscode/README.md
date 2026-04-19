@@ -20,10 +20,7 @@ All games now use the same shared launch shape:
 
 - `snake`
 - `bang`
-- `fuse`
 - `vroom`
-- `trail`
-- `cardz`
 - `osero`
 - `kick`
 

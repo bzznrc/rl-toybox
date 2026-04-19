@@ -75,15 +75,12 @@
     {
       "id": "gameLevel3",
       "type": "pickString",
-      "description": "Game using the shared 3-level launch flow",
+      "description": "Active game using the shared launch flow",
       "default": "bang",
       "options": [
         "snake",
         "bang",
-        "fuse",
         "vroom",
-        "trail",
-        "cardz",
         "osero",
         "kick"
       ]

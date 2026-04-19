@@ -29,12 +29,9 @@ Per-game snapshots live in `games/<game>/README.md`.
 | --- | --- | --- | --- |
 | `snake` | Intro game | simple value-based | active |
 | `bang` | Flagship discrete RL game | value-based / Rainbow-lite | active |
-| `fuse` | Bomb-timing and chain-reaction showcase | value-based / Rainbow-lite | active |
 | `vroom` | Continuous control showcase | actor-critic / SAC | active |
-| `trail` | Adversarial spatial-control showcase | actor-critic / PPO direction | active |
-| `cardz` | Stochastic hidden-info actor-critic game | actor-critic / A2C direction | active |
 | `osero` | Planning + self-play capstone | search + self-play | active |
-| `kick` | Multi-agent CTDE experiment | MARL / CTDE | active |
+| `kick` | Multi-agent CTDE experiment | actor-critic / PPO + CTDE | active |
 
 ## 3) Repository Layout and Shared Responsibilities
 
@@ -49,22 +46,23 @@ Per-game snapshots live in `games/<game>/README.md`.
 - active lineup registry
 - shared metadata used by CLI entrypoints
 - run-name builders and train-config builders
+- `core/algorithms/`
+- thin shared interface/factory layer plus exploration scheduling helpers
 - `core/value_discrete/`
 - shared tabular/linear-Q and DQN-family infrastructure
 - home for value-based helpers such as Double DQN, PER, dueling heads, and action masking support
 - `core/actor_critic/`
 - shared PPO/A2C/recurrent PPO/SAC infrastructure
-- target home for shared rollout, policy, critic, encoder, and continuous-control helpers
+- target home for shared rollout, policy, critic, centralized-critic, and continuous-control helpers
 - `core/search_play/`
 - compact MCTS, self-play training, and policy/value helpers for `osero`
-- `core/marl_ctde/`
-- CTDE helpers for `kick`
 - `core/io/`, `core/runners/`, and `core/logging_utils.py`
 - shared run IO, training loops, and logging behavior
 
 ### Ownership boundaries
 
 - Reusable RL code belongs under the appropriate `core/<family>/` area.
+- Keep `core/algorithms/` minimal and family-agnostic: shared interfaces, builders, and cross-family helpers only.
 - Game-specific env logic stays under `games/<game>/`.
 - Avoid introducing large new abstractions until a second pass actually needs them.
 
@@ -86,27 +84,23 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 ### `core/value_discrete/`
 
-- Used by: `snake`, `bang`, `fuse`
+- Used by: `snake`, `bang`
 - Contains: linear-Q / q-learning, DQN family modules, replay, and value nets
 
 ### `core/actor_critic/`
 
-- Used by: `vroom`, `trail`, `cardz`
-- Contains: PPO, recurrent PPO support, SAC, shared actor-critic rollout machinery
+- Used by: `vroom`, `kick`
+- Contains: PPO, recurrent PPO support, SAC, shared actor-critic rollout machinery, and centralized-critic support
 
 ### `core/search_play/`
 
 - Used by: `osero`
 - Contains: compact MCTS, search-play training, and small policy/value helpers
 
-### `core/marl_ctde/`
-
-- Used by: `kick`
-- Contains: centralized-critic data helpers and the CTDE-specific staging area
-
 ## 7) Special Areas
 
 - `kick` stays in-tree and runnable as the repo's CTDE and centralized-critic game.
+- Its centralized-critic support lives on the shared PPO path plus game-provided central observation metadata.
 - `vroom` sits on the actor-critic and continuous-control branch with SAC-oriented defaults.
 
 ## 8) Checklist for New Changes

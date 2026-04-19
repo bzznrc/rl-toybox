@@ -56,15 +56,16 @@ The observation stays compact by mixing only three kinds of signal: immediate co
 - `REWARD_WIN = +1.0` on win
 - `PENALTY_LOSE = -1.0` on loss
 - `REWARD_DRAW = 0.0` on simultaneous crash or timeout draw
-- No shaping reward is added between terminal events
+- Small dense shaping is added from the chosen move's immediate space-control score
+- The shaping term is clipped and supportive only, so terminal win/loss still dominates the return
 
 ## Curriculum (Train)
 
 - Shared 3-level curriculum progression from `core/curriculum.py`
-- Difficulty comes from a stronger deterministic opponent evaluation, not from extra mechanics
+- Difficulty comes from one stronger deterministic opponent-strength knob per level, not from extra mechanics
 - Levels:
-  - Level 1: basic space-first opponent
-  - Level 2: stronger area-advantage opponent
+  - Level 1: forgiving space-first opponent
+  - Level 2: balanced area-control opponent
   - Level 3: strongest pressure-aware opponent
 
 An episode counts as a success if the player wins the duel.
@@ -86,4 +87,4 @@ PowerShell preset switch:
 $env:TRAIL_OBS_PRESET='tiny'; python -m scripts.train --game trail
 ```
 
-See `games/trail/config.py` for the observation presets, opponent weights, and reward constants. Shared PPO defaults live in `core/game.py`.
+See `games/trail/config.py` for the observation presets, opponent-strength levels, and reward constants. Shared PPO defaults live in `core/game.py`.

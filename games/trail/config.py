@@ -118,29 +118,17 @@ CURRICULUM_PROMOTION = {
 LEVEL_SETTINGS = {
     1: {
         "max_episode_steps": 260,
-        "opponent_area_weight": 0.65,
-        "opponent_advantage_weight": 0.15,
-        "opponent_pressure_weight": 0.00,
-        "opponent_center_weight": 0.18,
-        "opponent_straight_bias": 0.06,
+        "opponent_strength": 0.15,
         "entropy_coef": 0.020,
     },
     2: {
         "max_episode_steps": 300,
-        "opponent_area_weight": 0.90,
-        "opponent_advantage_weight": 0.28,
-        "opponent_pressure_weight": 0.08,
-        "opponent_center_weight": 0.08,
-        "opponent_straight_bias": 0.03,
+        "opponent_strength": 0.55,
         "entropy_coef": 0.015,
     },
     3: {
         "max_episode_steps": 340,
-        "opponent_area_weight": 1.10,
-        "opponent_advantage_weight": 0.42,
-        "opponent_pressure_weight": 0.16,
-        "opponent_center_weight": 0.02,
-        "opponent_straight_bias": 0.01,
+        "opponent_strength": 1.00,
         "entropy_coef": 0.010,
     },
 }
@@ -150,7 +138,10 @@ LEVEL_SETTINGS = {
 REWARD_WIN = 1.0
 PENALTY_LOSE = -1.0
 REWARD_DRAW = 0.0
+REWARD_SPACE_CONTROL_SCALE = 0.03
+REWARD_SPACE_CONTROL_CLIP = 0.01
 REWARD_COMPONENTS = {
     "outcome.reward_win": REWARD_WIN,
     "outcome.penalty_lose": PENALTY_LOSE,
+    "shape.reward_space_control": REWARD_SPACE_CONTROL_CLIP,
 }

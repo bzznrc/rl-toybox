@@ -64,6 +64,8 @@ from games.trail.config import (
     PENALTY_LOSE,
     PLAY_TOTAL_GAMES,
     REWARD_DRAW,
+    REWARD_SPACE_CONTROL_CLIP,
+    REWARD_SPACE_CONTROL_SCALE,
     REWARD_WIN,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
@@ -132,10 +134,11 @@ class TrailEnv(Env):
     ACTION_PREFERENCE = (ACTION_GO_STRAIGHT, ACTION_TURN_LEFT, ACTION_TURN_RIGHT)
     PLAYER_ID = "player"
     OPPONENT_ID = "opponent"
-    REWARD_COMPONENT_ORDER = ("W", "L")
+    REWARD_COMPONENT_ORDER = ("W", "L", "A")
     REWARD_COMPONENT_KEY_TO_CODE = {
         "outcome.reward_win": "W",
         "outcome.penalty_lose": "L",
+        "shape.reward_space_control": "A",
     }
 
     def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
@@ -182,11 +185,7 @@ class TrailEnv(Env):
         self.max_episode_steps = int(MAX_EPISODE_STEPS)
         self.total_games = int(self._resolve_total_games())
         self.current_game = 1
-        self._opponent_area_weight = 1.0
-        self._opponent_advantage_weight = 0.0
-        self._opponent_pressure_weight = 0.0
-        self._opponent_center_weight = 0.0
-        self._opponent_straight_bias = 0.0
+        self._opponent_strength = 0.0
         self._opponent_commit_ticks_remaining = 0
         self._opponent_opening_release_step = 0
         self._opponent_opening_target_x = 0
@@ -216,6 +215,7 @@ class TrailEnv(Env):
         return {
             "outcome.reward_win": 0.0,
             "outcome.penalty_lose": 0.0,
+            "shape.reward_space_control": 0.0,
         }
 
     def get_entropy_coef_for_level(self, level: int | None = None) -> float | None:
@@ -234,11 +234,7 @@ class TrailEnv(Env):
             raise ValueError(f"Unsupported level '{level}' for Trail.")
         self._current_level = int(level)
         self.max_episode_steps = max(1, int(settings.get("max_episode_steps", MAX_EPISODE_STEPS)))
-        self._opponent_area_weight = float(settings.get("opponent_area_weight", 1.0))
-        self._opponent_advantage_weight = float(settings.get("opponent_advantage_weight", 0.0))
-        self._opponent_pressure_weight = float(settings.get("opponent_pressure_weight", 0.0))
-        self._opponent_center_weight = float(settings.get("opponent_center_weight", 0.0))
-        self._opponent_straight_bias = float(settings.get("opponent_straight_bias", 0.0))
+        self._opponent_strength = float(clip_unit(settings.get("opponent_strength", 1.0)))
 
     def _resolve_total_games(self) -> int:
         if self.mode == "train":
@@ -609,17 +605,23 @@ class TrailEnv(Env):
 
     def _score_opponent_action(self) -> int:
         assert self.player is not None and self.opponent is not None
+        strength = float(clip_unit(self._opponent_strength))
+        area_weight = 0.75 + 0.35 * float(strength)
+        advantage_weight = 0.08 + 0.34 * float(strength)
+        pressure_weight = 0.18 * float(strength)
+        center_weight = 0.20 * (1.0 - float(strength))
+        straight_bias = 0.06 * (1.0 - float(strength))
         action_scores: list[tuple[int, float]] = []
         for action_idx in self.ACTION_PREFERENCE:
             metrics = self._candidate_metrics(self.opponent, self.player, int(action_idx))
             if metrics.collision:
                 continue
             score = (
-                float(self._opponent_area_weight) * float(metrics.self_area)
-                + float(self._opponent_advantage_weight) * float(metrics.area_advantage)
-                + float(self._opponent_pressure_weight) * float(metrics.pressure_score)
-                + float(self._opponent_center_weight) * float(metrics.center_clearance)
-                + (float(self._opponent_straight_bias) if int(action_idx) == int(self.ACTION_GO_STRAIGHT) else 0.0)
+                float(area_weight) * float(metrics.self_area)
+                + float(advantage_weight) * float(metrics.area_advantage)
+                + float(pressure_weight) * float(metrics.pressure_score)
+                + float(center_weight) * float(metrics.center_clearance)
+                + (float(straight_bias) if int(action_idx) == int(self.ACTION_GO_STRAIGHT) else 0.0)
             )
             action_scores.append((int(action_idx), float(score)))
         if not action_scores:
@@ -687,6 +689,7 @@ class TrailEnv(Env):
         player_action = int(self._human_action() if self.mode == "human" else self._decode_action(action))
         opponent_action = int(self._select_opponent_action())
         self.last_action_index = int(player_action)
+        player_action_metrics = self._candidate_metrics(self.player, self.opponent, int(player_action))
 
         player_next_dir = self._dir_after_action(int(self.player.dir_x), int(self.player.dir_y), int(player_action))
         opponent_next_dir = self._dir_after_action(
@@ -752,6 +755,20 @@ class TrailEnv(Env):
             done = True
             draw = True
             reward = float(REWARD_DRAW)
+        else:
+            space_control_score = (
+                0.75 * float(player_action_metrics.area_advantage)
+                + 0.25 * float(player_action_metrics.pressure_score)
+            )
+            raw_space_reward = float(REWARD_SPACE_CONTROL_SCALE) * float(space_control_score)
+            space_reward = float(
+                max(
+                    -abs(float(REWARD_SPACE_CONTROL_CLIP)),
+                    min(abs(float(REWARD_SPACE_CONTROL_CLIP)), raw_space_reward),
+                )
+            )
+            reward += float(space_reward)
+            step_breakdown["shape.reward_space_control"] = float(space_reward)
 
         self.last_reward_breakdown = dict(step_breakdown)
         self._episode_reward_components.add_from_mapping(step_breakdown, self.REWARD_COMPONENT_KEY_TO_CODE)

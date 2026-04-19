@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from dataclasses import dataclass, field
+import math
 import random
 
 import arcade
@@ -54,6 +55,8 @@ from games.fuse.config import (
     ACTION_NAMES as FUSE_ACTION_NAMES,
     ACTION_PLACE_BOMB,
     ACT_DIM as FUSE_ACT_DIM,
+    ARENA_FRAME_PADDING,
+    ARENA_FRAME_BORDER_WIDTH,
     BB_HEIGHT,
     BLAST_RADIUS_TILES,
     BOARD_HEIGHT_TILES,
@@ -188,6 +191,14 @@ class ScriptedPlayerState:
     recent_cells: list[Cell] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ArenaLayout:
+    left: float
+    top: float
+    width_px: float
+    height_px: float
+
+
 class FuseEnv(Env):
     """Masked Bomberman-style free-for-all with scripted opponents."""
 
@@ -241,6 +252,7 @@ class FuseEnv(Env):
         self.board_width = int(BOARD_WIDTH_TILES)
         self.board_height = int(BOARD_HEIGHT_TILES)
         self.tile_size = float(TILE_SIZE)
+        self._arena_layout = self._build_arena_layout()
         self.max_episode_steps = int(MAX_EPISODE_STEPS)
         self.match_tracker = MatchTracker[str](
             history_limit=int(WIN_HISTORY_LIMIT),
@@ -273,6 +285,18 @@ class FuseEnv(Env):
 
         self._apply_level_settings(int(self._current_level))
         self.reset()
+
+    def _build_arena_layout(self) -> ArenaLayout:
+        arena_width = float(self.board_width) * float(TILE_SIZE)
+        arena_height = float(self.board_height) * float(TILE_SIZE)
+        left = max(0.0, (float(SCREEN_WIDTH) - arena_width) * 0.5)
+        top = max(0.0, (float(SCREEN_HEIGHT - BB_HEIGHT) - arena_height) * 0.5)
+        return ArenaLayout(
+            left=float(left),
+            top=float(top),
+            width_px=float(arena_width),
+            height_px=float(arena_height),
+        )
 
     def _zero_reward_breakdown(self) -> dict[str, float]:
         return {
@@ -336,10 +360,10 @@ class FuseEnv(Env):
 
     def _spawn_positions_by_player(self) -> dict[str, Cell]:
         corners = (
-            Cell(1, 1),
-            Cell(self.board_width - 2, self.board_height - 2),
-            Cell(1, self.board_height - 2),
-            Cell(self.board_width - 2, 1),
+            Cell(0, 0),
+            Cell(self.board_width - 1, self.board_height - 1),
+            Cell(0, self.board_height - 1),
+            Cell(self.board_width - 1, 0),
         )
         return {
             player_id: corners[idx]
@@ -368,22 +392,15 @@ class FuseEnv(Env):
 
     def _build_solid_cells(self) -> set[Cell]:
         cells: set[Cell] = set()
-        for x in range(int(self.board_width)):
-            cells.add(Cell(int(x), 0))
-            cells.add(Cell(int(x), int(self.board_height) - 1))
-        for y in range(int(self.board_height)):
-            cells.add(Cell(0, int(y)))
-            cells.add(Cell(int(self.board_width) - 1, int(y)))
-        for top_left_x in range(2, int(self.board_width) - 1, 3):
-            for top_left_y in range(2, int(self.board_height) - 1, 3):
-                for dx in (0, 1):
-                    for dy in (0, 1):
-                        cell = Cell(int(top_left_x) + int(dx), int(top_left_y) + int(dy))
-                        if (
-                            0 < int(cell.x) < int(self.board_width) - 1
-                            and 0 < int(cell.y) < int(self.board_height) - 1
-                        ):
-                            cells.add(cell)
+        for top_left_x in range(1, int(self.board_width) - 1, 3):
+            for top_left_y in range(1, int(self.board_height) - 1, 3):
+                block_cells = {
+                    Cell(int(top_left_x) + int(dx), int(top_left_y) + int(dy))
+                    for dx in (0, 1)
+                    for dy in (0, 1)
+                }
+                if all(self._in_bounds(cell) for cell in block_cells):
+                    cells.update(block_cells)
         return cells
 
     def _resolve_solid_render_groups(self, solid_cells: set[Cell]) -> tuple[list[Cell], set[Cell]]:
@@ -414,8 +431,8 @@ class FuseEnv(Env):
     def _generate_crates(self, safe_cells: set[Cell]) -> set[Cell]:
         candidates = [
             Cell(x, y)
-            for y in range(1, int(self.board_height) - 1)
-            for x in range(1, int(self.board_width) - 1)
+            for y in range(int(self.board_height))
+            for x in range(int(self.board_width))
             if Cell(x, y) not in self.solid_cells and Cell(x, y) not in safe_cells
         ]
         crates = {
@@ -1423,7 +1440,10 @@ class FuseEnv(Env):
         return obs, float(reward), bool(self.done), info
 
     def _cell_top_left(self, cell: Cell) -> tuple[float, float]:
-        return float(int(cell.x) * int(TILE_SIZE)), float(int(cell.y) * int(TILE_SIZE))
+        return (
+            float(self._arena_layout.left) + float(int(cell.x) * int(TILE_SIZE)),
+            float(self._arena_layout.top) + float(int(cell.y) * int(TILE_SIZE)),
+        )
 
     def _draw_board_tile(self, cell: Cell, outer_color, inner_color) -> None:
         top_left_x, top_left_y = self._cell_top_left(cell)
@@ -1456,38 +1476,55 @@ class FuseEnv(Env):
     def _draw_crate_cell(self, cell: Cell) -> None:
         self._draw_board_tile(cell, COLOR_WALNUT, COLOR_BARK)
 
+    def _draw_arena_frame(self) -> None:
+        frame_left = float(self._arena_layout.left) - float(ARENA_FRAME_PADDING)
+        frame_top = float(self._arena_layout.top) - float(ARENA_FRAME_PADDING)
+        frame_width = float(self._arena_layout.width_px) + float(ARENA_FRAME_PADDING) * 2.0
+        frame_height = float(self._arena_layout.height_px) + float(ARENA_FRAME_PADDING) * 2.0
+        frame_bottom = self.window_controller.to_arcade_y(float(frame_top) + float(frame_height))
+        arcade.draw_lbwh_rectangle_outline(
+            float(frame_left),
+            float(frame_bottom),
+            float(frame_width),
+            float(frame_height),
+            COLOR_FOG_GRAY,
+            float(ARENA_FRAME_BORDER_WIDTH),
+        )
+
+    def _bomb_is_pulse_flash(self, bomb: BombState) -> bool:
+        total_fuse = max(1, int(BOMB_FUSE_STEPS))
+        remaining = max(0, int(bomb.fuse))
+        if remaining <= 0:
+            return False
+        elapsed = float(total_fuse - remaining)
+        phase_span = float(total_fuse) / 3.0
+        if phase_span <= 0.0:
+            return False
+        phase_index = min(2, int(elapsed / phase_span))
+        flashes = int(phase_index) + 1
+        phase_start = float(phase_index) * phase_span
+        pulse_width = max(1.0, phase_span / max(1.0, 4.0 * float(flashes)))
+        half_width = 0.5 * pulse_width
+        for pulse_index in range(flashes):
+            pulse_center = phase_start + (
+                (float(pulse_index) + 1.0) * phase_span / (float(flashes) + 1.0)
+            )
+            if math.fabs(elapsed - pulse_center) <= half_width:
+                return True
+        return False
+
     def _draw_bomb(self, bomb: BombState) -> None:
         top_left_x, top_left_y = self._cell_top_left(bomb.cell)
         owner_outline = PLAYER_STYLES[str(bomb.owner_id)]["render_outline"]
+        inner_color = COLOR_LIGHT_NEUTRAL if self._bomb_is_pulse_flash(bomb) else owner_outline
         draw_two_tone_tile(
             self.window_controller,
             top_left_x=float(top_left_x),
             top_left_y=float(top_left_y),
             size=float(TILE_SIZE),
             outer_color=COLOR_SLATE_GRAY,
-            inner_color=COLOR_DARK_NEUTRAL,
+            inner_color=inner_color,
             inset=float(CELL_INSET),
-        )
-        center_x = float(top_left_x) + 0.5 * float(TILE_SIZE)
-        center_y = float(top_left_y) + 0.5 * float(TILE_SIZE)
-        arcade.draw_circle_filled(
-            float(center_x),
-            float(self.window_controller.to_arcade_y(center_y)),
-            max(2.0, 0.18 * float(TILE_SIZE)),
-            owner_outline,
-        )
-        fuse_ratio = float(clip_unit(float(max(0, int(bomb.fuse))) / float(max(1, int(BOMB_FUSE_STEPS)))))
-        fuse_height = max(2.0, round(0.15 * float(TILE_SIZE)))
-        fuse_bottom = self.window_controller.top_left_to_bottom(
-            float(top_left_y) + float(TILE_SIZE) - float(CELL_INSET) - float(fuse_height),
-            float(fuse_height),
-        )
-        arcade.draw_lbwh_rectangle_filled(
-            float(top_left_x) + float(CELL_INSET),
-            float(fuse_bottom),
-            max(2.0, (float(TILE_SIZE) - 2.0 * float(CELL_INSET)) * fuse_ratio),
-            float(fuse_height),
-            owner_outline,
         )
 
     def _draw_explosion_cell(self, cell: Cell) -> None:
@@ -1497,21 +1534,7 @@ class FuseEnv(Env):
         if not player.alive:
             return
         style = PLAYER_STYLES[str(player.player_id)]
-        top_left_x, top_left_y = self._cell_top_left(player.cell)
         self._draw_board_tile(player.cell, style["render_outline"], style["render_fill"])
-        if str(player.player_id) == "P1":
-            marker_size = max(4.0, float(TILE_SIZE) * 0.22)
-            marker_bottom = self.window_controller.top_left_to_bottom(
-                float(top_left_y) + 0.18 * float(TILE_SIZE),
-                marker_size,
-            )
-            arcade.draw_lbwh_rectangle_filled(
-                float(top_left_x) + 0.5 * float(TILE_SIZE) - 0.5 * marker_size,
-                float(marker_bottom),
-                float(marker_size),
-                float(marker_size),
-                COLOR_LIGHT_NEUTRAL,
-            )
 
     def _draw_winner_icon(self, winner_id: str | None, center_x: float, center_y: float, size: float) -> None:
         inset = status_icon_inset(float(CELL_INSET))
@@ -1543,6 +1566,7 @@ class FuseEnv(Env):
             return
 
         self.window_controller.clear(COLOR_DARK_NEUTRAL)
+        self._draw_arena_frame()
         for origin in self.solid_block_origins:
             self._draw_solid_block(origin)
         for cell in sorted(self.solid_cells - self.solid_block_cells, key=lambda item: (int(item.y), int(item.x))):

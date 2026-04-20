@@ -74,25 +74,58 @@ OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
 
 
+# GAME
+DEFAULT_ALGO = "search_play"
+GAME_CAPABILITIES = {
+    "masked_actions": True,
+    "self_play": True,
+}
+ENV_METADATA = {
+    "board_size": int(BOARD_SIZE),
+}
+
+
 # MODEL / SEARCH
-POLICY_VALUE_HIDDEN_DIMENSIONS_BY_SIZE = {
-    4: (48, 48),
-    6: (64, 64),
-    8: (96, 96),
+DEFAULT_MODEL_CONFIG_BY_SIZE = {
+    4: {
+        "hidden_sizes": [48, 48],
+    },
+    6: {
+        "hidden_sizes": [64, 64],
+    },
+    8: {
+        "hidden_sizes": [96, 96],
+    },
 }
-POLICY_VALUE_HIDDEN_DIMENSIONS = tuple(POLICY_VALUE_HIDDEN_DIMENSIONS_BY_SIZE[int(BOARD_SIZE)])
-SIMULATIONS_PER_MOVE_BY_SIZE = {
-    4: 32,
-    6: 48,
-    8: 64,
+ALGO_CONFIG_OVERRIDES_BY_SIZE = {
+    4: {
+        "search_play": {
+        "simulations_per_move": 32,
+        "dirichlet_alpha": 0.5,
+        },
+    },
+    6: {
+        "search_play": {
+        "simulations_per_move": 48,
+        "dirichlet_alpha": 0.35,
+        },
+    },
+    8: {
+        "search_play": {
+        "simulations_per_move": 64,
+        "dirichlet_alpha": 0.25,
+        },
+    },
 }
-SIMULATIONS_PER_MOVE = int(SIMULATIONS_PER_MOVE_BY_SIZE[int(BOARD_SIZE)])
 CPUCT = 1.25
-DIRICHLET_ALPHA_BY_SIZE = {
-    4: 0.5,
-    6: 0.35,
-    8: 0.25,
-}
-DIRICHLET_ALPHA = float(DIRICHLET_ALPHA_BY_SIZE[int(BOARD_SIZE)])
 DIRICHLET_EPSILON = 0.25
 TEMPERATURE_SAMPLE_MOVES = 10
+
+
+# TRAINING
+DEFAULT_MODEL_CONFIG = dict(DEFAULT_MODEL_CONFIG_BY_SIZE[int(BOARD_SIZE)])
+ALGO_CONFIG_OVERRIDES = dict(ALGO_CONFIG_OVERRIDES_BY_SIZE[int(BOARD_SIZE)])
+DEFAULT_TRAIN_CONFIG = {
+    "budget": 12_000_000,
+    "checkpoint_every": 25,
+}

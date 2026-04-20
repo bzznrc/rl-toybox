@@ -150,6 +150,10 @@ if OBS_DIM != 56:
     raise RuntimeError(f"Kick INPUT_FEATURE_NAMES expected 56 entries, got {OBS_DIM}.")
 
 
+# GAME
+DEFAULT_ALGO = "ppo"
+
+
 # CURRICULUM
 MIN_LEVEL = 1
 MAX_LEVEL = 5
@@ -244,3 +248,28 @@ if MAX_LEFT_PLAYERS != 7:
     raise RuntimeError(f"Kick MAX_LEFT_PLAYERS expected 7, got {MAX_LEFT_PLAYERS}.")
 if CENTRAL_OBS_DIM != 405:
     raise RuntimeError(f"Kick CENTRAL_OBS_DIM expected 405, got {CENTRAL_OBS_DIM}.")
+
+GAME_CAPABILITIES = {
+    "centralized_critic_required": True,
+}
+ENV_METADATA = {
+    "central_obs_dim": int(CENTRAL_OBS_DIM),
+}
+
+
+# TRAINING
+DEFAULT_MODEL_CONFIG = {
+    "hidden_sizes": [96, 96],
+    "critic_hidden_sizes": [192, 192],
+}
+ALGO_CONFIG_OVERRIDES = {
+    "ppo": {
+    "minibatch_size": 512,
+    "entropy_coef": float(LEVEL_SETTINGS[int(MIN_LEVEL)]["entropy_coef"]),
+    }
+}
+DEFAULT_TRAIN_CONFIG = {
+    "budget": 12_000_000,
+    "rollout_steps": 2_048,
+    "checkpoint_every": 10,
+}

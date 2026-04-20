@@ -32,7 +32,7 @@ CAPTURE_FPS = 30
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture a short rendered AI demo")
     parser.add_argument("--game", required=True, help="Game id")
-    parser.add_argument("--algo", default=None, help="Override algorithm id")
+    parser.add_argument("--algo", default=None, help="Override algorithm id; use auto/default to keep the game's default")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
     parser.add_argument("--checkpoint", default=None, help="Explicit checkpoint path to load")
     parser.add_argument("--level", type=int, default=3, help="Curriculum level selector")

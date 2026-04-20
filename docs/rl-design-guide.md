@@ -54,16 +54,24 @@ Each game config should prefer this order:
 1. `RUNTIME`
 2. `ENV`
 3. `IO`
-4. `CURRICULUM`
-5. `REWARDS`
-6. `TRAINING`
+4. `GAME`
+5. `CURRICULUM`
+6. `REWARDS`
+7. `TRAINING`
 
 ### Ownership boundaries
 
 - Keep `config.py` declarative and constants-only.
 - Put shared training/runtime boilerplate in shared `core/` code.
 - Keep future placeholder configs lightweight rather than speculative.
-- Treat `config.py` as the per-game source of truth for `INPUT_FEATURE_NAMES`, `ACTION_NAMES`, observation/action dimensions, and default network sizes.
+- Treat `config.py` as the per-game source of truth for `INPUT_FEATURE_NAMES`, `ACTION_NAMES`, observation/action dimensions, default network sizes, and the default training stop budget in `DEFAULT_TRAIN_CONFIG["budget"]`.
+- The standard active-game training/config template is `DEFAULT_ALGO`, `DEFAULT_MODEL_CONFIG`, `ALGO_CONFIG_OVERRIDES`, and `DEFAULT_TRAIN_CONFIG`.
+- Put cross-algo model fundamentals such as `hidden_sizes` and `critic_hidden_sizes` in `DEFAULT_MODEL_CONFIG`.
+- Use `ALGO_CONFIG_OVERRIDES[algo_id]` only for true algo-specific deltas such as PPO entropy, DQN replay/exploration settings, or search-play simulations.
+- `DEFAULT_TRAIN_CONFIG["budget"]` is the common stop knob across active games; its unit is total environment steps for value-based and actor-critic families, and self-play games for search-play. It should still apply when a game is launched with a non-default compatible algo.
+- Runner-specific train keys such as `rollout_steps`, `train_after_steps`, or `updates_per_game` should only affect runners that actually use them.
+- When a game needs non-default action-space bounds, capability flags, env metadata, or default algo/train config, keep them in `config.py` and let `core/game.py` build the shared spec directly from `config.py` + `env.py`.
+- Active games should not rely on a hidden post-config pair-override layer. Shared family defaults may supply the baseline, but `config.py` is the final default layer before explicit user overrides.
 
 ## 4) Observation Taxonomy
 
@@ -111,6 +119,7 @@ For board self-play, the action mask stays outside the observation.
 
 - `snake`: `self_*`, `sens_*`, `tgt_*`
 - `bang`: `self_*`, `sens_*`, `opp_*`, `haz_*`
+- `jump`: `self_*`, `sens_*`, `land_*`, `opp_*`, `flag_*`
 - `vroom`: `self_*`, `sens_*`, `flag_*`
 - `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`
 - `osero`: `board_r*_c*`
@@ -143,9 +152,10 @@ When docs enumerate the active lineup, use:
 
 1. `snake`
 2. `bang`
-3. `vroom`
-4. `osero`
-5. `kick`
+3. `jump`
+4. `vroom`
+5. `osero`
+6. `kick`
 
 ### Required top-level section order
 

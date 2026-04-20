@@ -11,6 +11,7 @@ from core.arcade_style import (
     screen_height,
     screen_width,
 )
+from core.game import build_exploration_config
 from core.utils import env_flag
 
 
@@ -105,6 +106,10 @@ ACTION_AIM_RIGHT = 6
 ACTION_SHOOT = 7
 
 
+# GAME
+DEFAULT_ALGO = "dqn"
+
+
 # CURRICULUM
 MIN_LEVEL = 1
 MAX_LEVEL = 3
@@ -155,4 +160,39 @@ REWARD_COMPONENTS = {
     "progress.engagement_scale": ENGAGEMENT_SCALE,
     "progress.hazard_scale": HAZARD_SCALE,
     "step.penalty_step": PENALTY_STEP,
+}
+
+
+# TRAINING
+DEFAULT_MODEL_CONFIG = {
+    "hidden_sizes": [64, 64],
+}
+ALGO_CONFIG_OVERRIDES = {
+    "dqn": {
+    "batch_size": 256,
+    "replay_size": 500_000,
+    "target_sync_every": 10_000,
+    "weight_decay": 1e-5,
+    "exploration": build_exploration_config(
+        1.0,
+        0.05,
+        2_500_000,
+        patience_episodes=150,
+        min_improvement=0.10,
+        eps_bump_cap=0.35,
+        bump_cooldown_steps=1_250_000,
+    ),
+    "prioritized_replay": True,
+    "per_alpha": 0.6,
+    "per_beta_start": 0.4,
+    "per_beta_frames": 10_000_000,
+    "per_epsilon": 1e-4,
+    }
+}
+DEFAULT_TRAIN_CONFIG = {
+    "budget": 9_000_000,
+    "checkpoint_every": 200_000,
+    "train_after_steps": 50_000,
+    "update_every_steps": 4,
+    "updates_per_step": 1,
 }

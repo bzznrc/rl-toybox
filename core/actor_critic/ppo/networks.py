@@ -11,6 +11,27 @@ import torch.nn as nn
 RecurrentState: TypeAlias = torch.Tensor | tuple[torch.Tensor, torch.Tensor]
 
 
+def _init_linear(layer: nn.Linear, *, gain: float) -> None:
+    nn.init.orthogonal_(layer.weight, gain=float(gain))
+    nn.init.constant_(layer.bias, 0.0)
+
+
+def _init_mlp(module: nn.Module, *, gain: float = 2**0.5) -> None:
+    for child in module.modules():
+        if isinstance(child, nn.Linear):
+            _init_linear(child, gain=float(gain))
+
+
+def _init_recurrent(module: nn.GRU | nn.LSTM) -> None:
+    for name, param in module.named_parameters():
+        if "weight_ih" in name:
+            nn.init.xavier_uniform_(param)
+        elif "weight_hh" in name:
+            nn.init.orthogonal_(param)
+        elif "bias" in name:
+            nn.init.constant_(param, 0.0)
+
+
 def build_mlp(input_dim: int, hidden_sizes: list[int]) -> tuple[nn.Sequential, int]:
     layers: list[nn.Module] = []
     in_features = int(input_dim)
@@ -69,6 +90,17 @@ class ActorCritic(nn.Module):
             self.log_std = None
         self.min_log_std = float(min_log_std)
         self.max_log_std = float(max_log_std)
+        self._reset_parameters()
+
+    def _reset_parameters(self) -> None:
+        if self.shared_backbone is not None:
+            _init_mlp(self.shared_backbone)
+        else:
+            _init_mlp(self.actor_backbone)
+            _init_mlp(self.critic_backbone)
+
+        _init_linear(self.policy_head, gain=0.01)
+        _init_linear(self.value_head, gain=1.0)
 
     def policy(self, obs: torch.Tensor) -> torch.Tensor:
         if obs.dim() == 1:
@@ -169,6 +201,15 @@ class RecurrentActorCritic(nn.Module):
             self.log_std = None
         self.min_log_std = float(min_log_std)
         self.max_log_std = float(max_log_std)
+        self._reset_parameters()
+
+    def _reset_parameters(self) -> None:
+        _init_mlp(self.encoder)
+        _init_recurrent(self.recurrent)
+        _init_mlp(self.actor_backbone)
+        _init_mlp(self.critic_backbone)
+        _init_linear(self.policy_head, gain=0.01)
+        _init_linear(self.value_head, gain=1.0)
 
     def zero_state(self, batch_size: int, device: torch.device) -> RecurrentState:
         base = torch.zeros(

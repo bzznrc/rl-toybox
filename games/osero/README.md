@@ -95,4 +95,4 @@ python -m scripts.play_ai --game osero --render
 python -m scripts.play_user --game osero
 ```
 
-See `games/osero/config.py` and `games/osero/rules.py` for board-size selection, rewards, and the compact rules implementation. Shared search-play defaults live in `core/game.py`, and the remaining Osero-specific search-play deltas live in `core/pair_overrides.py`.
+See `games/osero/config.py` and `games/osero/rules.py` for board-size selection, rewards, compact rules, and the default search-play settings. Osero's board-size net defaults live in `DEFAULT_MODEL_CONFIG_BY_SIZE`, its search-specific deltas live in `ALGO_CONFIG_OVERRIDES_BY_SIZE`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

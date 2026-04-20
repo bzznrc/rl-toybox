@@ -29,6 +29,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 | --- | --- | --- | --- |
 | `snake` | Intro game | simple value-based | active |
 | `bang` | Flagship discrete RL game | value-based / Rainbow-lite | active |
+| `jump` | Reactive traversal platformer | actor-critic / PPO | active |
 | `vroom` | Continuous control showcase | actor-critic / SAC | active |
 | `osero` | Planning + self-play capstone | search + self-play | active |
 | `kick` | Multi-agent CTDE experiment | actor-critic / PPO + CTDE | active |
@@ -39,12 +40,11 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 - `games/<game_name>/`
 - `env.py`: game-specific environment logic
-- `config.py`: declarative game knobs only
-- `spec.py`: `GameSpec` assembly and runtime defaults
+- `config.py`: declarative game knobs, including game-owned model defaults, algo-specific overrides, train defaults, and any non-default spec metadata
 - `README.md`: current implementation snapshot
 - `core/game.py`
 - active lineup registry
-- shared metadata used by CLI entrypoints
+- shared metadata/spec building used by CLI entrypoints
 - run-name builders and train-config builders
 - `core/algorithms/`
 - thin shared interface/factory layer plus exploration scheduling helpers
@@ -89,7 +89,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 ### `core/actor_critic/`
 
-- Used by: `vroom`, `kick`
+- Used by: `jump`, `vroom`, `kick`
 - Contains: PPO, recurrent PPO support, SAC, shared actor-critic rollout machinery, and centralized-critic support
 
 ### `core/search_play/`
@@ -100,6 +100,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 ## 7) Special Areas
 
 - `kick` stays in-tree and runnable as the repo's CTDE and centralized-critic game.
+- `jump` sits on the shared PPO path as the repo's compact single-agent traversal showcase.
 - Its centralized-critic support lives on the shared PPO path plus game-provided central observation metadata.
 - `vroom` sits on the actor-critic and continuous-control branch with SAC-oriented defaults.
 

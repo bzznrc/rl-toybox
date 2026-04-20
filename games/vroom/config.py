@@ -80,6 +80,14 @@ OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
 
 
+# GAME
+DEFAULT_ALGO = "sac"
+ACTION_SPACE_BOUNDS = {
+    "low": [-1.0, 0.0, 0.0],
+    "high": [1.0, 1.0, 1.0],
+}
+
+
 # VEHICLE MECHANICS
 # Surface grip multiplier when fully off-track (1.0 on-track).
 OFF_TRACK_SURFACE_GRIP = 0.50
@@ -140,4 +148,15 @@ REWARD_COMPONENTS = {
     "progress.scale": PROGRESS_SCALE,
     "event.penalty_collision": PENALTY_COLLISION,
     "step.penalty_step": PENALTY_STEP,
+}
+
+
+# TRAINING
+DEFAULT_MODEL_CONFIG = {
+    "hidden_sizes": [64, 64],
+}
+ALGO_CONFIG_OVERRIDES = {}
+DEFAULT_TRAIN_CONFIG = {
+    "budget": 9_000_000,
+    "checkpoint_every": 100_000,
 }

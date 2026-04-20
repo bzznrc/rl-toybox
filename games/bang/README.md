@@ -117,4 +117,4 @@ python -m scripts.play_ai --game bang --render
 python -m scripts.play_user --game bang
 ```
 
-See `games/bang/config.py` for the game constants, rewards, and curriculum settings. Shared DQN defaults live in `core/game.py`, and the remaining Bang-specific DQN deltas live in `core/pair_overrides.py`.
+See `games/bang/config.py` for the game constants, rewards, curriculum settings, and training defaults. Bang's game-wide net size lives in `DEFAULT_MODEL_CONFIG["hidden_sizes"]`, its DQN-specific extras live in `ALGO_CONFIG_OVERRIDES["dqn"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

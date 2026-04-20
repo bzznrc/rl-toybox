@@ -20,6 +20,7 @@ All games now use the same shared launch shape:
 
 - `snake`
 - `bang`
+- `jump`
 - `vroom`
 - `osero`
 - `kick`
@@ -36,9 +37,9 @@ The train / play-ai / capture configs keep an algo dropdown because the CLI supp
 
 Those dropdowns are intentionally static as well. VS Code will not auto-filter incompatible game/algo pairs. If you pick an invalid pair, the repo's compatibility checks will fail fast with a clear error.
 
-The defaults are chosen to match the default launch game:
+The shared default is now:
 
-- `Run - *` defaults to `bang + dqn`
+- `Run - *` defaults to `auto`, which resolves to each game's `DEFAULT_ALGO` from `games/<game>/config.py`
 
 ## Adding A New Game Later
 

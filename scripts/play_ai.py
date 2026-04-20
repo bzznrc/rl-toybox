@@ -26,7 +26,7 @@ def _normalize_choice(value: str) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Play with a trained RL agent")
     parser.add_argument("--game", required=True, help="Game id")
-    parser.add_argument("--algo", default=None, help="Override algorithm id")
+    parser.add_argument("--algo", default=None, help="Override algorithm id; use auto/default to keep the game's default")
     parser.add_argument(
         "--model",
         default="best",

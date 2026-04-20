@@ -55,6 +55,10 @@ OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
 
 
+# GAME
+DEFAULT_ALGO = "qlearn"
+
+
 # CURRICULUM
 MIN_LEVEL = 1
 MAX_LEVEL = 3
@@ -95,4 +99,15 @@ REWARD_COMPONENTS = {
     "event.reward_food": REWARD_FOOD,
     "progress.scale": PROGRESS_SCALE,
     "step.penalty_step": PENALTY_STEP,
+}
+
+
+# TRAINING
+DEFAULT_MODEL_CONFIG = {
+    "hidden_sizes": [32],
+}
+ALGO_CONFIG_OVERRIDES = {}
+DEFAULT_TRAIN_CONFIG = {
+    "budget": 3_000_000,
+    "checkpoint_every": 100_000,
 }

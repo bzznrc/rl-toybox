@@ -25,7 +25,7 @@ from core.logging_utils import configure_logging, log_key_values, log_run_contex
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an RL toybox game")
     parser.add_argument("--game", required=True, help=f"Game id ({', '.join(ACTIVE_GAME_ORDER)})")
-    parser.add_argument("--algo", default=None, help="Override algorithm id")
+    parser.add_argument("--algo", default=None, help="Override algorithm id; use auto/default to keep the game's default")
     parser.add_argument("--level", type=int, default=1, help="Shared difficulty selector (defaults to 1)")
     parser.add_argument("--steps", type=int, default=None, help="Normalized training step budget")
     parser.add_argument("--episodes", type=int, default=None, help="Normalized episode/game budget")
@@ -173,6 +173,9 @@ def main() -> None:
             {
                 "game": game_id,
                 "algo": algo_id,
+                "net": dict(dict(composed_config.get("algo", {})).get("config", {})).get("hidden_sizes"),
+                "critic_net": dict(dict(composed_config.get("algo", {})).get("config", {})).get("critic_hidden_sizes"),
+                "budget": dict(dict(composed_config.get("run", {})).get("train", {})).get("budget"),
                 "run": run_paths.run_dir,
                 "level": int(current_level),
                 "resume": resume_path if resume_path is not None else "scratch",

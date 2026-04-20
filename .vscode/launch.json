@@ -80,6 +80,7 @@
       "options": [
         "snake",
         "bang",
+        "jump",
         "vroom",
         "osero",
         "kick"
@@ -88,9 +89,10 @@
     {
       "id": "algoLevel3",
       "type": "pickString",
-      "description": "Algorithm override for the selected game",
-      "default": "dqn",
+      "description": "Algorithm override for the selected game (use auto for the game's default)",
+      "default": "auto",
       "options": [
+        "auto",
         "qlearn",
         "dqn",
         "sac",

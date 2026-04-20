@@ -159,4 +159,4 @@ python -m scripts.play_ai --game kick --render
 python -m scripts.play_user --game kick
 ```
 
-See `games/kick/config.py` and `games/kick/env.py` for the CTDE runtime, rewards, and curriculum settings. Shared PPO defaults live in `core/game.py`, and the remaining Kick-specific PPO deltas live in `core/pair_overrides.py`.
+See `games/kick/config.py` and `games/kick/env.py` for the CTDE runtime, rewards, curriculum settings, and training defaults. Kick's game-wide actor and critic sizes live in `DEFAULT_MODEL_CONFIG["hidden_sizes"]` and `DEFAULT_MODEL_CONFIG["critic_hidden_sizes"]`, its PPO-specific extras live in `ALGO_CONFIG_OVERRIDES["ppo"]`, its level-specific entropy schedule lives in `LEVEL_SETTINGS[*]["entropy_coef"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

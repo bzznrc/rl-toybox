@@ -31,10 +31,12 @@ OFF_POLICY_TRAIN_DEFAULTS: dict[str, Any] = {
     "reward_window": int(EXPLORATION_AVG_WINDOW_EPISODES),
     "min_episodes_for_stats": int(MIN_EPISODES_FOR_STATS),
 }
+DEFAULT_ALGO_TOKENS = frozenset({"", "auto", "default", "game"})
 
 ACTIVE_GAME_ORDER: tuple[str, ...] = (
     "snake",
     "bang",
+    "jump",
     "vroom",
     "osero",
     "kick",
@@ -61,6 +63,9 @@ class GameSpec:
     capabilities: "GameCapabilities"
     device: str = "cpu"
     env_metadata: dict[str, object] = field(default_factory=dict)
+    default_model_config: dict[str, object] = field(default_factory=dict)
+    algo_config_overrides: dict[str, dict[str, object]] = field(default_factory=dict)
+    default_train_config: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,50 @@ def build_env_factory(env_type: type[Env]) -> Callable[..., Env]:
     return make_env
 
 
+def _derive_game_id_from_config(config_module: object) -> str:
+    explicit = getattr(config_module, "GAME_ID", None)
+    if explicit is not None:
+        return str(explicit).strip().lower()
+    module_name = str(getattr(config_module, "__name__", "")).strip()
+    parts = [part for part in module_name.split(".") if part]
+    if len(parts) >= 2 and str(parts[-1]).strip().lower() == "config":
+        return str(parts[-2]).strip().lower()
+    raise ValueError(f"Unable to derive game_id from config module '{module_name}'.")
+
+
+def _build_action_space_from_config(config_module: object) -> Space:
+    bounds = getattr(config_module, "ACTION_SPACE_BOUNDS", None)
+    if bounds is not None:
+        low = dict(bounds).get("low")
+        high = dict(bounds).get("high")
+        return Box(
+            shape=(int(getattr(config_module, "ACT_DIM")),),
+            low=low,
+            high=high,
+        )
+    return Discrete(int(getattr(config_module, "ACT_DIM")))
+
+
+def build_game_spec_from_config(*, config_module: object, env_type: type[Env]) -> GameSpec:
+    algo_config_overrides = {
+        str(algo_id).strip().lower(): dict(config_values)
+        for algo_id, config_values in dict(getattr(config_module, "ALGO_CONFIG_OVERRIDES", {})).items()
+    }
+    return GameSpec(
+        game_id=_derive_game_id_from_config(config_module),
+        default_algo=str(getattr(config_module, "DEFAULT_ALGO")).strip().lower(),
+        make_env=build_env_factory(env_type),
+        obs_dim=int(getattr(config_module, "OBS_DIM")),
+        action_space=_build_action_space_from_config(config_module),
+        capabilities=GameCapabilities(**dict(getattr(config_module, "GAME_CAPABILITIES", {}))),
+        device="cuda" if bool(getattr(config_module, "USE_GPU", False)) else "cpu",
+        env_metadata=dict(getattr(config_module, "ENV_METADATA", {})),
+        default_model_config=dict(getattr(config_module, "DEFAULT_MODEL_CONFIG", {})),
+        algo_config_overrides=algo_config_overrides,
+        default_train_config=dict(getattr(config_module, "DEFAULT_TRAIN_CONFIG", {})),
+    )
+
+
 def resolve_generic_launch_level(game_id: str, generic_level: int) -> int:
     game_key = str(game_id).strip().lower()
     level_key = max(1, min(3, int(generic_level)))
@@ -119,12 +168,10 @@ def _refresh_osero_launch_modules() -> None:
     global _GAME_SPECS
     _GAME_SPECS = None
     for module_name in (
-        "core.pair_overrides",
         "games.osero",
         "games.osero.config",
         "games.osero.rules",
         "games.osero.env",
-        "games.osero.spec",
     ):
         sys.modules.pop(module_name, None)
 
@@ -211,8 +258,8 @@ def build_off_policy_train_config(
 ) -> dict[str, object]:
     config: dict[str, object] = {
         **OFF_POLICY_TRAIN_DEFAULTS,
-        "max_steps": int(max_steps),
-        "checkpoint_every_steps": int(checkpoint_every_steps),
+        "budget": int(max_steps),
+        "checkpoint_every": int(checkpoint_every_steps),
         "reward_window": int(reward_window),
         "min_episodes_for_stats": int(
             reward_window if min_episodes_for_stats is None else min_episodes_for_stats
@@ -236,9 +283,9 @@ def build_on_policy_train_config(
     min_episodes_for_stats: int,
 ) -> dict[str, object]:
     return {
-        "max_iterations": int(max_iterations),
+        "budget": int(max_iterations),
         "rollout_steps": int(rollout_steps),
-        "checkpoint_every_iterations": int(checkpoint_every_iterations),
+        "checkpoint_every": int(checkpoint_every_iterations),
         "reward_window": int(reward_window),
         "min_episodes_for_stats": int(min_episodes_for_stats),
     }
@@ -534,10 +581,10 @@ def _build_algo_specs() -> dict[str, AlgoSpec]:
                 },
                 "run": {
                     "train": {
-                        "max_games": 10_000,
+                        "budget": 10_000,
                         "train_after_games": 8,
                         "updates_per_game": 2,
-                        "checkpoint_every_games": 25,
+                        "checkpoint_every": 25,
                     }
                 },
             },
@@ -743,6 +790,113 @@ def _algo_defaults(algo_spec: AlgoSpec) -> dict[str, object]:
     return algo_layer
 
 
+def _game_model_defaults(spec: GameSpec) -> dict[str, object]:
+    if not spec.default_model_config:
+        return {}
+    return {
+        "algo": {
+            "config": deepcopy(spec.default_model_config),
+        }
+    }
+
+
+def _game_algo_defaults(spec: GameSpec, algo_id: str) -> dict[str, object]:
+    algo_key = str(algo_id).strip().lower()
+    layer: dict[str, object] = {}
+    if algo_key in spec.algo_config_overrides:
+        layer = _deep_merge_dicts(
+            layer,
+            {
+                "algo": {
+                    "config": deepcopy(spec.algo_config_overrides[algo_key]),
+                }
+            },
+        )
+    if algo_key == str(spec.default_algo).strip().lower() and spec.default_train_config:
+        layer = _deep_merge_dicts(
+            layer,
+            {
+                "run": {
+                    "train": deepcopy(spec.default_train_config),
+                }
+            },
+        )
+    return layer
+
+
+def _game_train_defaults(spec: GameSpec) -> dict[str, object]:
+    if not spec.default_train_config or "budget" not in spec.default_train_config:
+        return {}
+    return {
+        "run": {
+            "train": {
+                "budget": int(spec.default_train_config["budget"]),
+            },
+        }
+    }
+
+
+def _resolve_algo_id(spec: GameSpec, algo_override: str | None) -> str:
+    override_key = "" if algo_override is None else str(algo_override).strip().lower()
+    if override_key in DEFAULT_ALGO_TOKENS:
+        return str(spec.default_algo).strip().lower()
+    return str(override_key)
+
+
+def _materialize_runner_train_block(
+    *,
+    common: dict[str, object],
+    runner_kind: str,
+    train_block: dict[str, object],
+) -> dict[str, object]:
+    resolved = dict(train_block)
+    budget = resolved.pop("budget", None)
+    checkpoint_every = resolved.pop("checkpoint_every", None)
+
+    if runner_kind == ALGO_RUNNER_OFF_POLICY:
+        if budget is not None and "max_steps" not in resolved:
+            resolved["max_steps"] = max(1, int(budget))
+        if checkpoint_every is not None and "checkpoint_every_steps" not in resolved:
+            resolved["checkpoint_every_steps"] = max(1, int(checkpoint_every))
+        total_steps = common.get("total_steps")
+        if total_steps is not None:
+            resolved["max_steps"] = max(1, int(total_steps))
+        episodes = common.get("episodes")
+        if episodes is not None:
+            resolved["max_episodes"] = max(1, int(episodes))
+    elif runner_kind == ALGO_RUNNER_ON_POLICY:
+        rollout_steps = max(1, int(resolved.get("rollout_steps", 1024)))
+        if budget is not None and "max_iterations" not in resolved:
+            resolved["max_iterations"] = max(1, int(math.ceil(float(budget) / float(rollout_steps))))
+        if checkpoint_every is not None and "checkpoint_every_iterations" not in resolved:
+            resolved["checkpoint_every_iterations"] = max(1, int(checkpoint_every))
+        total_steps = common.get("total_steps")
+        if total_steps is not None:
+            resolved["max_iterations"] = max(1, int(math.ceil(float(total_steps) / float(rollout_steps))))
+    elif runner_kind == ALGO_RUNNER_SEARCH_PLAY:
+        if budget is not None and "max_games" not in resolved:
+            resolved["max_games"] = max(1, int(budget))
+        if checkpoint_every is not None and "checkpoint_every_games" not in resolved:
+            resolved["checkpoint_every_games"] = max(1, int(checkpoint_every))
+        episodes = common.get("episodes")
+        if episodes is not None:
+            resolved["max_games"] = max(1, int(episodes))
+        elif common.get("total_steps") is not None:
+            resolved["max_games"] = max(1, int(common["total_steps"]))
+
+    save_every = common.get("save_every")
+    if save_every is not None:
+        cadence = max(1, int(save_every))
+        if runner_kind == ALGO_RUNNER_OFF_POLICY:
+            resolved["checkpoint_every_steps"] = cadence
+        elif runner_kind == ALGO_RUNNER_ON_POLICY:
+            resolved["checkpoint_every_iterations"] = cadence
+        elif runner_kind == ALGO_RUNNER_SEARCH_PLAY:
+            resolved["checkpoint_every_games"] = cadence
+
+    return resolved
+
+
 def _derive_search_play_board_size(game_env: dict[str, object], algo_config: dict[str, object]) -> int:
     board_size = algo_config.get("board_size", game_env.get("board_size"))
     if board_size is not None:
@@ -796,14 +950,11 @@ def compose_run_config(
     mode: str = "train",
     user_overrides: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    from core.pair_overrides import PAIR_OVERRIDES
-
     spec = get_game_spec(game_id)
     resolved_mode = _normalize_mode(mode)
-    algo_id = str(algo_override or spec.default_algo).strip().lower()
+    algo_id = _resolve_algo_id(spec, algo_override)
     algo_spec = get_algo_spec(algo_id)
     validate_game_algo_compatibility(spec.game_id, algo_spec.algo_id)
-    pair_override = dict(PAIR_OVERRIDES.get((spec.game_id, algo_id), {}))
 
     composed = _deep_merge_dicts(
         {
@@ -821,7 +972,9 @@ def compose_run_config(
         },
         _game_defaults(spec),
         _algo_defaults(algo_spec),
-        pair_override,
+        _game_train_defaults(spec),
+        _game_model_defaults(spec),
+        _game_algo_defaults(spec, algo_id),
         {} if user_overrides is None else dict(user_overrides),
     )
 
@@ -849,20 +1002,28 @@ def compose_run_config(
 
 
 def _build_game_specs() -> dict[str, GameSpec]:
-    # Import game specs lazily so the shared builders above can be imported
-    # from each game spec without triggering a circular import.
-    from games.bang.spec import SPEC as bang_spec
-    from games.kick.spec import SPEC as kick_spec
-    from games.osero.spec import SPEC as osero_spec
-    from games.snake.spec import SPEC as snake_spec
-    from games.vroom.spec import SPEC as vroom_spec
+    # Import config/env lazily so active games can be built straight from
+    # their declarative config without separate spec shims.
+    from games.bang import config as bang_config
+    from games.bang.env import BangEnv
+    from games.jump import config as jump_config
+    from games.jump.env import JumpEnv
+    from games.kick import config as kick_config
+    from games.kick.env import KickEnv
+    from games.osero import config as osero_config
+    from games.osero.env import OseroEnv
+    from games.snake import config as snake_config
+    from games.snake.env import SnakeEnv
+    from games.vroom import config as vroom_config
+    from games.vroom.env import VroomEnv
 
     specs = (
-        snake_spec,
-        bang_spec,
-        vroom_spec,
-        osero_spec,
-        kick_spec,
+        build_game_spec_from_config(config_module=snake_config, env_type=SnakeEnv),
+        build_game_spec_from_config(config_module=bang_config, env_type=BangEnv),
+        build_game_spec_from_config(config_module=jump_config, env_type=JumpEnv),
+        build_game_spec_from_config(config_module=vroom_config, env_type=VroomEnv),
+        build_game_spec_from_config(config_module=osero_config, env_type=OseroEnv),
+        build_game_spec_from_config(config_module=kick_config, env_type=KickEnv),
     )
     return {spec.game_id: spec for spec in specs}
 
@@ -961,37 +1122,21 @@ def build_runner_from_config(config: dict[str, object]) -> Callable[[Env, "Algor
     common = dict(config.get("common", {}))
     algo_block = dict(config.get("algo", {}))
     runner_kind = str(algo_block.get("runner_kind", "")).strip().lower()
-    train_block = dict(dict(config.get("run", {})).get("train", {}))
-
-    save_every = common.get("save_every")
-    if save_every is not None:
-        cadence = max(1, int(save_every))
-        if runner_kind == ALGO_RUNNER_OFF_POLICY:
-            train_block["checkpoint_every_steps"] = cadence
-        elif runner_kind == ALGO_RUNNER_ON_POLICY:
-            train_block["checkpoint_every_iterations"] = cadence
-        elif runner_kind == ALGO_RUNNER_SEARCH_PLAY:
-            train_block["checkpoint_every_games"] = cadence
+    train_block = _materialize_runner_train_block(
+        common=common,
+        runner_kind=runner_kind,
+        train_block=dict(dict(config.get("run", {})).get("train", {})),
+    )
 
     if runner_kind == ALGO_RUNNER_OFF_POLICY:
         from core.runners.off_policy import OffPolicyConfig, run_off_policy_training
 
-        total_steps = common.get("total_steps")
-        if total_steps is not None:
-            train_block["max_steps"] = max(1, int(total_steps))
-        episodes = common.get("episodes")
-        if episodes is not None:
-            train_block["max_episodes"] = max(1, int(episodes))
         runner_config = OffPolicyConfig(**train_block)
         return lambda env, algorithm, run_paths: run_off_policy_training(env, algorithm, run_paths, runner_config)
 
     if runner_kind == ALGO_RUNNER_ON_POLICY:
         from core.runners.on_policy import OnPolicyConfig, run_on_policy_training
 
-        total_steps = common.get("total_steps")
-        if total_steps is not None:
-            rollout_steps = max(1, int(train_block.get("rollout_steps", 1024)))
-            train_block["max_iterations"] = max(1, int(math.ceil(float(total_steps) / float(rollout_steps))))
         runner_config = OnPolicyConfig(**train_block)
         return lambda env, algorithm, run_paths: run_on_policy_training(env, algorithm, run_paths, runner_config)
 
@@ -999,11 +1144,6 @@ def build_runner_from_config(config: dict[str, object]) -> Callable[[Env, "Algor
         from core.search_play.interfaces import SearchPlayTrainConfig
         from core.search_play.trainer import run_search_play_training
 
-        episodes = common.get("episodes")
-        if episodes is not None:
-            train_block["max_games"] = max(1, int(episodes))
-        elif common.get("total_steps") is not None:
-            train_block["max_games"] = max(1, int(common["total_steps"]))
         runner_config = SearchPlayTrainConfig(**train_block)
         return lambda env, algorithm, run_paths: run_search_play_training(env, algorithm, run_paths, runner_config)
 

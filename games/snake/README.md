@@ -67,4 +67,4 @@ python -m scripts.play_ai --game snake --render
 python -m scripts.play_user --game snake
 ```
 
-See `games/snake/config.py` for the game constants, reward values, and curriculum thresholds. Shared Q-learning defaults live in `core/game.py`.
+See `games/snake/config.py` for the game constants, reward values, curriculum thresholds, and training defaults. Snake's game-wide net size lives in `DEFAULT_MODEL_CONFIG["hidden_sizes"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

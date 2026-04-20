@@ -98,4 +98,4 @@ python -m scripts.play_ai --game vroom --render
 python -m scripts.play_user --game vroom
 ```
 
-See `games/vroom/config.py` for the physics parameters, track-generation settings, and curriculum knobs. Shared SAC defaults live in `core/game.py`.
+See `games/vroom/config.py` for the physics parameters, track-generation settings, curriculum knobs, and training defaults. Vroom's game-wide net size lives in `DEFAULT_MODEL_CONFIG["hidden_sizes"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

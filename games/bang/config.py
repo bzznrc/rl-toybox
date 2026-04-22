@@ -2,31 +2,16 @@
 
 from __future__ import annotations
 
-from core.arcade_style import (
-    DEFAULT_BOTTOM_BAR_HEIGHT as BB_HEIGHT,
-    DEFAULT_CELL_INSET as CELL_INSET,
-    DEFAULT_GRID_COLUMNS as GRID_WIDTH_TILES,
-    DEFAULT_GRID_ROWS as GRID_HEIGHT_TILES,
-    DEFAULT_TILE_SIZE as TILE_SIZE,
-    screen_height,
-    screen_width,
-)
 from core.game import build_exploration_config
 from core.utils import env_flag
 
 
 # RUNTIME
 WINDOW_TITLE = "Bang AI"
-FPS = 60
-TRAINING_FPS = 0
 USE_GPU = env_flag("BANG_USE_GPU", False)
 
 
 # ENV
-SCREEN_WIDTH = screen_width(GRID_WIDTH_TILES, TILE_SIZE)
-SCREEN_HEIGHT = screen_height(GRID_HEIGHT_TILES, TILE_SIZE, BB_HEIGHT)
-NN_CONTROL_MARKER_SIZE_PX = max(4, TILE_SIZE // 3)
-
 PLAYER_MOVE_SPEED = 5
 AIM_RATE_PER_STEP = 5
 PROJECTILE_SPEED = 10
@@ -112,30 +97,40 @@ DEFAULT_ALGO = "dqn"
 
 # CURRICULUM
 MIN_LEVEL = 1
-MAX_LEVEL = 3
+MAX_LEVEL = 5
 REWARD_ROLLING_WINDOW = 100
 
 CURRICULUM_PROMOTION = {
-    "min_episodes_per_level": 250,
-    "check_window": 25,
-    "success_threshold": 0.40,
-    "consecutive_checks_required": 2,
+    "min_episodes_per_level": 100,
+    "success_threshold": 0.60,
 }
 
 LEVEL_SETTINGS = {
     1: {
         "num_players": 2,
+        "num_obstacles": 0,
+        "enemy_reposition_bias": 0.0,
+        "enemy_shoot_probability": 0.0,
+    },
+    2: {
+        "num_players": 2,
         "num_obstacles": 4,
         "enemy_reposition_bias": 0.25,
         "enemy_shoot_probability": 0.025,
     },
-    2: {
+    3: {
         "num_players": 2,
         "num_obstacles": 8,
-        "enemy_reposition_bias": 0.60,
+        "enemy_reposition_bias": 0.50,
         "enemy_shoot_probability": 0.05,
     },
-    3: {
+    4: {
+        "num_players": 3,
+        "num_obstacles": 10,
+        "enemy_reposition_bias": 0.75,
+        "enemy_shoot_probability": 0.075,
+    },
+    5: {
         "num_players": 4,
         "num_obstacles": 12,
         "enemy_reposition_bias": 1.00,

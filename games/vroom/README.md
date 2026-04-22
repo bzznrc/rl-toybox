@@ -60,6 +60,9 @@ The observation is intentionally vector-only and compact. `self_*` features enco
   - `bell`
   - `s_curve`
 - Rounded corners and the start strip are built through the geometry-first pipeline in `games/vroom/track_geometry.py` and `games/vroom/trackgen.py`.
+- Gameplay still follows the smooth analytical track geometry, but the rendered road is rasterized into half-size square blocks derived from that geometry.
+- The car keeps the repo's standard Bang-sized `1x` block language, while the road rendering uses `0.5x` block detail.
+- The start checker uses the same half-size cell, and the road surface texture is baked once per generated track with irregular mini-square accents split between dark-neutral and outline-gray palette tones.
 
 ### Scripted Opponents
 
@@ -80,12 +83,14 @@ An episode counts as a success if the player wins the race set.
 
 ## Curriculum (Train)
 
-- Shared 3-level curriculum progression from `core/curriculum.py`
+- Shared 5-level curriculum progression from `core/curriculum.py`
 - Promotion settings live in `games/vroom/config.py` under `CURRICULUM_PROMOTION`
 - Levels:
-  - Level 1: `1` car, opponent speed cap `0.0`, coast error choices `[-40, 0, 40]`
-  - Level 2: `2` cars, opponent speed cap `0.75`, coast error choices `[-20, 0, 20]`
-  - Level 3: `4` cars, opponent speed cap `1.0`, coast error choices `[-10, 0, 10]`
+  - Level 1: `1` car, opponent speed cap `0.0`, coast error choices `[0.0]`
+  - Level 2: `2` cars, opponent speed cap `0.25`, coast error choices `[-40, 0, 40]`
+  - Level 3: `2` cars, opponent speed cap `0.5`, coast error choices `[-30, 0, 30]`
+  - Level 4: `3` cars, opponent speed cap `0.75`, coast error choices `[-20, 0, 20]`
+  - Level 5: `4` cars, opponent speed cap `1.0`, coast error choices `[-10, 0, 10]`
 
 ## Run Commands
 
@@ -97,5 +102,7 @@ python -m scripts.train --game vroom
 python -m scripts.play_ai --game vroom --render
 python -m scripts.play_user --game vroom
 ```
+
+When `--level` is omitted, `train` starts at `L1` and `play-user` / `play-ai` default to `L5`.
 
 See `games/vroom/config.py` for the physics parameters, track-generation settings, curriculum knobs, and training defaults. Vroom's game-wide net size lives in `DEFAULT_MODEL_CONFIG["hidden_sizes"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

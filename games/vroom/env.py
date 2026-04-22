@@ -25,7 +25,7 @@ from core.arcade_style import (
     COLOR_SLATE_GRAY,
 )
 from core.curriculum import (
-    ThreeLevelCurriculum,
+    SharedCurriculum,
     advance_curriculum,
     build_curriculum_config,
     validate_curriculum_level_settings,
@@ -52,14 +52,20 @@ from core.primitives import (
 from core.ray_viz import draw_player_rays
 from core.rewards import RewardBreakdown
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
+from core.shared_config import (
+    BB_HEIGHT,
+    FPS,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    TILE_SIZE,
+    TRAINING_FPS,
+)
 from core.utils import resolve_play_level
 from games.vroom.config import (
     ACTION_NAMES as VROOM_ACTION_NAMES,
     ACT_DIM as VROOM_ACT_DIM,
-    BB_HEIGHT,
     CURRICULUM_PROMOTION,
     DRAW_RAYS,
-    FPS,
     FORWARD_RAY_MAX_DISTANCE_PX,
     LEVEL_SETTINGS,
     INPUT_FEATURE_NAMES as VROOM_INPUT_FEATURE_NAMES,
@@ -79,10 +85,7 @@ from games.vroom.config import (
     PROGRESS_CLIP,
     PROGRESS_SCALE,
     REWARD_WIN,
-    SCREEN_HEIGHT,
-    SCREEN_WIDTH,
     STEER_SPEED_DECAY,
-    TILE_SIZE,
     TRACK_CORNER_RADIUS_PX,
     TRACK_FOOTPRINT_SCALE,
     TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX,
@@ -97,13 +100,11 @@ from games.vroom.config import (
     TRACK_START_STRAIGHT_LEN_PX,
     TRACK_WIDTH_PX,
     TURN_THROTTLE_LOSS,
-    TRAINING_FPS,
     WINDOW_TITLE,
 )
 from games.vroom.track_geometry import (
     TrackGeometry,
     TrackProjection,
-    build_boundary_loops,
     project_point_to_track,
     raycast_track_edge,
     sample_track_at_s,
@@ -277,8 +278,6 @@ class VroomEnv(Env):
         self.track_y_np = np.zeros((0,), dtype=np.float32)
         self.track_texture: arcade.Texture | None = None
         self.wall_texture: arcade.Texture | None = None
-        self._track_left_outline_screen: list[tuple[float, float]] = []
-        self._track_right_outline_screen: list[tuple[float, float]] = []
         self.track_rect = arcade.LRBT(0.0, float(SCREEN_WIDTH), float(BB_HEIGHT), float(SCREEN_HEIGHT))
         self.background_rect = arcade.LRBT(0.0, float(SCREEN_WIDTH), 0.0, float(SCREEN_HEIGHT))
 
@@ -319,14 +318,14 @@ class VroomEnv(Env):
             promotion_settings=CURRICULUM_PROMOTION,
         )
         self._curriculum = (
-            ThreeLevelCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
+            SharedCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
             if self.mode == "train"
             else None
         )
         self._current_level = (
             int(self._curriculum.get_level())
             if self._curriculum is not None
-            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=3)
+            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=MAX_LEVEL)
         )
         self._last_episode_level = int(self._current_level)
         self._last_episode_success = 0
@@ -391,29 +390,6 @@ class VroomEnv(Env):
             raise RuntimeError("Track geometry is not initialized.")
         return self.track_geometry
 
-    def _cache_track_draw_geometry(self) -> None:
-        self._track_left_outline_screen = []
-        self._track_right_outline_screen = []
-        track = self.track_geometry
-        if track is None:
-            return
-
-        left_pts, right_pts = build_boundary_loops(track, seam_index=int(track.start_index))
-        if len(left_pts) > 2:
-            left_loop = [
-                (float(px), float(self.window_controller.to_arcade_y(float(py))))
-                for px, py in left_pts
-            ]
-            left_loop.append(left_loop[0])
-            self._track_left_outline_screen = left_loop
-        if len(right_pts) > 2:
-            right_loop = [
-                (float(px), float(self.window_controller.to_arcade_y(float(py))))
-                for px, py in right_pts
-            ]
-            right_loop.append(right_loop[0])
-            self._track_right_outline_screen = right_loop
-
     def _generate_track(self, seed: int) -> None:
         track = generate_track(
             seed=int(seed),
@@ -457,7 +433,6 @@ class VroomEnv(Env):
             (float(geometry.start_line[0][0]), float(geometry.start_line[0][1])),
             (float(geometry.start_line[1][0]), float(geometry.start_line[1][1])),
         )
-        self._cache_track_draw_geometry()
 
         self.max_track_index_step = max(4, int(self.max_speed / 6.0 * 2.2))
 
@@ -1277,13 +1252,6 @@ class VroomEnv(Env):
     def _draw_track(self) -> None:
         if self.track_texture is not None:
             arcade.draw_texture_rect(self.track_texture, self.track_rect)
-
-        edge_color = COLOR_FOG_GRAY
-        edge_width = 3.0
-        if len(self._track_left_outline_screen) > 2:
-            arcade.draw_line_strip(self._track_left_outline_screen, edge_color, edge_width)
-        if len(self._track_right_outline_screen) > 2:
-            arcade.draw_line_strip(self._track_right_outline_screen, edge_color, edge_width)
 
     def _draw_rays(self) -> None:
         if not bool(self.show_rays and self.show_game):

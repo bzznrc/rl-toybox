@@ -19,7 +19,7 @@ from core.arcade_style import (
     COLOR_SLATE_GRAY,
 )
 from core.curriculum import (
-    ThreeLevelCurriculum,
+    SharedCurriculum,
     advance_curriculum,
     build_curriculum_config,
     validate_curriculum_level_settings,
@@ -37,19 +37,25 @@ from core.primitives import (
     status_icon_size,
 )
 from core.rewards import RewardBreakdown
+from core.shared_config import (
+    BB_HEIGHT,
+    CELL_INSET,
+    FPS,
+    NN_CONTROL_MARKER_SIZE_PX,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    TILE_SIZE,
+    TRAINING_FPS,
+)
 from games.snake.config import (
     ACTION_NAMES as SNAKE_ACTION_NAMES,
     ACT_DIM as SNAKE_ACT_DIM,
-    BB_HEIGHT,
-    CELL_INSET,
     CURRICULUM_PROMOTION,
-    FPS,
     LEVEL_SETTINGS,
     MAX_OBSTACLE_SECTIONS,
     MAX_LEVEL,
     MIN_OBSTACLE_SECTIONS,
     MIN_LEVEL,
-    NN_CONTROL_MARKER_SIZE_PX,
     OBS_DIM as SNAKE_OBS_DIM,
     INPUT_FEATURE_NAMES as SNAKE_INPUT_FEATURE_NAMES,
     PENALTY_LOSE,
@@ -57,11 +63,7 @@ from games.snake.config import (
     PROGRESS_SCALE,
     REWARD_FOOD,
     PENALTY_STEP,
-    SCREEN_HEIGHT,
-    SCREEN_WIDTH,
     SUCCESS_FOODS_REQUIRED,
-    TILE_SIZE,
-    TRAINING_FPS,
     WINDOW_TITLE,
     WRAP_AROUND,
 )
@@ -412,7 +414,7 @@ class HumanSnakeGame(BaseSnakeGame):
             self.snake.pop()
 
         self.draw_frame()
-        self.frame_clock.tick(FPS)
+        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
         return False, self.score
 
     def _has_collision(self) -> bool:
@@ -600,7 +602,7 @@ class TrainingSnakeGame(BaseSnakeGame):
             self.steps_since_food = int(next_steps_since_food)
 
         self.draw_frame()
-        self.frame_clock.tick(TRAINING_FPS)
+        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
         self.last_reward_breakdown = reward_breakdown
 
         return reward, False, self.score
@@ -702,14 +704,14 @@ class SnakeEnv(Env):
             promotion_settings=CURRICULUM_PROMOTION,
         )
         self._curriculum = (
-            ThreeLevelCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
+            SharedCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
             if self.mode == "train"
             else None
         )
         self._current_level = (
             int(self._curriculum.get_level())
             if self._curriculum is not None
-            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=3)
+            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=MAX_LEVEL)
         )
         self._last_episode_level = int(self._current_level)
         self._last_episode_success = 0

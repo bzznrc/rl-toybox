@@ -99,12 +99,14 @@ An episode counts as a success when the player wins the match.
 
 ## Curriculum (Train)
 
-- Shared 3-level curriculum progression from `core/curriculum.py`
+- Shared 5-level curriculum progression from `core/curriculum.py`
 - Promotion settings live in `games/bang/config.py` under `CURRICULUM_PROMOTION`
 - Levels:
-  - Level 1: `2` players, `4` obstacles, enemy reposition bias `0.25`, enemy shoot probability `0.025`
-  - Level 2: `2` players, `8` obstacles, enemy reposition bias `0.60`, enemy shoot probability `0.05`
-  - Level 3: `4` players, `12` obstacles, enemy reposition bias `1.00`, enemy shoot probability `0.10`
+  - Level 1: `2` players, `0` obstacles, enemy reposition bias `0.0`, enemy shoot probability `0.0`
+  - Level 2: `2` players, `4` obstacles, enemy reposition bias `0.25`, enemy shoot probability `0.025`
+  - Level 3: `2` players, `8` obstacles, enemy reposition bias `0.50`, enemy shoot probability `0.05`
+  - Level 4: `3` players, `10` obstacles, enemy reposition bias `0.75`, enemy shoot probability `0.075`
+  - Level 5: `4` players, `12` obstacles, enemy reposition bias `1.00`, enemy shoot probability `0.10`
 
 ## Run Commands
 
@@ -116,5 +118,7 @@ python -m scripts.train --game bang
 python -m scripts.play_ai --game bang --render
 python -m scripts.play_user --game bang
 ```
+
+When `--level` is omitted, `train` starts at `L1` and `play-user` / `play-ai` default to `L5`.
 
 See `games/bang/config.py` for the game constants, rewards, curriculum settings, and training defaults. Bang's game-wide net size lives in `DEFAULT_MODEL_CONFIG["hidden_sizes"]`, its DQN-specific extras live in `ALGO_CONFIG_OVERRIDES["dqn"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

@@ -22,17 +22,20 @@ Per-game snapshots live in `games/<game>/README.md`.
 - Separate reusable RL systems from game-specific environment logic.
 - Present a coherent progression across RL families and tradeoffs.
 - Prefer compact, complete games over oversized systems.
+- Standardize curriculum-based games on a shared 5-level ladder, with `osero` as the temporary board-size exception.
+- Keep shared runtime and window defaults centralized in `core/shared_config.py`.
+- Keep a coherent visual system built from the shared square-block language and shared palette.
 
 ## 2) Active Lineup
 
 | Game | Role | Primary Family | Status |
 | --- | --- | --- | --- |
-| `snake` | Intro game | simple value-based | active |
-| `bang` | Flagship discrete RL game | value-based / Rainbow-lite | active |
-| `jump` | Reactive traversal platformer | actor-critic / PPO | active |
-| `vroom` | Continuous control showcase | actor-critic / SAC | active |
+| `snake` | Intro grid-control game | value-based | active |
+| `bang` | Flagship discrete-control arena game | value-based | active |
+| `jump` | Traversal platformer | actor-critic | active |
+| `vroom` | Continuous-control racing game | actor-critic | active |
 | `osero` | Planning + self-play capstone | search + self-play | active |
-| `kick` | Multi-agent CTDE experiment | actor-critic / PPO + CTDE | active |
+| `kick` | Multi-agent football / CTDE showcase | actor-critic / CTDE | active |
 
 ## 3) Repository Layout and Shared Responsibilities
 
@@ -42,6 +45,8 @@ Per-game snapshots live in `games/<game>/README.md`.
 - `env.py`: game-specific environment logic
 - `config.py`: declarative game knobs, including game-owned model defaults, algo-specific overrides, train defaults, and any non-default spec metadata
 - `README.md`: current implementation snapshot
+- `core/shared_config.py`
+- shared runtime/window defaults such as FPS, geometry, tile sizing, and common marker sizing
 - `core/game.py`
 - active lineup registry
 - shared metadata/spec building used by CLI entrypoints
@@ -63,8 +68,19 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 - Reusable RL code belongs under the appropriate `core/<family>/` area.
 - Keep `core/algorithms/` minimal and family-agnostic: shared interfaces, builders, and cross-family helpers only.
+- Shared runtime/window constants belong in `core/shared_config.py`.
 - Game-specific env logic stays under `games/<game>/`.
+- Game configs should stay declarative and focused on `ENV`, `IO`, `CURRICULUM`, `REWARDS`, and `TRAINING`, keeping local overrides only when a game genuinely differs from the shared defaults.
 - Avoid introducing large new abstractions until a second pass actually needs them.
+
+### Shared visual language
+
+- The default visual building block is the standard `DEFAULT_TILE_SIZE` square from `core/arcade_style.py`.
+- Bang and most other games use that `1x` block directly; Vroom's car body also uses that same base block language.
+- Allowed scale variants should stay simple and explicit:
+  - `2x` for larger composite cells or overlays, such as Jump's grid-style patch visuals.
+  - `0.5x` for finer raster detail, such as Vroom's block-derived track surface and lane markers.
+- New visuals should prefer these square components plus the shared palette in `core/arcade_style.py` instead of introducing separate visual systems.
 
 ## 4) Logging Framework
 
@@ -100,8 +116,8 @@ Per-game snapshots live in `games/<game>/README.md`.
 ## 7) Special Areas
 
 - `kick` stays in-tree and runnable as the repo's CTDE and centralized-critic game.
-- `jump` sits on the shared PPO path as the repo's compact single-agent traversal showcase.
-- Its centralized-critic support lives on the shared PPO path plus game-provided central observation metadata.
+- `jump` sits on the shared actor-critic path as the repo's compact single-agent traversal showcase.
+- Its centralized-critic support lives on the shared actor-critic path plus game-provided central observation metadata.
 - `vroom` sits on the actor-critic and continuous-control branch with SAC-oriented defaults.
 
 ## 8) Checklist for New Changes
@@ -110,5 +126,6 @@ Before merging:
 
 - [ ] Active lineup references still use the canonical order from section 2.
 - [ ] Shared RL code is placed under the right `core/<family>/` area.
+- [ ] Curriculum-based games still follow the shared `L1` to `L5` convention, unless they are the temporary `osero` exception.
 - [ ] Game-specific behavior changes are reflected in that game's README.
 - [ ] `python -m scripts.validate_docs` passes after README/doc edits.

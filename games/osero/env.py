@@ -26,6 +26,7 @@ from core.primitives import (
     status_icon_size,
 )
 from core.runtime import ArcadeFrameClock, ArcadeWindowController
+from core.shared_config import BB_HEIGHT, FPS, SCREEN_HEIGHT, SCREEN_WIDTH, TRAINING_FPS, WORLD_HEIGHT
 from games.osero import config
 from games.osero.rules import (
     STONE_BLACK,
@@ -78,8 +79,8 @@ class OseroEnv(Env):
         self._current_level = max(1, int(1 if level is None else level))
         self.frame_clock = ArcadeFrameClock()
         self.window_controller = ArcadeWindowController(
-            config.SCREEN_WIDTH,
-            config.SCREEN_HEIGHT,
+            SCREEN_WIDTH,
+            SCREEN_HEIGHT,
             config.WINDOW_TITLE,
             enabled=self.show_game,
             queue_input_events=self.mode == "human",
@@ -98,16 +99,16 @@ class OseroEnv(Env):
         return int(pass_action_index(self.board_size))
 
     def _build_board_layout(self) -> BoardLayout:
-        usable_width = float(config.SCREEN_WIDTH) - float(config.BOARD_SIDE_MARGIN) * 2.0
+        usable_width = float(SCREEN_WIDTH) - float(config.BOARD_SIDE_MARGIN) * 2.0
         usable_height = (
-            float(config.WORLD_HEIGHT)
+            float(WORLD_HEIGHT)
             - float(config.BOARD_TOP_MARGIN)
             - float(config.BOARD_BOTTOM_MARGIN)
         )
         board_pixels = float(max(self.board_size * 24, min(usable_width, usable_height)))
         tile_size = float(int(board_pixels // self.board_size))
         board_pixels = float(tile_size * self.board_size)
-        left = (float(config.SCREEN_WIDTH) - board_pixels) * 0.5
+        left = (float(SCREEN_WIDTH) - board_pixels) * 0.5
         top = float(config.BOARD_TOP_MARGIN) + max(0.0, (usable_height - board_pixels) * 0.5)
         return BoardLayout(left=float(left), top=float(top), tile_size=float(tile_size), board_pixels=float(board_pixels))
 
@@ -230,7 +231,7 @@ class OseroEnv(Env):
                 return self.reset(), 0.0, False, {"level": int(self._current_level)}
 
         self.render()
-        self.frame_clock.tick(config.FPS if self.show_game else 0)
+        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
         return np.asarray(self._last_obs, dtype=np.float32), 0.0, False, self._state_info()
 
     def _step_human(self) -> tuple[np.ndarray, float, bool, dict[str, object]]:
@@ -244,7 +245,7 @@ class OseroEnv(Env):
             if self._done:
                 return self._handle_human_terminal()
             self.render()
-            self.frame_clock.tick(config.FPS if self.show_game else 0)
+            self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
             return obs, 0.0, bool(done), info
 
         for mouse_press in self.window_controller.consume_mouse_presses():
@@ -255,11 +256,11 @@ class OseroEnv(Env):
             if done:
                 return self._handle_human_terminal()
             self.render()
-            self.frame_clock.tick(config.FPS if self.show_game else 0)
+            self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
             return obs, 0.0, False, info
 
         self.render()
-        self.frame_clock.tick(config.FPS if self.show_game else 0)
+        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
         return np.asarray(self._last_obs, dtype=np.float32), 0.0, False, self._state_info()
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
@@ -282,7 +283,7 @@ class OseroEnv(Env):
         obs, reward, done, info = self._apply_action_and_collect(action_index)
         if self.show_game:
             self.render()
-        self.frame_clock.tick(config.FPS if self.show_game else config.TRAINING_FPS)
+        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
         return obs, float(reward), bool(done), info
 
     def _draw_board(self) -> None:
@@ -401,8 +402,8 @@ class OseroEnv(Env):
 
     def _draw_hud(self) -> None:
         layout = draw_status_bar(
-            width=float(config.SCREEN_WIDTH),
-            bottom_bar_height=float(config.BB_HEIGHT),
+            width=float(SCREEN_WIDTH),
+            bottom_bar_height=float(BB_HEIGHT),
             tile_size=float(self._board_layout.tile_size),
             cell_inset=float(config.STONE_INSET_RATIO * self._board_layout.tile_size),
             include_clock=False,
@@ -414,7 +415,7 @@ class OseroEnv(Env):
             left=float(layout.score_left),
             right=float(layout.score_right),
             center_y=float(layout.center_y),
-            icon_size=float(status_icon_size(float(config.BB_HEIGHT), float(self._board_layout.tile_size))),
+            icon_size=float(status_icon_size(float(BB_HEIGHT), float(self._board_layout.tile_size))),
             items=[stone],
             draw_item=lambda stone_value, center_x, row_center_y, size: self._draw_player_icon(
                 int(stone_value),

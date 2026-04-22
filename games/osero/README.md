@@ -4,7 +4,7 @@ Compact Osero/Reversi implementation built around self-play, MCTS, and a small p
 
 ## Clip
 
-No clip is currently checked into the repo for `osero`.
+![Osero Demo](../../media/osero-demo.gif)
 
 ## Algorithm / Network
 
@@ -70,7 +70,7 @@ The search trainer primarily learns from normalized MCTS visit counts for the po
 
 ## Curriculum (Train)
 
-There is no environment curriculum for `osero`. Board sizes are separate runtime choices:
+There is no environment curriculum for `osero`. It is the repo's temporary exception to the shared `L1` to `L5` curriculum standard, and its board sizes remain separate runtime choices:
 
 - `4x4` is the smallest option and a useful easy/debug board
 - `6x6` is the default recommended setup
@@ -94,5 +94,7 @@ python -m scripts.train --game osero
 python -m scripts.play_ai --game osero --render
 python -m scripts.play_user --game osero
 ```
+
+When `OSERO_BOARD_SIZE` is omitted, `6x6` is used.
 
 See `games/osero/config.py` and `games/osero/rules.py` for board-size selection, rewards, compact rules, and the default search-play settings. Osero's board-size net defaults live in `DEFAULT_MODEL_CONFIG_BY_SIZE`, its search-specific deltas live in `ALGO_CONFIG_OVERRIDES_BY_SIZE`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

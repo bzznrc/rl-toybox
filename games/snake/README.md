@@ -47,12 +47,14 @@ Classic grid Snake with a small obstacle curriculum, compact observations, and l
 
 ## Curriculum (Train)
 
-- Shared 3-level curriculum progression from `core/curriculum.py`
+- Shared 5-level curriculum progression from `core/curriculum.py`
 - Promotion settings live in `games/snake/config.py` under `CURRICULUM_PROMOTION`
 - Levels:
   - Level 1: `0` obstacles, timeout `120 * snake_length`
-  - Level 2: `6` obstacles, timeout `100 * snake_length`
-  - Level 3: `12` obstacles, timeout `80 * snake_length`
+  - Level 2: `3` obstacles, timeout `110 * snake_length`
+  - Level 3: `6` obstacles, timeout `100 * snake_length`
+  - Level 4: `9` obstacles, timeout `90 * snake_length`
+  - Level 5: `12` obstacles, timeout `80 * snake_length`
 
 An episode counts as a success if the snake eats at least `5` foods (`SUCCESS_FOODS_REQUIRED`).
 
@@ -66,5 +68,7 @@ python -m scripts.train --game snake
 python -m scripts.play_ai --game snake --render
 python -m scripts.play_user --game snake
 ```
+
+When `--level` is omitted, `train` starts at `L1` and `play-user` / `play-ai` default to `L5`.
 
 See `games/snake/config.py` for the game constants, reward values, curriculum thresholds, and training defaults. Snake's game-wide net size lives in `DEFAULT_MODEL_CONFIG["hidden_sizes"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

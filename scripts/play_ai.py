@@ -36,7 +36,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--episodes", type=int, default=10, help="Number of eval episodes")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
-    parser.add_argument("--level", type=int, default=3, help="Play level selector (defaults to 3)")
+    parser.add_argument(
+        "--level",
+        type=int,
+        default=None,
+        help="Difficulty selector (defaults to L5 for curriculum games and Osero 6x6)",
+    )
     parser.add_argument("--render", action="store_true", help="Show Arcade window")
     parser.add_argument("--headless", action="store_true", help="Force headless evaluation")
     parser.add_argument("--checkpoint", default=None, help="Explicit checkpoint path to load")
@@ -67,7 +72,7 @@ def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     configure_logging()
-    level = int(apply_generic_launch_level(args.game, args.level))
+    level = int(apply_generic_launch_level(args.game, args.level, mode="eval"))
 
     prepared = prepare_run(args.game, args.algo, mode="eval", user_overrides=_build_eval_overrides(args))
     run_paths = prepared.run_paths

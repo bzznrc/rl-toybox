@@ -23,7 +23,7 @@ from core.arcade_style import (
     INTER_FONT_FILE,
 )
 from core.curriculum import (
-    ThreeLevelCurriculum,
+    SharedCurriculum,
     advance_curriculum,
     build_curriculum_config,
     validate_curriculum_level_settings,
@@ -45,6 +45,16 @@ from core.primitives import (
 )
 from core.rewards import RewardBreakdown
 from core.runtime import ArcadeFrameClock, ArcadeWindowController, TextCache, load_font_once
+from core.shared_config import (
+    BB_HEIGHT,
+    CELL_INSET,
+    FPS,
+    PHYSICS_DT,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    TILE_SIZE,
+    TRAINING_FPS,
+)
 from core.utils import resolve_play_level
 from games.kick.config import (
     ACTION_NAMES as KICK_ACTION_NAMES,
@@ -52,14 +62,11 @@ from games.kick.config import (
     BALL_RADIUS_SCALE,
     B_CLIP,
     B_SCALE,
-    BB_HEIGHT,
     CENTRAL_OBS_MASK_DIM,
     CENTRAL_OBS_BALL_FEATURES,
     CENTRAL_OBS_DIM,
-    CELL_INSET,
     CURRICULUM_PROMOTION,
     DEBUG_SANITY_CHECKS,
-    FPS,
     GAME_SPEED_SCALE,
     INPUT_FEATURE_NAMES as KICK_INPUT_FEATURE_NAMES,
     LEVEL_SETTINGS,
@@ -68,7 +75,6 @@ from games.kick.config import (
     MIN_LEVEL,
     OBS_DIM as KICK_OBS_DIM,
     OBS_NEAREST_OUTFIELD_PLAYERS as KICK_OBS_NEAREST_OUTFIELD_PLAYERS,
-    PHYSICS_DT,
     PENALTY_AREA_DEPTH_RATIO,
     PENALTY_AREA_WIDTH_RATIO,
     PENALTY_CONCEDE,
@@ -83,16 +89,12 @@ from games.kick.config import (
     ROLE_ATTACK_SHIFT_TILES_BY_ROLE as KICK_ROLE_ATTACK_SHIFT_TILES_BY_ROLE,
     ROLE_FEATURE_NAME_BY_ROLE as KICK_ROLE_FEATURE_NAME_BY_ROLE,
     ROLE_NAMES as KICK_ROLE_NAMES,
-    SCREEN_HEIGHT,
-    SCREEN_WIDTH,
     SHOW_BOTTOM_REWARD_BREAKDOWN,
     SHOW_ZONE_TARGET_CLONES,
     STAMINA_DRAIN_SECONDS,
     STAMINA_MAX,
     STAMINA_MIN,
     STAMINA_RECOVER_SECONDS,
-    TILE_SIZE,
-    TRAINING_FPS,
     WINDOW_TITLE,
     ZONE_PENALTY_LINEAR_COEF,
     ZONE_PENALTY_QUADRATIC_COEF,
@@ -253,7 +255,7 @@ class KickEnv(Env):
             promotion_settings=CURRICULUM_PROMOTION,
         )
         self._curriculum = (
-            ThreeLevelCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
+            SharedCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
             if self.mode == "train"
             else None
         )

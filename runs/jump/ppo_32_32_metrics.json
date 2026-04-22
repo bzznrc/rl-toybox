@@ -1,0 +1,17 @@
+{
+  "best_avg_reward": -6.263736509752926,
+  "best_avg_reward_by_level": {
+    "1": -6.263736509752926
+  },
+  "config": {
+    "checkpoint_every_iterations": 10,
+    "max_iterations": 5860,
+    "min_episodes_for_stats": 100,
+    "reward_window": 100,
+    "rollout_steps": 1024
+  },
+  "iterations": 5860,
+  "last_loss": 0.0818434376269579,
+  "total_episodes": 4751,
+  "total_steps": 6000640
+}

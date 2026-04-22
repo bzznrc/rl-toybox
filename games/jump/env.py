@@ -19,7 +19,7 @@ from core.arcade_style import (
     COLOR_SLATE_GRAY,
 )
 from core.curriculum import (
-    ThreeLevelCurriculum,
+    SharedCurriculum,
     advance_curriculum,
     build_curriculum_config,
     validate_curriculum_level_settings,
@@ -94,6 +94,56 @@ class JumpEnemy:
     vx: float
 
 
+@dataclass
+class MovingPlatform:
+    index: int
+    source_segment_index: int
+    target_segment_index: int
+    lane_index: int
+    width_tiles: int
+    min_left_tile: int
+    max_left_tile: int
+    x: float
+    vx: float
+
+    @property
+    def left(self) -> float:
+        return float(self.x)
+
+    @property
+    def width(self) -> float:
+        return float(self.width_tiles * config.TILE_SIZE)
+
+    @property
+    def right(self) -> float:
+        return float(self.left + self.width)
+
+    @property
+    def min_left(self) -> float:
+        return float(self.min_left_tile * config.TILE_SIZE)
+
+    @property
+    def max_left(self) -> float:
+        return float(self.max_left_tile * config.TILE_SIZE)
+
+    @property
+    def lane_surface_row(self) -> int:
+        return int(config.LANE_SURFACE_ROWS[int(self.lane_index)])
+
+    @property
+    def surface_y(self) -> float:
+        return float(self.lane_surface_row * config.TILE_SIZE)
+
+    @property
+    def rect(self) -> Rect:
+        return Rect(
+            left=float(self.left),
+            top=float(self.surface_y),
+            width=float(self.width),
+            height=float(config.PLATFORM_THICKNESS_PX),
+        )
+
+
 class JumpEnv(Env):
     INPUT_FEATURE_NAMES = tuple(config.INPUT_FEATURE_NAMES)
     ACTION_NAMES = tuple(config.ACTION_NAMES)
@@ -129,7 +179,7 @@ class JumpEnv(Env):
             promotion_settings=config.CURRICULUM_PROMOTION,
         )
         self._curriculum = (
-            ThreeLevelCurriculum(config=curriculum_config, level_settings=config.LEVEL_SETTINGS)
+            SharedCurriculum(config=curriculum_config, level_settings=config.LEVEL_SETTINGS)
             if self.mode == "train"
             else None
         )
@@ -140,7 +190,7 @@ class JumpEnv(Env):
                 level=level,
                 min_level=config.MIN_LEVEL,
                 max_level=config.MAX_LEVEL,
-                default_level=3,
+                default_level=config.MAX_LEVEL,
             )
         )
         self._last_episode_level = int(self._current_level)
@@ -175,9 +225,11 @@ class JumpEnv(Env):
         self.enemy_count_min = 0
         self.enemy_count_max = 0
         self.enemy_spawn_chance = 0.0
+        self.moving_platform_frequency = 0.0
 
         self.segments: list[TerrainSegment] = []
         self.enemies: list[JumpEnemy] = []
+        self.moving_platforms: list[MovingPlatform] = []
         self.flag_rect = Rect(0.0, 0.0, 1.0, 1.0)
         self.flag_center_x = 0.0
         self.goal_segment_index = -1
@@ -192,12 +244,15 @@ class JumpEnv(Env):
         self.player_vy = 0.0
         self.player_grounded = True
         self.player_support_index: int | None = None
+        self.player_moving_support_index: int | None = None
         self.player_last_support_index: int | None = None
         self._coyote_steps_left = 0
         self._last_obs = np.zeros((self.OBS_DIM,), dtype=np.float32)
         self._best_progress_potential = 0.0
         self._last_step_breakdown = self._empty_reward_breakdown()
         self._prev_jump_down = False
+        self.show_sens_patch_grid = bool(config.SHOW_SENS_PATCH_GRID)
+        self._prev_overlay_toggle_down = False
 
         self._apply_level_settings(int(self._current_level))
         self.reset()
@@ -225,18 +280,28 @@ class JumpEnv(Env):
         length_tiles = max(int(config.MIN_LEVEL_LENGTH_TILES), int(settings["length_tiles"]))
         lane_count = max(1, min(int(config.LANE_COUNT), int(settings.get("lane_count", 2))))
         enemy_frequency = float(max(0.0, min(1.0, float(settings["enemy_frequency"]))))
+        moving_platform_frequency = float(max(0.0, min(1.0, float(settings.get("moving_platform_frequency", 0.0)))))
         segment_target = int(self._segment_target_for_length(int(length_tiles)))
         internal_segments = max(1, int(segment_target - 2))
-        gap_min = max(
-            int(config.PLAYER_TILES),
-            int(config.BASE_GAP_MIN_TILES)
-            + (int(config.LEVEL3_EXTRA_GAP_MIN_TILES) if int(level) >= int(config.MAX_LEVEL) else 0),
+        tutorial_flat = (
+            int(lane_count) == 1
+            and float(enemy_frequency) <= 0.0
+            and float(moving_platform_frequency) <= 0.0
         )
-        gap_max = max(
-            int(gap_min),
-            int(gap_min + config.BASE_GAP_EXTRA_TILES)
-            + (int(config.LEVEL2_EXTRA_GAP_MAX_TILES) if int(level) >= 2 else 0),
-        )
+        if tutorial_flat:
+            gap_min = 0
+            gap_max = 0
+        else:
+            gap_min = max(
+                int(config.PLAYER_TILES),
+                int(config.BASE_GAP_MIN_TILES)
+                + (int(config.TOP_LEVEL_EXTRA_GAP_MIN_TILES) if int(level) >= int(config.MAX_LEVEL) else 0),
+            )
+            gap_max = max(
+                int(gap_min),
+                int(gap_min + config.BASE_GAP_EXTRA_TILES)
+                + (int(config.ADVANCED_GAP_MAX_BONUS_TILES) if int(level) >= 2 else 0),
+            )
         lane_delta_choices = (
             tuple(int(value) for value in config.ADVANCED_LANE_DELTA_CHOICES)
             if int(lane_count) >= 3 and int(level) >= int(config.MAX_LEVEL)
@@ -272,6 +337,7 @@ class JumpEnv(Env):
             "enemy_count_min": max(0, int(enemy_budget - 1)),
             "enemy_count_max": int(enemy_budget),
             "enemy_spawn_chance": float(enemy_frequency),
+            "moving_platform_frequency": float(moving_platform_frequency),
             "max_episode_steps": int(self._max_episode_steps_for_length(int(length_tiles))),
         }
 
@@ -292,7 +358,7 @@ class JumpEnv(Env):
             raise RuntimeError("Jump start platform width must be one of the configured platform sizes.")
         if self.goal_stretch_tiles not in self.platform_size_tiles:
             raise RuntimeError("Jump goal platform width must be one of the configured platform sizes.")
-        self.gap_min = max(int(config.PLAYER_TILES), int(profile["gap_min"]))
+        self.gap_min = max(0, int(profile["gap_min"]))
         self.gap_max = max(self.gap_min, int(profile["gap_max"]))
         self.max_lane_index = max(0, min(int(config.LANE_COUNT - 1), int(profile["max_lane_index"])))
         self.lane_delta_choices = tuple(int(value) for value in profile["lane_delta_choices"])
@@ -301,6 +367,7 @@ class JumpEnv(Env):
         self.enemy_count_min = max(0, int(profile["enemy_count_min"]))
         self.enemy_count_max = max(self.enemy_count_min, int(profile["enemy_count_max"]))
         self.enemy_spawn_chance = float(max(0.0, min(1.0, float(profile["enemy_spawn_chance"]))))
+        self.moving_platform_frequency = float(max(0.0, min(1.0, float(profile["moving_platform_frequency"]))))
         self.max_episode_steps = max(1, int(profile["max_episode_steps"]))
         self._history.set_clock_duration(int(self.max_episode_steps))
 
@@ -389,10 +456,164 @@ class JumpEnv(Env):
             raise ValueError("Jump lane plan did not include enough top-lane platforms.")
         return lane_plan
 
-    def _build_segments(self, rng: random.Random) -> list[TerrainSegment]:
+    def _future_min_tiles(self, remaining_internal: int) -> int:
+        return (
+            int(remaining_internal) * int(self.platform_min_width_tiles + self.gap_min)
+            + int(self.gap_min)
+            + int(self.goal_stretch_tiles)
+        )
+
+    def _width_choices_after_gap(
+        self,
+        *,
+        world_width_tiles: int,
+        current_left_tile: int,
+        gap_tiles: int,
+        remaining_internal: int,
+    ) -> list[int]:
+        future_min_tiles = int(self._future_min_tiles(int(remaining_internal)))
+        max_width_tiles = int(world_width_tiles - (current_left_tile + gap_tiles + future_min_tiles))
+        return self._platform_width_choices_up_to(int(max_width_tiles))
+
+    def _static_transition_candidate(
+        self,
+        *,
+        rng: random.Random,
+        previous_segment: TerrainSegment,
+        next_lane: int,
+        current_left_tile: int,
+        world_width_tiles: int,
+        remaining_internal: int,
+        target_segment_index: int,
+    ) -> TerrainSegment | None:
+        gap_tiles = self._sample_gap_tiles(rng)
+        width_choices = self._width_choices_after_gap(
+            world_width_tiles=int(world_width_tiles),
+            current_left_tile=int(current_left_tile),
+            gap_tiles=int(gap_tiles),
+            remaining_internal=int(remaining_internal),
+        )
+        if not width_choices:
+            return None
+        next_width = int(rng.choice(width_choices))
+        if not self._transition_is_reachable(
+            from_lane_index=int(previous_segment.lane_index),
+            to_lane_index=int(next_lane),
+            gap_tiles=int(gap_tiles),
+            landing_width_tiles=int(next_width),
+        ):
+            return None
+        return TerrainSegment(
+            index=int(target_segment_index),
+            left_tile=int(current_left_tile + gap_tiles),
+            width_tiles=int(next_width),
+            lane_index=int(next_lane),
+        )
+
+    def _moving_transition_candidate(
+        self,
+        *,
+        rng: random.Random,
+        previous_segment: TerrainSegment,
+        next_lane: int,
+        current_left_tile: int,
+        world_width_tiles: int,
+        remaining_internal: int,
+        target_segment_index: int,
+        moving_platform_index: int,
+    ) -> tuple[TerrainSegment, MovingPlatform] | None:
+        source_lane_index = int(previous_segment.lane_index)
+        moving_platform_width_choices = [
+            int(width_tiles)
+            for width_tiles in config.MOVING_PLATFORM_SIZE_TILES
+            if int(width_tiles) > 0
+        ]
+        if not moving_platform_width_choices:
+            raise ValueError("Jump moving platforms require at least one configured width.")
+        platform_width_tiles = int(rng.choice(moving_platform_width_choices))
+        entry_gap_tiles = int(
+            rng.randint(
+                int(config.MOVING_PLATFORM_ENTRY_GAP_MIN_TILES),
+                int(config.MOVING_PLATFORM_ENTRY_GAP_MAX_TILES),
+            )
+        )
+        exit_gap_tiles = int(
+            rng.randint(
+                int(config.MOVING_PLATFORM_EXIT_GAP_MIN_TILES),
+                int(config.MOVING_PLATFORM_EXIT_GAP_MAX_TILES),
+            )
+        )
+        travel_tiles = int(
+            rng.randint(
+                int(config.MOVING_PLATFORM_TRAVEL_MIN_TILES),
+                int(config.MOVING_PLATFORM_TRAVEL_MAX_TILES),
+            )
+        )
+        total_gap_tiles = int(entry_gap_tiles + platform_width_tiles + travel_tiles + exit_gap_tiles)
+        width_choices = self._width_choices_after_gap(
+            world_width_tiles=int(world_width_tiles),
+            current_left_tile=int(current_left_tile),
+            gap_tiles=int(total_gap_tiles),
+            remaining_internal=int(remaining_internal),
+        )
+        if not width_choices:
+            return None
+
+        next_width = int(rng.choice(width_choices))
+        if self._transition_is_reachable(
+            from_lane_index=int(source_lane_index),
+            to_lane_index=int(next_lane),
+            gap_tiles=int(total_gap_tiles),
+            landing_width_tiles=int(next_width),
+        ):
+            return None
+        if not self._transition_is_reachable(
+            from_lane_index=int(source_lane_index),
+            to_lane_index=int(source_lane_index),
+            gap_tiles=int(entry_gap_tiles),
+            landing_width_tiles=int(platform_width_tiles),
+        ):
+            return None
+        if not self._transition_is_reachable(
+            from_lane_index=int(source_lane_index),
+            to_lane_index=int(next_lane),
+            gap_tiles=int(exit_gap_tiles),
+            landing_width_tiles=int(next_width),
+        ):
+            return None
+
+        left_tile = int(current_left_tile + total_gap_tiles)
+        min_left_tile = int(current_left_tile + entry_gap_tiles)
+        max_left_tile = int(left_tile - exit_gap_tiles - platform_width_tiles)
+        if int(max_left_tile) <= int(min_left_tile):
+            return None
+
+        next_segment = TerrainSegment(
+            index=int(target_segment_index),
+            left_tile=int(left_tile),
+            width_tiles=int(next_width),
+            lane_index=int(next_lane),
+        )
+        start_left_tile = int(rng.randint(int(min_left_tile), int(max_left_tile)))
+        start_direction = 1.0 if bool(rng.randint(0, 1)) else -1.0
+        moving_platform = MovingPlatform(
+            index=int(moving_platform_index),
+            source_segment_index=int(previous_segment.index),
+            target_segment_index=int(target_segment_index),
+            lane_index=int(source_lane_index),
+            width_tiles=int(platform_width_tiles),
+            min_left_tile=int(min_left_tile),
+            max_left_tile=int(max_left_tile),
+            x=float(start_left_tile * config.TILE_SIZE),
+            vx=float(start_direction * config.MOVING_PLATFORM_SPEED_PX_PER_SEC),
+        )
+        return next_segment, moving_platform
+
+    def _build_segments(self, rng: random.Random) -> tuple[list[TerrainSegment], list[MovingPlatform]]:
         lane_plan = self._build_lane_plan(rng)
         world_width_tiles = int(round(self.world_width_px / config.TILE_SIZE))
         segments: list[TerrainSegment] = []
+        moving_platforms: list[MovingPlatform] = []
         start_width_tiles = int(self.start_platform_tiles)
         current_left_tile = 0
         segments.append(
@@ -408,39 +629,49 @@ class JumpEnv(Env):
         internal_lanes = list(lane_plan[1:-1])
         for internal_idx, next_lane in enumerate(internal_lanes):
             accepted = False
-            for _ in range(40):
-                gap_tiles = self._sample_gap_tiles(rng)
-                remaining_internal = int(len(internal_lanes) - internal_idx - 1)
-                future_min_tiles = (
-                    int(remaining_internal) * int(self.platform_min_width_tiles + self.gap_min)
-                    + int(self.gap_min)
-                    + int(self.goal_stretch_tiles)
-                )
-                max_width_tiles = int(world_width_tiles - (current_left_tile + gap_tiles + future_min_tiles))
-                width_choices = self._platform_width_choices_up_to(int(max_width_tiles))
-                if not width_choices:
-                    continue
-                next_width = int(rng.choice(width_choices))
-                if not self._transition_is_reachable(
-                    from_lane_index=int(segments[-1].lane_index),
-                    to_lane_index=int(next_lane),
-                    gap_tiles=int(gap_tiles),
-                    landing_width_tiles=int(next_width),
-                ):
-                    continue
-
-                left_tile = int(current_left_tile + gap_tiles)
-                segments.append(
-                    TerrainSegment(
-                        index=int(len(segments)),
-                        left_tile=int(left_tile),
-                        width_tiles=int(next_width),
-                        lane_index=int(next_lane),
-                    )
-                )
-                current_left_tile = int(left_tile + next_width)
-                accepted = True
-                break
+            previous_segment = segments[-1]
+            remaining_internal = int(len(internal_lanes) - internal_idx - 1)
+            candidate_modes = (
+                (True, False)
+                if float(rng.random()) < float(self.moving_platform_frequency)
+                else (False, True)
+            )
+            for use_moving_platform in candidate_modes:
+                for _ in range(40):
+                    target_segment_index = int(len(segments))
+                    if bool(use_moving_platform):
+                        transition = self._moving_transition_candidate(
+                            rng=rng,
+                            previous_segment=previous_segment,
+                            next_lane=int(next_lane),
+                            current_left_tile=int(current_left_tile),
+                            world_width_tiles=int(world_width_tiles),
+                            remaining_internal=int(remaining_internal),
+                            target_segment_index=int(target_segment_index),
+                            moving_platform_index=int(len(moving_platforms)),
+                        )
+                        if transition is None:
+                            continue
+                        next_segment, moving_platform = transition
+                        moving_platforms.append(moving_platform)
+                    else:
+                        next_segment = self._static_transition_candidate(
+                            rng=rng,
+                            previous_segment=previous_segment,
+                            next_lane=int(next_lane),
+                            current_left_tile=int(current_left_tile),
+                            world_width_tiles=int(world_width_tiles),
+                            remaining_internal=int(remaining_internal),
+                            target_segment_index=int(target_segment_index),
+                        )
+                        if next_segment is None:
+                            continue
+                    segments.append(next_segment)
+                    current_left_tile = int(next_segment.left_tile + next_segment.width_tiles)
+                    accepted = True
+                    break
+                if accepted:
+                    break
             if not accepted:
                 raise ValueError("Jump generation failed to place an internal platform.")
 
@@ -471,14 +702,61 @@ class JumpEnv(Env):
                 break
         if len(segments) < 2 or not bool(goal_added):
             raise ValueError("Jump generation failed to create enough terrain segments.")
-        return segments
+        return segments, moving_platforms
 
-    def _validate_segments(self, segments: list[TerrainSegment]) -> None:
+    def _validate_route(
+        self,
+        segments: list[TerrainSegment],
+        moving_platforms: list[MovingPlatform],
+    ) -> None:
         if len(segments) < 2:
             raise ValueError("Jump requires at least start and goal segments.")
+        moving_by_transition = {
+            (int(platform.source_segment_index), int(platform.target_segment_index)): platform
+            for platform in moving_platforms
+        }
+        if len(moving_by_transition) != len(moving_platforms):
+            raise ValueError("Jump moving-platform transitions must be unique.")
         for idx in range(len(segments) - 1):
             current = segments[idx]
             nxt = segments[idx + 1]
+            moving_platform = moving_by_transition.get((int(current.index), int(nxt.index)))
+            if moving_platform is not None:
+                total_gap_tiles = max(0, int(round((nxt.left - current.right) / config.TILE_SIZE)))
+                if self._transition_is_reachable(
+                    from_lane_index=int(current.lane_index),
+                    to_lane_index=int(nxt.lane_index),
+                    gap_tiles=int(total_gap_tiles),
+                    landing_width_tiles=int(nxt.width_tiles),
+                ):
+                    raise ValueError(
+                        f"Jump moving-platform transition {idx}->{idx + 1} should not be directly reachable."
+                    )
+
+                entry_gap_tiles = max(
+                    0,
+                    int(round((moving_platform.min_left - current.right) / config.TILE_SIZE)),
+                )
+                exit_gap_tiles = max(
+                    0,
+                    int(round((nxt.left - (moving_platform.max_left + moving_platform.width)) / config.TILE_SIZE)),
+                )
+                if not self._transition_is_reachable(
+                    from_lane_index=int(current.lane_index),
+                    to_lane_index=int(moving_platform.lane_index),
+                    gap_tiles=int(entry_gap_tiles),
+                    landing_width_tiles=int(moving_platform.width_tiles),
+                ):
+                    raise ValueError(f"Jump moving-platform entry {idx}->{idx + 1} is not reachable.")
+                if not self._transition_is_reachable(
+                    from_lane_index=int(moving_platform.lane_index),
+                    to_lane_index=int(nxt.lane_index),
+                    gap_tiles=int(exit_gap_tiles),
+                    landing_width_tiles=int(nxt.width_tiles),
+                ):
+                    raise ValueError(f"Jump moving-platform exit {idx}->{idx + 1} is not reachable.")
+                continue
+
             gap_tiles = max(0, int(round((nxt.left - current.right) / config.TILE_SIZE)))
             if not self._transition_is_reachable(
                 from_lane_index=int(current.lane_index),
@@ -520,8 +798,8 @@ class JumpEnv(Env):
         for _ in range(int(config.LEVEL_GENERATION_ATTEMPTS)):
             rng = random.Random(int(attempt_seed))
             try:
-                segments = self._build_segments(rng)
-                self._validate_segments(segments)
+                segments, moving_platforms = self._build_segments(rng)
+                self._validate_route(segments, moving_platforms)
                 enemies = self._spawn_enemies(rng, segments)
                 break
             except (RuntimeError, ValueError):
@@ -532,6 +810,7 @@ class JumpEnv(Env):
 
         self.segments = list(segments)
         self.enemies = list(enemies)
+        self.moving_platforms = list(moving_platforms)
         self.goal_segment_index = int(self.segments[-1].index)
         goal_segment = self.segments[self.goal_segment_index]
         self.world_width_px = float(max(config.SCREEN_WIDTH, goal_segment.right + (2.0 * config.TILE_SIZE)))
@@ -543,6 +822,7 @@ class JumpEnv(Env):
         self.player_vy = 0.0
         self.player_grounded = True
         self.player_support_index = int(start_segment.index)
+        self.player_moving_support_index = None
         self.player_last_support_index = int(start_segment.index)
         self._coyote_steps_left = int(config.COYOTE_TIME_STEPS)
 
@@ -558,33 +838,6 @@ class JumpEnv(Env):
         )
         self.flag_center_x = float(self.flag_rect.left + self.flag_rect.width * 0.5)
         self.player_spawn_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
-
-    def _segment_for_index(self, index: int | None) -> TerrainSegment | None:
-        if index is None:
-            return None
-        if int(index) < 0 or int(index) >= len(self.segments):
-            return None
-        return self.segments[int(index)]
-
-    def _support_segment_below(self, *, tolerance_px: float = 0.0) -> int | None:
-        player_rect = self._player_rect()
-        best_index: int | None = None
-        best_gap: float | None = None
-        feet_y = float(player_rect.bottom)
-        for segment in self.segments:
-            if player_rect.right <= float(segment.left + 2.0):
-                continue
-            if player_rect.left >= float(segment.right - 2.0):
-                continue
-            gap = float(segment.surface_y - feet_y)
-            if gap < -1.0:
-                continue
-            if gap > float(tolerance_px):
-                continue
-            if best_gap is None or gap < best_gap:
-                best_gap = gap
-                best_index = int(segment.index)
-        return best_index
 
     def _player_rect(self) -> Rect:
         return Rect(
@@ -603,8 +856,41 @@ class JumpEnv(Env):
             height=float(config.ENEMY_SIZE),
         )
 
-    def _rect_collides_terrain(self, rect: Rect) -> list[TerrainSegment]:
-        return [segment for segment in self.segments if rect.colliderect(segment.rect)]
+    def _support_surfaces(self) -> list[TerrainSegment | MovingPlatform]:
+        return [*self.segments, *self.moving_platforms]
+
+    def _rect_collides_supports(self, rect: Rect) -> list[TerrainSegment | MovingPlatform]:
+        return [surface for surface in self._support_surfaces() if rect.colliderect(surface.rect)]
+
+    def _support_surface_below(
+        self,
+        *,
+        tolerance_px: float = 0.0,
+    ) -> TerrainSegment | MovingPlatform | None:
+        player_rect = self._player_rect()
+        best_surface: TerrainSegment | MovingPlatform | None = None
+        best_score: tuple[float, float, int, int] | None = None
+        feet_y = float(player_rect.bottom)
+        for surface in self._support_surfaces():
+            if player_rect.right <= float(surface.left + 2.0):
+                continue
+            if player_rect.left >= float(surface.right - 2.0):
+                continue
+            gap = float(surface.surface_y - feet_y)
+            if gap < -1.0:
+                continue
+            if gap > float(tolerance_px):
+                continue
+            score = (
+                float(gap),
+                float(abs((surface.left + surface.right) * 0.5 - (player_rect.left + player_rect.right) * 0.5)),
+                0 if isinstance(surface, MovingPlatform) else 1,
+                int(surface.index),
+            )
+            if best_score is None or score < best_score:
+                best_score = score
+                best_surface = surface
+        return best_surface
 
     @staticmethod
     def _clip_action(action_idx: int) -> int:
@@ -642,6 +928,21 @@ class JumpEnv(Env):
             return int(config.ACTION_MOVE_RIGHT)
         return int(config.ACTION_MOVE_STOP)
 
+    def _can_toggle_visual_overlay(self) -> bool:
+        return bool(self.show_game and self.mode in {"human", "eval"})
+
+    def _update_visual_overlay_toggle(self) -> None:
+        if not self._can_toggle_visual_overlay():
+            self._prev_overlay_toggle_down = False
+            return
+        toggle_down = bool(self.window_controller.is_key_down(arcade.key.X))
+        if toggle_down and not self._prev_overlay_toggle_down:
+            self.show_sens_patch_grid = not bool(self.show_sens_patch_grid)
+        self._prev_overlay_toggle_down = bool(toggle_down)
+
+    def _should_draw_sens_patch_grid(self) -> bool:
+        return bool(self.show_sens_patch_grid and self.show_game and self.mode != "train")
+
     def _apply_action(self, action_idx: int) -> None:
         if int(action_idx) == int(config.ACTION_MOVE_LEFT):
             self.player_vx = -float(config.PLAYER_RUN_SPEED_PX_PER_SEC)
@@ -654,10 +955,35 @@ class JumpEnv(Env):
                 self.player_vy = -float(config.JUMP_VELOCITY_PX_PER_SEC)
                 self.player_grounded = False
                 self.player_support_index = None
+                self.player_moving_support_index = None
                 self._coyote_steps_left = 0
 
     def _can_jump(self) -> bool:
         return bool(self.player_grounded or int(self._coyote_steps_left) > 0)
+
+    def _step_moving_platforms(self) -> None:
+        carry_dx = 0.0
+        supported_platform_index = (
+            None if self.player_moving_support_index is None else int(self.player_moving_support_index)
+        )
+        for platform in self.moving_platforms:
+            prev_x = float(platform.x)
+            next_x = float(platform.x + platform.vx * config.PHYSICS_DT)
+            if next_x <= float(platform.min_left):
+                next_x = float(platform.min_left)
+                platform.vx = abs(float(config.MOVING_PLATFORM_SPEED_PX_PER_SEC))
+            elif next_x >= float(platform.max_left):
+                next_x = float(platform.max_left)
+                platform.vx = -abs(float(config.MOVING_PLATFORM_SPEED_PX_PER_SEC))
+            platform.x = float(next_x)
+            if (
+                supported_platform_index is not None
+                and bool(self.player_grounded)
+                and int(platform.index) == int(supported_platform_index)
+            ):
+                carry_dx = float(platform.x - prev_x)
+        if float(carry_dx) != 0.0:
+            self.player_x = float(max(0.0, min(self.player_x + carry_dx, self.world_width_px - config.PLAYER_SIZE)))
 
     def _step_player(self) -> None:
         dt = float(config.PHYSICS_DT)
@@ -666,17 +992,17 @@ class JumpEnv(Env):
         next_x = float(self.player_x + self.player_vx * dt)
         next_x = float(max(0.0, min(next_x, self.world_width_px - config.PLAYER_SIZE)))
         test_rect = Rect(next_x, float(self.player_y), float(config.PLAYER_SIZE), float(config.PLAYER_SIZE))
-        colliders = self._rect_collides_terrain(test_rect)
+        colliders = self._rect_collides_supports(test_rect)
         if float(self.player_vx) > 0.0:
-            for segment in sorted(colliders, key=lambda item: float(item.left)):
-                if prev_rect.right <= float(segment.left) and test_rect.right > float(segment.left):
-                    next_x = float(segment.left - config.PLAYER_SIZE)
+            for surface in sorted(colliders, key=lambda item: float(item.left)):
+                if prev_rect.right <= float(surface.left) and test_rect.right > float(surface.left):
+                    next_x = float(surface.left - config.PLAYER_SIZE)
                     test_rect = Rect(next_x, float(self.player_y), float(config.PLAYER_SIZE), float(config.PLAYER_SIZE))
                     break
         elif float(self.player_vx) < 0.0:
-            for segment in sorted(colliders, key=lambda item: float(item.right), reverse=True):
-                if prev_rect.left >= float(segment.right) and test_rect.left < float(segment.right):
-                    next_x = float(segment.right)
+            for surface in sorted(colliders, key=lambda item: float(item.right), reverse=True):
+                if prev_rect.left >= float(surface.right) and test_rect.left < float(surface.right):
+                    next_x = float(surface.right)
                     test_rect = Rect(next_x, float(self.player_y), float(config.PLAYER_SIZE), float(config.PLAYER_SIZE))
                     break
         self.player_x = float(next_x)
@@ -688,39 +1014,43 @@ class JumpEnv(Env):
         next_y = float(self.player_y + self.player_vy * dt)
         test_rect = Rect(float(self.player_x), next_y, float(config.PLAYER_SIZE), float(config.PLAYER_SIZE))
         grounded = False
-        landed_support: int | None = None
-        colliders = self._rect_collides_terrain(test_rect)
+        landed_surface: TerrainSegment | MovingPlatform | None = None
+        colliders = self._rect_collides_supports(test_rect)
         if float(self.player_vy) < 0.0:
-            for segment in sorted(colliders, key=lambda item: float(item.rect.bottom), reverse=True):
-                segment_bottom = float(segment.rect.bottom)
-                if prev_rect.top >= segment_bottom and test_rect.top < segment_bottom:
-                    next_y = float(segment_bottom)
+            for surface in sorted(colliders, key=lambda item: float(item.rect.bottom), reverse=True):
+                surface_bottom = float(surface.rect.bottom)
+                if prev_rect.top >= surface_bottom and test_rect.top < surface_bottom:
+                    next_y = float(surface_bottom)
                     self.player_vy = 0.0
                     test_rect = Rect(float(self.player_x), next_y, float(config.PLAYER_SIZE), float(config.PLAYER_SIZE))
                     break
         elif float(self.player_vy) >= 0.0:
-            for segment in sorted(colliders, key=lambda item: float(item.surface_y)):
-                if prev_rect.bottom <= float(segment.surface_y) and test_rect.bottom >= float(segment.surface_y):
-                    next_y = float(segment.surface_y - config.PLAYER_SIZE)
+            for surface in sorted(colliders, key=lambda item: float(item.surface_y)):
+                if prev_rect.bottom <= float(surface.surface_y) and test_rect.bottom >= float(surface.surface_y):
+                    next_y = float(surface.surface_y - config.PLAYER_SIZE)
                     self.player_vy = 0.0
                     grounded = True
-                    landed_support = int(segment.index)
+                    landed_surface = surface
                     break
         self.player_y = float(next_y)
 
-        support_index = landed_support
-        if support_index is None:
-            support_index = self._support_segment_below(tolerance_px=float(config.GROUND_SNAP_PX))
-            if support_index is not None and float(self.player_vy) >= 0.0:
-                support = self.segments[int(support_index)]
-                self.player_y = float(support.surface_y - config.PLAYER_SIZE)
+        support_surface = landed_surface
+        if support_surface is None:
+            support_surface = self._support_surface_below(tolerance_px=float(config.GROUND_SNAP_PX))
+            if support_surface is not None and float(self.player_vy) >= 0.0:
+                self.player_y = float(support_surface.surface_y - config.PLAYER_SIZE)
                 self.player_vy = 0.0
                 grounded = True
 
         self.player_grounded = bool(grounded)
-        self.player_support_index = None if support_index is None else int(support_index)
+        self.player_support_index = None
+        self.player_moving_support_index = None
         if self.player_grounded:
-            self.player_last_support_index = int(self.player_support_index) if self.player_support_index is not None else None
+            if isinstance(support_surface, TerrainSegment):
+                self.player_support_index = int(support_surface.index)
+                self.player_last_support_index = int(support_surface.index)
+            elif isinstance(support_surface, MovingPlatform):
+                self.player_moving_support_index = int(support_surface.index)
             self._coyote_steps_left = int(config.COYOTE_TIME_STEPS)
         else:
             self._coyote_steps_left = max(0, int(self._coyote_steps_left) - 1)
@@ -751,246 +1081,153 @@ class JumpEnv(Env):
     def _time_left_ratio(self) -> float:
         return float(self._history.remaining_time_ratio(int(self.steps)))
 
-    def _down_ground_distance(self) -> float:
-        player_rect = self._player_rect()
-        feet_y = float(player_rect.bottom)
-        best_distance: float | None = None
-        for segment in self.segments:
-            if player_rect.right <= float(segment.left + 2.0):
-                continue
-            if player_rect.left >= float(segment.right - 2.0):
-                continue
-            if float(segment.surface_y) < feet_y:
-                continue
-            distance = float(segment.surface_y - feet_y)
-            if best_distance is None or distance < best_distance:
-                best_distance = distance
-        return float(best_distance if best_distance is not None else config.SENS_DOWN_RANGE_PX)
-
-    def _standable_target_at_x(
-        self,
-        sample_center_x: float,
-        *,
-        reference_feet_y: float,
-        rise_px: float,
-        drop_px: float,
-    ) -> tuple[TerrainSegment, float] | None:
-        sample_left = float(sample_center_x - config.PLAYER_SIZE * 0.5)
-        sample_right = float(sample_left + config.PLAYER_SIZE)
-        if sample_left < 0.0 or sample_right > float(self.world_width_px):
-            return None
-
-        best_match: tuple[tuple[float, float, int], TerrainSegment, float] | None = None
-        for segment in self.segments:
-            if sample_left < float(segment.left) - 1e-6:
-                continue
-            if sample_right > float(segment.right) + 1e-6:
-                continue
-
-            gap = float(segment.surface_y - reference_feet_y)
-            if gap < -float(rise_px) or gap > float(drop_px):
-                continue
-
-            stand_rect = Rect(
-                left=float(sample_left),
-                top=float(segment.surface_y - config.PLAYER_SIZE),
-                width=float(config.PLAYER_SIZE),
-                height=float(config.PLAYER_SIZE),
-            )
-            blocked = any(int(other.index) != int(segment.index) for other in self._rect_collides_terrain(stand_rect))
-            if blocked:
-                continue
-
-            segment_center_x = float(segment.left + segment.width * 0.5)
-            score = (
-                float(abs(gap)),
-                float(abs(segment_center_x - sample_center_x)),
-                int(segment.index),
-            )
-            if best_match is None or score < best_match[0]:
-                best_match = (score, segment, float(gap))
-
-        if best_match is None:
-            return None
-        return best_match[1], float(best_match[2])
-
-    def _floor_probe(self, offset_px: float) -> float:
-        player_rect = self._player_rect()
-        player_center_x = float(player_rect.left + player_rect.width * 0.5)
-        target = self._standable_target_at_x(
-            float(player_center_x + offset_px),
-            reference_feet_y=float(player_rect.bottom),
-            rise_px=float(config.FLOOR_PROBE_STEP_UP_PX),
-            drop_px=float(config.FLOOR_PROBE_DROP_PX),
-        )
-        if target is None:
-            return 0.0
-        _, gap = target
-        gap_scale = max(1.0, float(max(config.FLOOR_PROBE_STEP_UP_PX, config.FLOOR_PROBE_DROP_PX)))
-        return float(1.0 - clip_unit(abs(float(gap)) / float(gap_scale)))
-
-    def _arc_probe(self, offset_px: float) -> float:
-        player_rect = self._player_rect()
-        player_center_x = float(player_rect.left + player_rect.width * 0.5)
-        player_center_y = float(player_rect.top + player_rect.height * 0.5)
-        target_center_x = float(player_center_x + offset_px)
-        target = self._standable_target_at_x(
-            float(target_center_x),
-            reference_feet_y=float(player_rect.bottom),
-            rise_px=float(config.ARC_PROBE_RISE_PX),
-            drop_px=float(config.ARC_PROBE_DROP_PX),
-        )
-        if target is None:
-            return 0.0
-
-        target_segment, _ = target
-        target_center_y = float(target_segment.surface_y - config.PLAYER_SIZE * 0.5)
-        rise_required = max(0.0, float(player_center_y - target_center_y))
-        drop_required = max(0.0, float(target_center_y - player_center_y))
-        if rise_required > float(config.ARC_PROBE_RISE_PX):
-            return 0.0
-        if drop_required > float(config.ARC_PROBE_DROP_PX):
-            return 0.0
-
-        peak_lift = max(
-            float(config.ARC_PROBE_PEAK_EXTRA_PX),
-            0.5 * float(abs(offset_px)),
-            float(rise_required + config.ARC_PROBE_PEAK_EXTRA_PX),
-        )
-        if peak_lift > float(config.ARC_PROBE_RISE_PX):
-            return 0.0
-        peak_y = float(player_center_y - peak_lift)
-
-        sample_count = max(1, int(config.ARC_PROBE_SAMPLES))
-        for sample_idx in range(1, sample_count + 1):
-            t = float(sample_idx) / float(sample_count + 1)
-            sample_center_x = float(player_center_x + (target_center_x - player_center_x) * t)
-            sample_center_y = float(
-                ((1.0 - t) * (1.0 - t) * player_center_y)
-                + (2.0 * (1.0 - t) * t * peak_y)
-                + (t * t * target_center_y)
-            )
-            sample_rect = Rect(
-                left=float(sample_center_x - config.PLAYER_SIZE * 0.5),
-                top=float(sample_center_y - config.PLAYER_SIZE * 0.5),
-                width=float(config.PLAYER_SIZE),
-                height=float(config.PLAYER_SIZE),
-            )
-            if self._rect_collides_terrain(sample_rect):
-                return 0.0
-        return 1.0
-
-    def _up_clear_norm(self) -> float:
-        player_rect = self._player_rect()
-        best_clearance = float(player_rect.top)
-        for segment in self.segments:
-            overlap_width = min(float(player_rect.right), float(segment.right)) - max(
-                float(player_rect.left),
-                float(segment.left),
-            )
-            if overlap_width <= 0.0:
-                continue
-            ceiling_y = float(segment.rect.bottom)
-            if ceiling_y > float(player_rect.top):
-                continue
-            best_clearance = min(best_clearance, float(player_rect.top - ceiling_y))
-        return float(clip_unit(best_clearance / float(config.SENS_UP_CLEAR_RANGE_PX)))
-
-    def _landing_reference_index(self) -> int:
-        if self.player_support_index is not None:
-            return int(self.player_support_index)
-        if self.player_last_support_index is not None:
-            return int(self.player_last_support_index)
-
-        player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
-        best_index = -1
-        for segment in self.segments:
-            if float(segment.right) <= float(player_center_x):
-                best_index = max(int(best_index), int(segment.index))
-        return int(best_index)
-
-    @staticmethod
-    def _segment_landing_anchor(segment: TerrainSegment) -> tuple[float, float]:
-        return (
-            float(segment.left + config.PLAYER_SIZE * 0.5),
-            float(segment.surface_y - config.PLAYER_SIZE * 0.5),
-        )
-
-    def _future_landing_segments(self) -> list[TerrainSegment]:
-        reference_index = int(self._landing_reference_index())
-        return [segment for segment in self.segments if int(segment.index) > int(reference_index)][:2]
-
-    def _landing_anchor_feature_values(self) -> dict[str, float]:
+    def _sens_patch_cells(self) -> list[tuple[str, Rect]]:
         player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
         player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
-        future_segments = self._future_landing_segments()
+        tile_size = float(config.TILE_SIZE)
+        cell_size = float(max(1, int(config.SENS_PATCH_CELL_TILES))) * tile_size
+        cell_stride_tiles = int(max(1, int(config.SENS_PATCH_CELL_TILES)))
+        anchor_col = int(player_center_x / tile_size)
+        anchor_row = int(player_center_y / tile_size)
+        row_offsets = [(-2, "rm2"), (-1, "rm1"), (0, "r0"), (1, "rp1"), (2, "rp2")]
+        col_offsets = [(-1, "cm1"), (0, "c0"), (1, "cp1"), (2, "cp2")]
+        cells: list[tuple[str, Rect]] = []
+        for row_offset, row_label in row_offsets:
+            for col_offset, col_label in col_offsets:
+                cells.append(
+                    (
+                        f"sens_patch_{row_label}_{col_label}",
+                        Rect(
+                            left=float((anchor_col + (col_offset * cell_stride_tiles)) * tile_size),
+                            top=float((anchor_row + (row_offset * cell_stride_tiles)) * tile_size),
+                            width=float(cell_size),
+                            height=float(cell_size),
+                        ),
+                    )
+                )
+        return cells
+
+    def _sens_patch_cell_states(self) -> list[tuple[str, Rect, float]]:
+        support_surfaces = self._support_surfaces()
+        cell_states: list[tuple[str, Rect, float]] = []
+        for feature_name, cell_rect in self._sens_patch_cells():
+            is_active = 1.0 if any(cell_rect.colliderect(surface.rect) for surface in support_surfaces) else 0.0
+            cell_states.append((feature_name, cell_rect, float(is_active)))
+        return cell_states
+
+    def _sens_patch_feature_values(self) -> dict[str, float]:
         feature_values: dict[str, float] = {}
-        for feature_idx in range(2):
-            key_prefix = "land_next" if feature_idx == 0 else "land_next2"
-            if feature_idx < len(future_segments):
-                anchor_x, anchor_y = self._segment_landing_anchor(future_segments[feature_idx])
-                feature_values[f"{key_prefix}_dx"] = float(
-                    clip_signed((float(anchor_x) - player_center_x) / float(config.LOCAL_DX_NORM_PX))
-                )
-                feature_values[f"{key_prefix}_dy"] = float(
-                    clip_signed((float(anchor_y) - player_center_y) / float(config.LOCAL_DY_NORM_PX))
-                )
-            else:
-                feature_values[f"{key_prefix}_dx"] = 0.0
-                feature_values[f"{key_prefix}_dy"] = 0.0
+        for feature_name, _, is_active in self._sens_patch_cell_states():
+            feature_values[feature_name] = float(is_active)
         return feature_values
 
-    def _enemy_relevance_key(self, enemy: JumpEnemy) -> tuple[int, float, float, int, int]:
+    @staticmethod
+    def _moving_platform_anchor(platform: MovingPlatform) -> tuple[float, float]:
+        return (
+            float(platform.left + platform.width * 0.5),
+            float(platform.surface_y - config.PLAYER_SIZE * 0.5),
+        )
+
+    def _closest_relevant_moving_platform(self) -> MovingPlatform | None:
+        player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
+        best_match: tuple[tuple[float, float, float, int], MovingPlatform] | None = None
+        for platform in self.moving_platforms:
+            anchor_x, anchor_y = self._moving_platform_anchor(platform)
+            dx = float(anchor_x - player_center_x)
+            dy = float(anchor_y - player_center_y)
+            if abs(float(dx)) > float(config.LOCAL_DX_NORM_PX):
+                continue
+            if abs(float(dy)) > float(config.LOCAL_DY_NORM_PX):
+                continue
+            score = (
+                float((dx * dx) + (dy * dy)),
+                float(abs(dx)),
+                float(abs(dy)),
+                int(platform.index),
+            )
+            if best_match is None or score < best_match[0]:
+                best_match = (score, platform)
+        return None if best_match is None else best_match[1]
+
+    def _moving_platform_feature_values(self) -> dict[str, float]:
+        player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
+        platform = self._closest_relevant_moving_platform()
+        if platform is None:
+            return {
+                "land_move_dx": 0.0,
+                "land_move_dy": 0.0,
+                "land_move_vx_norm": 0.0,
+            }
+
+        anchor_x, anchor_y = self._moving_platform_anchor(platform)
+        platform_speed_norm = float(max(1.0, config.MOVING_PLATFORM_SPEED_PX_PER_SEC))
+        return {
+            "land_move_dx": float(
+                clip_signed((float(anchor_x) - player_center_x) / float(config.LOCAL_DX_NORM_PX))
+            ),
+            "land_move_dy": float(
+                clip_signed((float(anchor_y) - player_center_y) / float(config.LOCAL_DY_NORM_PX))
+            ),
+            "land_move_vx_norm": float(clip_signed(float(platform.vx) / platform_speed_norm)),
+        }
+
+    def _closest_relevant_enemy(self) -> JumpEnemy | None:
+        player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
+        best_match: tuple[tuple[float, float, float, int], JumpEnemy] | None = None
+        for enemy in self.enemies:
+            rect = self._enemy_rect(enemy)
+            enemy_center_x = float(rect.left + rect.width * 0.5)
+            enemy_center_y = float(rect.top + rect.height * 0.5)
+            dx = float(enemy_center_x - player_center_x)
+            dy = float(enemy_center_y - player_center_y)
+            if abs(float(dx)) > float(config.LOCAL_DX_NORM_PX):
+                continue
+            if abs(float(dy)) > float(config.LOCAL_DY_NORM_PX):
+                continue
+            score = (
+                float((dx * dx) + (dy * dy)),
+                float(abs(dx)),
+                float(abs(dy)),
+                int(enemy.spawn_index),
+            )
+            if best_match is None or score < best_match[0]:
+                best_match = (score, enemy)
+        return None if best_match is None else best_match[1]
+
+    def _enemy_feature_values(self) -> dict[str, float]:
+        player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
+        enemy = self._closest_relevant_enemy()
+        if enemy is None:
+            return {
+                "opp1_dx": 0.0,
+                "opp1_dy": 0.0,
+                "opp1_vx_norm": 0.0,
+            }
+
         rect = self._enemy_rect(enemy)
         enemy_center_x = float(rect.left + rect.width * 0.5)
         enemy_center_y = float(rect.top + rect.height * 0.5)
-        player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
-        player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
-        dx = float(enemy_center_x - player_center_x)
-        dy = float(enemy_center_y - player_center_y)
-        player_platform_index = -1 if self.player_last_support_index is None else int(self.player_last_support_index)
-        same_platform = 0 if int(enemy.platform_index) == int(player_platform_index) else 1
-        ahead_bias = 0 if dx >= 0.0 else 1
-        return (
-            int(same_platform),
-            float(abs(dx)),
-            float(abs(dy)),
-            int(ahead_bias),
-            int(enemy.spawn_index),
-        )
-
-    def _enemy_slots(self) -> list[JumpEnemy]:
-        ordered = sorted(self.enemies, key=self._enemy_relevance_key)
-        return ordered[:2]
+        enemy_speed_norm = float(max(1.0, config.ENEMY_RUN_SPEED_PX_PER_SEC))
+        return {
+            "opp1_dx": float(
+                clip_signed((enemy_center_x - player_center_x) / float(config.LOCAL_DX_NORM_PX))
+            ),
+            "opp1_dy": float(
+                clip_signed((enemy_center_y - player_center_y) / float(config.LOCAL_DY_NORM_PX))
+            ),
+            "opp1_vx_norm": float(clip_signed(float(enemy.vx) / enemy_speed_norm)),
+        }
 
     def _compute_obs(self) -> np.ndarray:
         player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
         player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
-        enemy_slots = self._enemy_slots()
-        landing_features = self._landing_anchor_feature_values()
-        enemy_features: dict[str, float] = {}
-        for slot_index in range(2):
-            if slot_index < len(enemy_slots):
-                enemy = enemy_slots[slot_index]
-                rect = self._enemy_rect(enemy)
-                enemy_center_x = float(rect.left + rect.width * 0.5)
-                enemy_center_y = float(rect.top + rect.height * 0.5)
-                key_prefix = f"opp{slot_index + 1}_"
-                enemy_features[f"{key_prefix}dx"] = float(
-                    clip_signed((enemy_center_x - player_center_x) / float(config.LOCAL_DX_NORM_PX))
-                )
-                enemy_features[f"{key_prefix}dy"] = float(
-                    clip_signed((enemy_center_y - player_center_y) / float(config.LOCAL_DY_NORM_PX))
-                )
-                enemy_features[f"{key_prefix}vx_norm"] = float(
-                    clip_signed(float(enemy.vx) / float(max(1.0, config.ENEMY_RUN_SPEED_PX_PER_SEC)))
-                )
-            else:
-                key_prefix = f"opp{slot_index + 1}_"
-                enemy_features[f"{key_prefix}dx"] = 0.0
-                enemy_features[f"{key_prefix}dy"] = 0.0
-                enemy_features[f"{key_prefix}vx_norm"] = 0.0
-
+        patch_features = self._sens_patch_feature_values()
+        landing_features = self._moving_platform_feature_values()
+        enemy_features = self._enemy_feature_values()
         feature_values = {
             "self_vx_norm": float(
                 clip_signed(float(self.player_vx) / float(max(1.0, config.PLAYER_RUN_SPEED_PX_PER_SEC)))
@@ -999,16 +1236,6 @@ class JumpEnv(Env):
                 clip_signed(float(self.player_vy) / float(max(config.JUMP_VELOCITY_PX_PER_SEC, config.MAX_FALL_SPEED_PX_PER_SEC)))
             ),
             "self_grounded": 1.0 if bool(self.player_grounded) else 0.0,
-            "sens_floor_f1_norm": float(self._floor_probe(float(config.FLOOR_PROBE_F1_OFFSET_PX))),
-            "sens_floor_f2_norm": float(self._floor_probe(float(config.FLOOR_PROBE_F2_OFFSET_PX))),
-            "sens_floor_b1_norm": float(self._floor_probe(-float(config.FLOOR_PROBE_F1_OFFSET_PX))),
-            "sens_floor_b2_norm": float(self._floor_probe(-float(config.FLOOR_PROBE_F2_OFFSET_PX))),
-            "sens_arc_f1_norm": float(self._arc_probe(float(config.ARC_PROBE_F1_OFFSET_PX))),
-            "sens_arc_f2_norm": float(self._arc_probe(float(config.ARC_PROBE_F2_OFFSET_PX))),
-            "sens_up_clear_norm": float(self._up_clear_norm()),
-            "sens_down_ground_norm": float(
-                clip_unit(self._down_ground_distance() / float(config.SENS_DOWN_RANGE_PX))
-            ),
             "flag_goal_dx": float(
                 clip_signed((self.flag_center_x - player_center_x) / float(config.LOCAL_DX_NORM_PX))
             ),
@@ -1016,6 +1243,7 @@ class JumpEnv(Env):
                 clip_signed((float(self.flag_rect.top + self.flag_rect.height * 0.5) - player_center_y) / float(config.LOCAL_DY_NORM_PX))
             ),
             "flag_progress_norm": float(self._player_flag_progress()),
+            **patch_features,
             **landing_features,
             **enemy_features,
         }
@@ -1084,6 +1312,7 @@ class JumpEnv(Env):
         self.player_vy = -float(config.ENEMY_STOMP_BOUNCE_VELOCITY_PX_PER_SEC)
         self.player_grounded = False
         self.player_support_index = None
+        self.player_moving_support_index = None
         self._coyote_steps_left = 0
         return int(len(stomped_spawn_indices))
 
@@ -1143,6 +1372,18 @@ class JumpEnv(Env):
                 inner_color=COLOR_SLATE_GRAY,
                 inset=float(max(2.0, config.CELL_INSET)),
             )
+        for platform in self.moving_platforms:
+            if float(platform.right) < float(camera_x) or float(platform.left) > float(camera_x + config.SCREEN_WIDTH):
+                continue
+            self._draw_two_tone_rect(
+                left=float(platform.left - camera_x),
+                top=float(platform.surface_y),
+                width=float(platform.width),
+                height=float(config.PLATFORM_THICKNESS_PX),
+                outer_color=COLOR_FOG_GRAY,
+                inner_color=COLOR_SLATE_GRAY,
+                inset=float(max(2.0, config.CELL_INSET)),
+            )
 
         goal_segment = self.segments[int(self.goal_segment_index)]
         pole_width = float(max(3.0, round(config.TILE_SIZE * 0.25)))
@@ -1190,6 +1431,33 @@ class JumpEnv(Env):
             inner_color=COLOR_DEEP_TEAL,
             inset=float(config.CELL_INSET),
         )
+
+    def _draw_sens_patch_grid(self) -> None:
+        if not self._should_draw_sens_patch_grid():
+            return
+        camera_x = self._camera_x()
+        grid_color = COLOR_LIGHT_NEUTRAL + (int(config.SENS_PATCH_GRID_ALPHA),)
+        line_width = 1.5
+        for _, cell_rect, is_active in self._sens_patch_cell_states():
+            if float(cell_rect.right) < float(camera_x) or float(cell_rect.left) > float(camera_x + config.SCREEN_WIDTH):
+                continue
+            bottom = self.window_controller.top_left_to_bottom(float(cell_rect.top), float(cell_rect.height))
+            if float(is_active) > 0.0:
+                arcade.draw_lbwh_rectangle_filled(
+                    float(cell_rect.left - camera_x),
+                    float(bottom),
+                    float(cell_rect.width),
+                    float(cell_rect.height),
+                    grid_color,
+                )
+            arcade.draw_lbwh_rectangle_outline(
+                float(cell_rect.left - camera_x),
+                float(bottom),
+                float(cell_rect.width),
+                float(cell_rect.height),
+                grid_color,
+                float(line_width),
+            )
 
     def _draw_history_icon(self, success: bool, center_x: float, center_y: float, size: float) -> None:
         outer_color = COLOR_AQUA if bool(success) else COLOR_CORAL
@@ -1253,11 +1521,13 @@ class JumpEnv(Env):
             }
 
         self.window_controller.poll_events_or_raise()
+        self._update_visual_overlay_toggle()
         action_idx = int(self._resolve_human_action() if self.mode == "human" else self._parse_action(action))
         progress_prev_step = float(self._player_flag_progress())
         self._apply_action(int(action_idx))
         prev_player_rect = self._player_rect()
 
+        self._step_moving_platforms()
         self._step_player()
         self._step_enemies()
         stomps_this_step = int(self._resolve_enemy_stomps(prev_player_rect))
@@ -1357,6 +1627,7 @@ class JumpEnv(Env):
             return
         self.window_controller.clear(COLOR_SLATE_GRAY)
         self._draw_world()
+        self._draw_sens_patch_grid()
         self._draw_bottom_bar()
         self.window_controller.flip()
 

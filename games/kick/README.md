@@ -4,7 +4,7 @@ Top-down football environment with a shared LEFT-team policy and a centralized c
 
 ## Clip
 
-No clip is currently checked into the repo for `kick`.
+![Kick Demo](../../media/kick-demo.gif)
 
 ## Algorithm / Network
 
@@ -136,9 +136,9 @@ Logged reward codes are `G C T A P B Z`:
 - Promotion settings live in `games/kick/config.py` under `CURRICULUM_PROMOTION`
 - LEFT always stays at `7` RL-controlled players
 - Opponent scaling:
-  - Level 1: `7v1` vs `GK`, goals `2.5x`, enemy stamina `0.50`, `start_possession=RND_LEFT`
-  - Level 2: `7v3` vs `GK LM RM`, goals `2.0x`, enemy stamina `0.50`, `start_possession=RND_LEFT`
-  - Level 3: `7v5` vs `GK LB RB CM CS`, goals `1.5x`, enemy stamina `0.75`, `start_possession=CEN`
+  - Level 1: `7v1` vs `GK`, goals `3.0x`, enemy stamina `0.25`, `start_possession=RND_LEFT`
+  - Level 2: `7v3` vs `GK LM RM`, goals `2.25x`, enemy stamina `0.50`, `start_possession=RND_LEFT`
+  - Level 3: `7v5` vs `GK LB RB CM CS`, goals `1.75x`, enemy stamina `0.625`, `start_possession=CEN`
   - Level 4: `7v7` vs `GK LB RB LM CM RM CS`, goals `1.25x`, enemy stamina `0.75`, `start_possession=CEN`
   - Level 5: `7v7` vs `GK LB RB LM CM RM CS`, standard goals, enemy stamina `1.00`, `start_possession=CEN`
 
@@ -158,5 +158,7 @@ python -m scripts.train --game kick
 python -m scripts.play_ai --game kick --render
 python -m scripts.play_user --game kick
 ```
+
+When `--level` is omitted, `train` starts at `L1` and `play-user` / `play-ai` default to `L5`.
 
 See `games/kick/config.py` and `games/kick/env.py` for the CTDE runtime, rewards, curriculum settings, and training defaults. Kick's game-wide actor and critic sizes live in `DEFAULT_MODEL_CONFIG["hidden_sizes"]` and `DEFAULT_MODEL_CONFIG["critic_hidden_sizes"]`, its PPO-specific extras live in `ALGO_CONFIG_OVERRIDES["ppo"]`, its level-specific entropy schedule lives in `LEVEL_SETTINGS[*]["entropy_coef"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

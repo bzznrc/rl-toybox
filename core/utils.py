@@ -48,7 +48,7 @@ def resolve_play_level(
     level: int | None,
     min_level: int,
     max_level: int,
-    default_level: int = 3,
+    default_level: int = 5,
 ) -> int:
     candidate = int(default_level if level is None else level)
     return max(int(min_level), min(int(candidate), int(max_level)))

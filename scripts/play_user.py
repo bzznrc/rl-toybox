@@ -18,7 +18,12 @@ from core.logging_utils import configure_logging, log_run_context
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Play a game in human-control mode")
     parser.add_argument("--game", required=True, help="Game id")
-    parser.add_argument("--level", type=int, default=3, help="Play level selector (defaults to 3)")
+    parser.add_argument(
+        "--level",
+        type=int,
+        default=None,
+        help="Difficulty selector (defaults to L5 for curriculum games and Osero 6x6)",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
     parser.add_argument("--headless", action="store_true", help="Disable rendering")
     parser.add_argument(
@@ -44,7 +49,7 @@ def _build_play_overrides(args: argparse.Namespace) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     configure_logging()
-    level = int(apply_generic_launch_level(args.game, args.level))
+    level = int(apply_generic_launch_level(args.game, args.level, mode="play"))
 
     composed_config = compose_run_config(args.game, mode="play", user_overrides=_build_play_overrides(args))
     apply_seed_from_config(composed_config)

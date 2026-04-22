@@ -4,14 +4,6 @@ from __future__ import annotations
 
 import os
 
-from core.arcade_style import (
-    DEFAULT_BOTTOM_BAR_HEIGHT as BB_HEIGHT,
-    DEFAULT_GRID_COLUMNS,
-    DEFAULT_GRID_ROWS,
-    DEFAULT_TILE_SIZE,
-    screen_height,
-    screen_width,
-)
 from core.io_schema import row_major_grid_action_names, row_major_grid_feature_names
 from core.utils import env_flag
 
@@ -37,17 +29,11 @@ def _resolve_board_size(raw_value: object) -> int:
 
 # RUNTIME
 WINDOW_TITLE = "Osero"
-FPS = 18
-TRAINING_FPS = 0
 USE_GPU = env_flag("OSERO_USE_GPU", False)
 BOARD_SIZE = _resolve_board_size(os.getenv("OSERO_BOARD_SIZE", str(DEFAULT_BOARD_SIZE)))
 
 
 # ENV
-SCREEN_WIDTH = screen_width(DEFAULT_GRID_COLUMNS, DEFAULT_TILE_SIZE)
-SCREEN_HEIGHT = screen_height(DEFAULT_GRID_ROWS, DEFAULT_TILE_SIZE, BB_HEIGHT)
-WORLD_WIDTH = int(SCREEN_WIDTH)
-WORLD_HEIGHT = int(SCREEN_HEIGHT - BB_HEIGHT)
 BOARD_TOP_MARGIN = 50.0
 BOARD_SIDE_MARGIN = 150.0
 BOARD_BOTTOM_MARGIN = 56.0

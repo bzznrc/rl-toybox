@@ -44,6 +44,24 @@ def _infer_current_level(env: Env, default: int = 1) -> int:
     return _safe_level(level_value, default)
 
 
+def _curriculum_avg_success_for_level(env: Env, level: int) -> float | None:
+    curriculum = getattr(env, "_curriculum", None)
+    if curriculum is None:
+        return None
+    episodes_in_level = getattr(curriculum, "episodes_in_level", None)
+    avg_success_in_level = getattr(curriculum, "avg_success_in_level", None)
+    curriculum_config = getattr(curriculum, "config", None)
+    if not callable(episodes_in_level) or not callable(avg_success_in_level):
+        return None
+    min_episodes = max(1, int(getattr(curriculum_config, "min_episodes_per_level", 100)))
+    if int(episodes_in_level(int(level))) < int(min_episodes):
+        return None
+    avg_success = avg_success_in_level(int(level))
+    if avg_success is None:
+        return None
+    return float(avg_success)
+
+
 def _apply_level_entropy_coef(algorithm: Algorithm, env: Env, level: int) -> float | None:
     getter = getattr(env, "get_entropy_coef_for_level", None)
     if not callable(getter):
@@ -275,7 +293,9 @@ def run_on_policy_training(
                 level_episode_count = int(episodes_by_level.get(int(episode_level), 0))
                 stats_ready_level = level_episode_count >= int(min_episodes_for_stats)
                 avg_reward_ep = float(mean(level_reward_window)) if stats_ready_level else None
-                avg_success_ep = float(mean(level_success_window)) if stats_ready_level else None
+                avg_success_ep = _curriculum_avg_success_for_level(env, int(episode_level))
+                if avg_success_ep is None and stats_ready_level:
+                    avg_success_ep = float(mean(level_success_window)) if level_success_window else None
 
                 if stats_ready_level:
                     avg_reward_level = float(mean(level_reward_window))

@@ -2,32 +2,30 @@
 
 from __future__ import annotations
 
-from core.arcade_style import (
-    DEFAULT_BOTTOM_BAR_HEIGHT as BB_HEIGHT,
-    DEFAULT_CELL_INSET as CELL_INSET,
-    DEFAULT_GRID_COLUMNS as GRID_WIDTH_TILES,
-    DEFAULT_GRID_ROWS as GRID_HEIGHT_TILES,
-    DEFAULT_TILE_SIZE as TILE_SIZE,
-    screen_height,
-    screen_width,
+from core.shared_config import (
+    BB_HEIGHT,
+    CELL_INSET,
+    FPS,
+    PHYSICS_DT,
+    PLAYFIELD_HEIGHT,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    TILE_SIZE,
+    TRAINING_FPS,
 )
 from core.utils import env_flag
 
 
 # RUNTIME
 WINDOW_TITLE = "Jump"
-FPS = 60
-TRAINING_FPS = 0
 USE_GPU = env_flag("JUMP_USE_GPU", False)
 PPO_METRICS_LOG_ENABLED = False
+SHOW_SENS_PATCH_GRID = False
+SENS_PATCH_GRID_ALPHA = 128
+SENS_PATCH_CELL_TILES = 2
 
 
 # ENV
-SCREEN_WIDTH = screen_width(GRID_WIDTH_TILES, TILE_SIZE)
-SCREEN_HEIGHT = screen_height(GRID_HEIGHT_TILES, TILE_SIZE, BB_HEIGHT)
-PLAYFIELD_HEIGHT = SCREEN_HEIGHT - BB_HEIGHT
-PHYSICS_DT = 1.0 / FPS
-
 PLAYER_TILES = 1
 ENEMY_TILES = 1
 PLAYER_SIZE = TILE_SIZE * PLAYER_TILES
@@ -59,18 +57,14 @@ CAMERA_LOOKAHEAD_PX = 0.18 * SCREEN_WIDTH
 
 LOCAL_DX_NORM_PX = 0.5 * SCREEN_WIDTH
 LOCAL_DY_NORM_PX = 0.5 * PLAYFIELD_HEIGHT
-FLOOR_PROBE_F1_OFFSET_PX = 2.0 * TILE_SIZE
-FLOOR_PROBE_F2_OFFSET_PX = 5.0 * TILE_SIZE
-ARC_PROBE_F1_OFFSET_PX = 3.0 * TILE_SIZE
-ARC_PROBE_F2_OFFSET_PX = 6.0 * TILE_SIZE
-FLOOR_PROBE_STEP_UP_PX = 1.0 * TILE_SIZE
-FLOOR_PROBE_DROP_PX = 1.5 * TILE_SIZE
-ARC_PROBE_RISE_PX = (JUMP_VELOCITY_PX_PER_SEC * JUMP_VELOCITY_PX_PER_SEC) / (2.0 * GRAVITY_PX_PER_SEC2)
-ARC_PROBE_DROP_PX = ARC_PROBE_RISE_PX + (2.0 * TILE_SIZE)
-ARC_PROBE_PEAK_EXTRA_PX = 2.0 * TILE_SIZE
-ARC_PROBE_SAMPLES = 5
-SENS_DOWN_RANGE_PX = 10.0 * TILE_SIZE
-SENS_UP_CLEAR_RANGE_PX = 16.0 * TILE_SIZE
+MOVING_PLATFORM_SIZE_TILES = [6, 9]
+MOVING_PLATFORM_SPEED_PX_PER_SEC = 4.0 * TILE_SIZE
+MOVING_PLATFORM_ENTRY_GAP_MIN_TILES = 1
+MOVING_PLATFORM_ENTRY_GAP_MAX_TILES = 3
+MOVING_PLATFORM_EXIT_GAP_MIN_TILES = 1
+MOVING_PLATFORM_EXIT_GAP_MAX_TILES = 3
+MOVING_PLATFORM_TRAVEL_MIN_TILES = 4
+MOVING_PLATFORM_TRAVEL_MAX_TILES = 8
 
 LEVEL_GENERATION_ATTEMPTS = 64
 STANDARD_PLATFORM_SIZE_TILES = [6, 9, 12]
@@ -81,36 +75,45 @@ EPISODE_STEPS_PER_TILE = 20.0
 ENEMY_SPACING_TILES = 20.0
 MIN_LEVEL_LENGTH_TILES = 48
 BASE_GAP_MIN_TILES = 2
-LEVEL3_EXTRA_GAP_MIN_TILES = 1
+TOP_LEVEL_EXTRA_GAP_MIN_TILES = 1
 BASE_GAP_EXTRA_TILES = 1
-LEVEL2_EXTRA_GAP_MAX_TILES = 1
+ADVANCED_GAP_MAX_BONUS_TILES = 1
 DEFAULT_LANE_DELTA_CHOICES = [0, 0, 1, -1, -1]
 ADVANCED_LANE_DELTA_CHOICES = [0, 1, 1, -1, -1]
 
 
 # IO
+# Observation order: SELF (3) + SENS (20) + LAND (3) + OPP (3) + FLAG (3) = 32.
 INPUT_FEATURE_NAMES = [
     "self_vx_norm",
     "self_vy_norm",
     "self_grounded",
-    "sens_floor_f1_norm",
-    "sens_floor_f2_norm",
-    "sens_floor_b1_norm",
-    "sens_floor_b2_norm",
-    "sens_arc_f1_norm",
-    "sens_arc_f2_norm",
-    "sens_up_clear_norm",
-    "sens_down_ground_norm",
-    "land_next_dx",
-    "land_next_dy",
-    "land_next2_dx",
-    "land_next2_dy",
+    "sens_patch_rm2_cm1",
+    "sens_patch_rm2_c0",
+    "sens_patch_rm2_cp1",
+    "sens_patch_rm2_cp2",
+    "sens_patch_rm1_cm1",
+    "sens_patch_rm1_c0",
+    "sens_patch_rm1_cp1",
+    "sens_patch_rm1_cp2",
+    "sens_patch_r0_cm1",
+    "sens_patch_r0_c0",
+    "sens_patch_r0_cp1",
+    "sens_patch_r0_cp2",
+    "sens_patch_rp1_cm1",
+    "sens_patch_rp1_c0",
+    "sens_patch_rp1_cp1",
+    "sens_patch_rp1_cp2",
+    "sens_patch_rp2_cm1",
+    "sens_patch_rp2_c0",
+    "sens_patch_rp2_cp1",
+    "sens_patch_rp2_cp2",
+    "land_move_dx",
+    "land_move_dy",
+    "land_move_vx_norm",
     "opp1_dx",
     "opp1_dy",
     "opp1_vx_norm",
-    "opp2_dx",
-    "opp2_dy",
-    "opp2_vx_norm",
     "flag_goal_dx",
     "flag_goal_dy",
     "flag_progress_norm",
@@ -123,8 +126,8 @@ ACTION_NAMES = [
 ]
 OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
-if OBS_DIM != 24:
-    raise RuntimeError(f"Jump INPUT_FEATURE_NAMES expected 24 entries, got {OBS_DIM}.")
+if OBS_DIM != 32:
+    raise RuntimeError(f"Jump INPUT_FEATURE_NAMES expected 32 entries, got {OBS_DIM}.")
 
 ACTION_MOVE_LEFT = 0
 ACTION_MOVE_RIGHT = 1
@@ -138,32 +141,45 @@ DEFAULT_ALGO = "ppo"
 
 # CURRICULUM
 MIN_LEVEL = 1
-MAX_LEVEL = 3
+MAX_LEVEL = 5
 REWARD_ROLLING_WINDOW = 100
 MIN_EPISODES_FOR_STATS = REWARD_ROLLING_WINDOW
 
 CURRICULUM_PROMOTION = {
-    "min_episodes_per_level": 250,
-    "check_window": 25,
-    "success_threshold": 0.65,
-    "consecutive_checks_required": 2,
+    "min_episodes_per_level": 100,
+    "success_threshold": 0.60,
 }
 
 LEVEL_SETTINGS = {
     1: {
+        "length_tiles": 48,
+        "lane_count": 1,
+        "enemy_frequency": 0.0,
+        "moving_platform_frequency": 0.0,
+    },
+    2: {
         "length_tiles": 64,
         "lane_count": 1,
         "enemy_frequency": 0.25,
-    },
-    2: {
-        "length_tiles": 96,
-        "lane_count": 2,
-        "enemy_frequency": 0.50,
+        "moving_platform_frequency": 0.0,
     },
     3: {
+        "length_tiles": 80,
+        "lane_count": 2,
+        "enemy_frequency": 0.25,
+        "moving_platform_frequency": 0.25,
+    },
+    4: {
+        "length_tiles": 104,
+        "lane_count": 2,
+        "enemy_frequency": 0.50,
+        "moving_platform_frequency": 0.50,
+    },
+    5: {
         "length_tiles": 128,
         "lane_count": 3,
-        "enemy_frequency": 1.00,
+        "enemy_frequency": 0.75,
+        "moving_platform_frequency": 0.75,
     },
 }
 

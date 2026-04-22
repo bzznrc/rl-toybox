@@ -26,7 +26,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train an RL toybox game")
     parser.add_argument("--game", required=True, help=f"Game id ({', '.join(ACTIVE_GAME_ORDER)})")
     parser.add_argument("--algo", default=None, help="Override algorithm id; use auto/default to keep the game's default")
-    parser.add_argument("--level", type=int, default=1, help="Shared difficulty selector (defaults to 1)")
+    parser.add_argument(
+        "--level",
+        type=int,
+        default=None,
+        help="Shared difficulty selector (defaults to L1 for curriculum games and Osero 6x6)",
+    )
     parser.add_argument("--steps", type=int, default=None, help="Normalized training step budget")
     parser.add_argument("--episodes", type=int, default=None, help="Normalized episode/game budget")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
@@ -102,7 +107,7 @@ def _set_resume_best_epsilon_to_bump_cap(algorithm: object) -> float | None:
 def main() -> None:
     args = parse_args()
     configure_logging()
-    launch_level = int(apply_generic_launch_level(args.game, args.level))
+    launch_level = int(apply_generic_launch_level(args.game, args.level, mode="train"))
 
     prepared = prepare_run(args.game, args.algo, mode="train", user_overrides=_build_train_overrides(args))
     run_paths = prepared.run_paths

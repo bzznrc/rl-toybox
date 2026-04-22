@@ -13,6 +13,7 @@ import sys
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from core.algorithms.exploration import compute_eps_decay
+from core.curriculum import DEFAULT_CURRICULUM_MAX_LEVEL, DEFAULT_CURRICULUM_MIN_LEVEL
 from core.envs.base import Env
 from core.envs.spaces import Box, Discrete, Space
 from core.io.runs import RunPaths, normalize_model_kind, resolve_run_paths
@@ -41,11 +42,9 @@ ACTIVE_GAME_ORDER: tuple[str, ...] = (
     "osero",
     "kick",
 )
-GENERIC_LAUNCH_LEVEL_TO_KICK_LEVEL = {
-    1: 1,
-    2: 3,
-    3: 5,
-}
+DEFAULT_TRAINING_LAUNCH_LEVEL = int(DEFAULT_CURRICULUM_MIN_LEVEL)
+DEFAULT_PLAY_LAUNCH_LEVEL = int(DEFAULT_CURRICULUM_MAX_LEVEL)
+DEFAULT_OSERO_LAUNCH_LEVEL = 2
 GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE = {
     1: 4,
     2: 6,
@@ -154,11 +153,49 @@ def build_game_spec_from_config(*, config_module: object, env_type: type[Env]) -
     )
 
 
-def resolve_generic_launch_level(game_id: str, generic_level: int) -> int:
+def _generic_launch_level_bounds(game_id: str) -> tuple[int, int]:
     game_key = str(game_id).strip().lower()
-    level_key = max(1, min(3, int(generic_level)))
-    if game_key == "kick":
-        return int(GENERIC_LAUNCH_LEVEL_TO_KICK_LEVEL[int(level_key)])
+    if game_key == "osero":
+        return 1, int(len(GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE))
+    return int(DEFAULT_CURRICULUM_MIN_LEVEL), int(DEFAULT_CURRICULUM_MAX_LEVEL)
+
+
+def _default_generic_launch_level(game_id: str, *, mode: str | None = None) -> int:
+    game_key = str(game_id).strip().lower()
+    if game_key == "osero":
+        return int(DEFAULT_OSERO_LAUNCH_LEVEL)
+    mode_key = "" if mode is None else str(mode).strip().lower()
+    if mode_key == "train":
+        return int(DEFAULT_TRAINING_LAUNCH_LEVEL)
+    return int(DEFAULT_PLAY_LAUNCH_LEVEL)
+
+
+def _resolve_osero_board_size_from_env() -> int | None:
+    raw_value = os.getenv("OSERO_BOARD_SIZE")
+    if raw_value is None:
+        return None
+    normalized = str(raw_value).strip().lower()
+    if "x" in normalized:
+        normalized = normalized.split("x", 1)[0].strip()
+    try:
+        board_size = int(normalized)
+    except (TypeError, ValueError):
+        return None
+    if board_size not in set(int(value) for value in GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE.values()):
+        return None
+    return int(board_size)
+
+
+def resolve_generic_launch_level(
+    game_id: str,
+    generic_level: int | None,
+    *,
+    mode: str | None = None,
+) -> int:
+    game_key = str(game_id).strip().lower()
+    min_level, max_level = _generic_launch_level_bounds(game_key)
+    candidate = _default_generic_launch_level(game_key, mode=mode) if generic_level is None else int(generic_level)
+    level_key = max(int(min_level), min(int(max_level), int(candidate)))
     if game_key == "osero":
         return 1
     return int(level_key)
@@ -176,14 +213,26 @@ def _refresh_osero_launch_modules() -> None:
         sys.modules.pop(module_name, None)
 
 
-def apply_generic_launch_level(game_id: str, generic_level: int) -> int:
+def apply_generic_launch_level(
+    game_id: str,
+    generic_level: int | None,
+    *,
+    mode: str | None = None,
+) -> int:
     game_key = str(game_id).strip().lower()
-    level_key = max(1, min(3, int(generic_level)))
+    min_level, max_level = _generic_launch_level_bounds(game_key)
+    candidate = _default_generic_launch_level(game_key, mode=mode) if generic_level is None else int(generic_level)
+    level_key = max(int(min_level), min(int(max_level), int(candidate)))
     if game_key == "osero":
-        board_size = int(GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE[int(level_key)])
+        env_board_size = _resolve_osero_board_size_from_env()
+        board_size = (
+            int(env_board_size)
+            if generic_level is None and env_board_size is not None
+            else int(GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE[int(level_key)])
+        )
         os.environ["OSERO_BOARD_SIZE"] = f"{int(board_size)}x{int(board_size)}"
         _refresh_osero_launch_modules()
-    return int(resolve_generic_launch_level(game_key, level_key))
+    return int(resolve_generic_launch_level(game_key, level_key, mode=mode))
 
 
 def build_hidden_run_name(hidden_sizes: Iterable[int]) -> str:
@@ -1207,7 +1256,7 @@ def resume_level_bounds(env: object) -> tuple[int, int]:
         return int(current_level), int(current_level)
     curriculum_config = getattr(curriculum, "config", None)
     min_level = max(1, int(getattr(curriculum_config, "min_level", 1)))
-    max_level = max(min_level, int(getattr(curriculum_config, "max_level", 3)))
+    max_level = max(min_level, int(getattr(curriculum_config, "max_level", DEFAULT_CURRICULUM_MAX_LEVEL)))
     return int(min_level), int(max_level)
 
 

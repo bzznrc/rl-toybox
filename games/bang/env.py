@@ -23,7 +23,7 @@ from core.arcade_style import (
     COLOR_SAND,
     COLOR_SLATE_GRAY,
 )
-from core.curriculum import ThreeLevelCurriculum, advance_curriculum, build_curriculum_config
+from core.curriculum import SharedCurriculum, advance_curriculum, build_curriculum_config
 from core.envs.base import Env
 from core.io_schema import (
     clip_signed,
@@ -46,6 +46,16 @@ from core.primitives import (
     status_icon_size,
 )
 from core.rewards import RewardBreakdown
+from core.shared_config import (
+    BB_HEIGHT,
+    CELL_INSET,
+    FPS,
+    NN_CONTROL_MARKER_SIZE_PX,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    TILE_SIZE,
+    TRAINING_FPS,
+)
 
 from games.bang.config import (
     ACTION_NAMES as BANG_ACTION_NAMES,
@@ -59,8 +69,6 @@ from games.bang.config import (
     ACTION_STOP_MOVE,
     AIM_RATE_PER_STEP,
     AIM_TOLERANCE_DEGREES,
-    BB_HEIGHT,
-    CELL_INSET,
     CURRICULUM_PROMOTION,
     ENEMY_HIDDEN_URGENCY_FRAMES,
     ENEMY_MOVE_COMMIT_FRAMES,
@@ -69,7 +77,6 @@ from games.bang.config import (
     ENEMY_SHOT_ERROR_CHOICES,
     ENEMY_SPAWN_X_RATIO,
     EVENT_TIMER_NORMALIZATION_FRAMES,
-    FPS,
     INPUT_FEATURE_NAMES as BANG_INPUT_FEATURE_NAMES,
     OBS_DIM as BANG_OBS_DIM,
     ACT_DIM as BANG_ACT_DIM,
@@ -79,7 +86,6 @@ from games.bang.config import (
     MAX_OBSTACLE_SECTIONS,
     MIN_LEVEL,
     MIN_OBSTACLE_SECTIONS,
-    NN_CONTROL_MARKER_SIZE_PX,
     OBSTACLE_START_ATTEMPTS,
     ENGAGEMENT_CLIP,
     ENGAGEMENT_SCALE,
@@ -95,12 +101,8 @@ from games.bang.config import (
     REWARD_KILL,
     REWARD_WIN,
     SAFE_RADIUS,
-    SCREEN_HEIGHT,
-    SCREEN_WIDTH,
     SHOOT_COOLDOWN_FRAMES,
     SPAWN_Y_OFFSET,
-    TILE_SIZE,
-    TRAINING_FPS,
     WINDOW_TITLE,
 )
 from core.runtime import (
@@ -1539,7 +1541,7 @@ class HumanGame(BaseGame):
             self.reset()
 
         self.draw_frame()
-        self.frame_clock.tick(FPS if self.show_game else 0)
+        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
 
 
 class TrainingGame(BaseGame):
@@ -1691,14 +1693,14 @@ class BangEnv(Env):
             promotion_settings=CURRICULUM_PROMOTION,
         )
         self._curriculum = (
-            ThreeLevelCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
+            SharedCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
             if self.mode == "train"
             else None
         )
         self._current_level = (
             int(self._curriculum.get_level())
             if self._curriculum is not None
-            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=3)
+            else resolve_play_level(level=level, min_level=MIN_LEVEL, max_level=MAX_LEVEL, default_level=MAX_LEVEL)
         )
         self._last_episode_level = int(self._current_level)
         self._last_episode_success = 0

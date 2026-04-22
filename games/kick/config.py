@@ -2,32 +2,22 @@
 
 from __future__ import annotations
 
-from core.arcade_style import (
-    DEFAULT_BOTTOM_BAR_HEIGHT as BB_HEIGHT,
-    DEFAULT_CELL_INSET as CELL_INSET,
-    DEFAULT_GRID_COLUMNS as GRID_WIDTH_TILES,
-    DEFAULT_GRID_ROWS as GRID_HEIGHT_TILES,
-    DEFAULT_TILE_SIZE as TILE_SIZE,
-    screen_height,
-    screen_width,
+from core.shared_config import (
+    FPS,
+    PHYSICS_DT,
+    TILE_SIZE,
 )
 from core.utils import env_float, env_flag
 
 
 # RUNTIME
 WINDOW_TITLE = "Kick"
-FPS = 60
-TRAINING_FPS = 0
 USE_GPU = env_flag("KICK_USE_GPU", False)
 PPO_METRICS_LOG_ENABLED = False
 
 
 # ENV
-SCREEN_WIDTH = screen_width(GRID_WIDTH_TILES, TILE_SIZE)
-SCREEN_HEIGHT = screen_height(GRID_HEIGHT_TILES, TILE_SIZE, BB_HEIGHT)
-
 GAME_SPEED_SCALE = max(0.2, env_float("KICK_SPEED_SCALE", 0.5))
-PHYSICS_DT = 1.0 / FPS
 BALL_RADIUS_SCALE = 1.8
 PLAYER_V_MAX_PX_PER_SEC = 3.8 * FPS * GAME_SPEED_SCALE
 PLAYER_A_MAX_PX_PER_SEC2 = PLAYER_V_MAX_PX_PER_SEC * 4.0
@@ -161,10 +151,8 @@ REWARD_ROLLING_WINDOW = 100
 MIN_EPISODES_FOR_STATS = REWARD_ROLLING_WINDOW
 
 CURRICULUM_PROMOTION = {
-    "min_episodes_per_level": 250,
-    "check_window": 25,
-    "success_threshold": 0.40,
-    "consecutive_checks_required": 2,
+    "min_episodes_per_level": 100,
+    "success_threshold": 0.60,
 }
 
 LEVEL_SETTINGS = {
@@ -172,15 +160,15 @@ LEVEL_SETTINGS = {
         "players_opponent": 1,
         "opponent_roles": ["GK"],
         "start_possession": "RND_LEFT",
-        "goals_size_scale": 2.5,
-        "enemy_stamina_scale": 0.50,
+        "goals_size_scale": 3.0,
+        "enemy_stamina_scale": 0.25,
         "entropy_coef": 0.02,
     },
     2: {
         "players_opponent": 3,
         "opponent_roles": ["GK", "LM", "RM"],
         "start_possession": "RND_LEFT",
-        "goals_size_scale": 2.0,
+        "goals_size_scale": 2.25,
         "enemy_stamina_scale": 0.50,
         "entropy_coef": 0.015,
     },
@@ -188,8 +176,8 @@ LEVEL_SETTINGS = {
         "players_opponent": 5,
         "opponent_roles": ["GK", "LB", "RB", "CM", "CS"],
         "start_possession": "CEN",
-        "goals_size_scale": 1.5,
-        "enemy_stamina_scale": 0.75,
+        "goals_size_scale": 1.75,
+        "enemy_stamina_scale": 0.625,
         "entropy_coef": 0.01,
     },
     4: {
@@ -198,7 +186,7 @@ LEVEL_SETTINGS = {
         "start_possession": "CEN",
         "goals_size_scale": 1.25,
         "enemy_stamina_scale": 0.75,
-        "entropy_coef": 0.01,
+        "entropy_coef": 0.0075,
     },
     5: {
         "players_opponent": 7,

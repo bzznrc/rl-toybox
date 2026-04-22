@@ -45,24 +45,42 @@ Current implementation snapshots are owned by each `games/<game>/README.md`.
 - Gate expensive debug-only work behind explicit flags.
 - Performance changes must not alter observation, reward, or termination semantics.
 
+### Visual building blocks
+
+- Treat the repo's standard visual atom as the default `DEFAULT_TILE_SIZE` square block from `core/arcade_style.py`.
+- This standard block is the same base unit used by Bang's actors and obstacles, and by Vroom's car body.
+- Scale from that base deliberately:
+  - `1x` is the default and should be the starting point for most gameplay-facing objects.
+  - `2x` is acceptable for larger composite cells or overlays such as Jump's grid-style patches.
+  - `0.5x` is acceptable for finer block-derived detail such as Vroom's rasterized track surface and lane markings.
+- Prefer composing visuals from these square units instead of introducing unrelated bespoke shapes or gradients.
+- Prefer the shared palette from `core/arcade_style.py`; new visuals should read as arrangements of standard blocks plus palette colors, not as independent art systems.
+- When outlines are used, keep their thickness intentional relative to the standard block and avoid decorative inner grid noise unless it carries gameplay meaning.
+
 ## 3) Config Contract
 
 ### Section order
 
 Each game config should prefer this order:
 
-1. `RUNTIME`
-2. `ENV`
-3. `IO`
-4. `GAME`
-5. `CURRICULUM`
-6. `REWARDS`
-7. `TRAINING`
+1. `ENV`
+2. `IO`
+3. `CURRICULUM`
+4. `REWARDS`
+5. `TRAINING`
+
+If a game needs extra sections, keep them clearly game-owned and place them deliberately rather than recreating shared runtime boilerplate.
 
 ### Ownership boundaries
 
 - Keep `config.py` declarative and constants-only.
 - Put shared training/runtime boilerplate in shared `core/` code.
+- `core/shared_config.py` owns the default shared runtime/window constants:
+  - render and training FPS
+  - shared screen, playfield, and world geometry
+  - shared tile sizing helpers
+  - common marker sizing
+- Per-game `config.py` files should import those defaults instead of redefining them, unless a game truly needs an override.
 - Keep future placeholder configs lightweight rather than speculative.
 - Treat `config.py` as the per-game source of truth for `INPUT_FEATURE_NAMES`, `ACTION_NAMES`, observation/action dimensions, default network sizes, and the default training stop budget in `DEFAULT_TRAIN_CONFIG["budget"]`.
 - The standard active-game training/config template is `DEFAULT_ALGO`, `DEFAULT_MODEL_CONFIG`, `ALGO_CONFIG_OVERRIDES`, and `DEFAULT_TRAIN_CONFIG`.
@@ -140,7 +158,10 @@ For board self-play, the action mask stays outside the observation.
 
 ## 7) Curriculum Framework
 
-- Prefer a compact 3-level curriculum when applicable.
+- Prefer a smooth shared 5-level curriculum for curriculum-based games.
+- Use the previous anchor points as `L1 -> L1`, `L2 -> L3`, and `L3 -> L5`, then add bridge levels at `L2` and `L4`.
+- Preserve prior top-end difficulty at the new `L5`; the goal is smoother interpolation, not a broader or harder overall ladder.
+- `osero` is the temporary exception. It still uses `4x4`, `6x6`, and `8x8` board-size modes instead of curriculum levels.
 - Promote using success metrics when dense shaping could distort reward totals.
 - Keep per-level knobs in clearly named config tables.
 

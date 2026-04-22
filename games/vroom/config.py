@@ -2,28 +2,16 @@
 
 from __future__ import annotations
 
-from core.arcade_style import (
-    DEFAULT_BOTTOM_BAR_HEIGHT as BB_HEIGHT,
-    DEFAULT_GRID_COLUMNS as GRID_WIDTH_TILES,
-    DEFAULT_GRID_ROWS as GRID_HEIGHT_TILES,
-    DEFAULT_TILE_SIZE as TILE_SIZE,
-    screen_height,
-    screen_width,
-)
 from core.utils import env_flag
 
 
 # RUNTIME
 WINDOW_TITLE = "Vroom"
-FPS = 60
-TRAINING_FPS = 0
 USE_GPU = env_flag("VROOM_USE_GPU", False)
 DRAW_RAYS = env_flag("VROOM_DRAW_RAYS", False)
 
 
 # ENV
-SCREEN_WIDTH = screen_width(GRID_WIDTH_TILES, TILE_SIZE)
-SCREEN_HEIGHT = screen_height(GRID_HEIGHT_TILES, TILE_SIZE, BB_HEIGHT)
 MAX_EPISODE_STEPS = 1_200
 
 # OFF-TRACK HANDLING
@@ -40,12 +28,12 @@ TRACK_CORNER_RADIUS_PX = 120.0
 TRACK_SAMPLE_SPACING_PX = 6.0
 TRACK_START_STRAIGHT_LEN_PX = 180.0
 TRACK_LONG_SIDE_TEMPLATE_CHOICES = ("straight", "bell", "s_curve")
-TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX = 72.0
-TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX = 92.0
+TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX = 50.0
+TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX = 64.0
 TRACK_LONG_SIDE_S_AMPLITUDE_MIN_PX = 40.0
-TRACK_LONG_SIDE_S_AMPLITUDE_MAX_PX = 58.0
-TRACK_LONG_SIDE_INSET_WIDTH_CAP_RATIO = 0.72
-TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO = 0.20
+TRACK_LONG_SIDE_S_AMPLITUDE_MAX_PX = 60.0
+TRACK_LONG_SIDE_INSET_WIDTH_CAP_RATIO = 1.35
+TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO = 0.24
 
 
 # IO
@@ -105,14 +93,12 @@ FORWARD_RAY_MAX_DISTANCE_PX = 180.0
 
 # CURRICULUM
 MIN_LEVEL = 1
-MAX_LEVEL = 3
+MAX_LEVEL = 5
 REWARD_ROLLING_WINDOW = 100
 
 CURRICULUM_PROMOTION = {
-    "min_episodes_per_level": 250,
-    "check_window": 25,
+    "min_episodes_per_level": 100,
     "success_threshold": 0.60,
-    "consecutive_checks_required": 2,
 }
 
 LEVEL_SETTINGS = {
@@ -120,14 +106,24 @@ LEVEL_SETTINGS = {
         "num_cars": 1,
         "opponent_speed_cap": 0.0,
         # Negative values coast early, positive values coast late.
-        "opponent_coast_error_choices": [-40.0, 0.0, 40.0],
+        "opponent_coast_error_choices": [0.0],
     },
     2: {
         "num_cars": 2,
+        "opponent_speed_cap": 0.25,
+        "opponent_coast_error_choices": [-40.0, 0.0, 40.0],
+    },
+    3: {
+        "num_cars": 2,
+        "opponent_speed_cap": 0.5,
+        "opponent_coast_error_choices": [-30.0, 0.0, 30.0],
+    },
+    4: {
+        "num_cars": 3,
         "opponent_speed_cap": 0.75,
         "opponent_coast_error_choices": [-20.0, 0.0, 20.0],
     },
-    3: {
+    5: {
         "num_cars": 4,
         "opponent_speed_cap": 1.0,
         "opponent_coast_error_choices": [-10.0, 0.0, 10.0],

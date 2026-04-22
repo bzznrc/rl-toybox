@@ -49,6 +49,24 @@ def _act_with_optional_mask(
         return algorithm.act(obs, explore=explore)
 
 
+def _curriculum_avg_success_for_level(env: Env, level: int) -> float | None:
+    curriculum = getattr(env, "_curriculum", None)
+    if curriculum is None:
+        return None
+    episodes_in_level = getattr(curriculum, "episodes_in_level", None)
+    avg_success_in_level = getattr(curriculum, "avg_success_in_level", None)
+    curriculum_config = getattr(curriculum, "config", None)
+    if not callable(episodes_in_level) or not callable(avg_success_in_level):
+        return None
+    min_episodes = max(1, int(getattr(curriculum_config, "min_episodes_per_level", 100)))
+    if int(episodes_in_level(int(level))) < int(min_episodes):
+        return None
+    avg_success = avg_success_in_level(int(level))
+    if avg_success is None:
+        return None
+    return float(avg_success)
+
+
 @dataclass
 class OffPolicyConfig:
     max_steps: int
@@ -184,7 +202,9 @@ def run_off_policy_training(
             exploration_event: dict[str, float | int | str] | None = None
             if stats_ready_level:
                 avg_reward = float(mean(level_reward_window))
-                avg_success = float(mean(level_success_window)) if level_success_window else None
+                avg_success = _curriculum_avg_success_for_level(env, int(episode_level))
+                if avg_success is None:
+                    avg_success = float(mean(level_success_window)) if level_success_window else None
                 exploration_avg_reward = float(mean(exploration_window))
 
                 best_avg_level = best_avg_reward_by_level.get(int(episode_level), float("-inf"))

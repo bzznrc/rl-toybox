@@ -8,20 +8,13 @@ import arcade
 import numpy as np
 from PIL import Image, ImageDraw
 
-from core.arcade_style import COLOR_DARK_NEUTRAL, COLOR_LIGHT_NEUTRAL, DEFAULT_TILE_SIZE
-from core.primitives import (
-    ROAD_DASH_COLOR,
-    build_dashed_path_top_left_polygons,
-    road_dash_gap,
-    road_dash_length,
-    road_dash_thickness,
-)
+from core.arcade_style import COLOR_DARK_NEUTRAL, COLOR_FOG_GRAY, COLOR_LIGHT_NEUTRAL, DEFAULT_TILE_SIZE
+from core.primitives import with_alpha
 from games.vroom.track_geometry import (
     TrackGeometry,
     build_boundary_loops,
     build_track_geometry,
     clean_polygon_vertices,
-    sample_track_at_s,
 )
 
 
@@ -40,6 +33,16 @@ class TrackGenConfig:
     s_amplitude_max_px: float = 28.0
     inset_width_cap_ratio: float = 0.62
     inset_length_cap_ratio: float = 0.16
+
+
+ROAD_BLOCK_SIZE_PX = max(1, int(DEFAULT_TILE_SIZE) // 2)
+ROAD_BLOCK_COVERAGE_THRESHOLD = 0.34
+ROAD_BLOCK_OUTLINE_WIDTH_PX = max(2, int(round(float(DEFAULT_TILE_SIZE) * 0.18)))
+VROOM_SURFACE_PATTERN_ALPHA = 84
+VROOM_SURFACE_PATTERN_DARK_COLOR = with_alpha(COLOR_DARK_NEUTRAL, VROOM_SURFACE_PATTERN_ALPHA)
+VROOM_SURFACE_PATTERN_LIGHT_COLOR = with_alpha(COLOR_FOG_GRAY, VROOM_SURFACE_PATTERN_ALPHA)
+VROOM_SURFACE_PATTERN_DENSITY = 0.28
+VROOM_SURFACE_PATTERN_SQUARE_SIZE_PX = max(2, int(round(float(ROAD_BLOCK_SIZE_PX) * 0.25)))
 
 
 def _road_polygon(track: TrackGeometry) -> list[tuple[float, float]]:
@@ -62,6 +65,32 @@ def build_track_mask(track: TrackGeometry, width: int, height: int) -> np.ndarra
     return np.asarray(mask_img, dtype=np.uint8)
 
 
+def build_track_block_mask(
+    mask: np.ndarray,
+    *,
+    block_size_px: int = ROAD_BLOCK_SIZE_PX,
+    coverage_threshold: float = ROAD_BLOCK_COVERAGE_THRESHOLD,
+) -> np.ndarray:
+    if mask.ndim != 2:
+        raise ValueError("Track block mask expects a 2D road mask.")
+
+    block_size = max(1, int(block_size_px))
+    height, width = int(mask.shape[0]), int(mask.shape[1])
+    pad_height = (-height) % block_size
+    pad_width = (-width) % block_size
+    padded = np.pad(mask, ((0, pad_height), (0, pad_width)), mode="constant")
+
+    grid_h = int(padded.shape[0] // block_size)
+    grid_w = int(padded.shape[1] // block_size)
+    coverage = padded.reshape(grid_h, block_size, grid_w, block_size).mean(axis=(1, 3)) / 255.0
+
+    sample_y = np.minimum((np.arange(grid_h) * block_size) + (block_size // 2), padded.shape[0] - 1)
+    sample_x = np.minimum((np.arange(grid_w) * block_size) + (block_size // 2), padded.shape[1] - 1)
+    center_hits = padded[np.ix_(sample_y, sample_x)] > 0
+
+    return np.logical_or(coverage >= float(coverage_threshold), center_hits)
+
+
 def build_start_checker_polygons(
     track: TrackGeometry,
 ) -> list[tuple[list[tuple[float, float]], tuple[int, int, int] | tuple[int, int, int, int]]]:
@@ -70,12 +99,16 @@ def build_start_checker_polygons(
     dx = float(right_pt[0]) - float(left_pt[0])
     dy = float(right_pt[1]) - float(left_pt[1])
     line_len = max(1e-6, float(np.hypot(dx, dy)))
+    ux = dx / line_len
+    uy = dy / line_len
     tx = float(track.start_tangent[0])
     ty = float(track.start_tangent[1])
 
     row_count = 3
-    cell_size = max(1.0, 0.5 * float(DEFAULT_TILE_SIZE))
-    col_count = max(1, int(np.ceil(float(line_len) / float(cell_size))))
+    cell_size = float(ROAD_BLOCK_SIZE_PX)
+    col_count = max(1, int(round(float(line_len) / float(cell_size))))
+    covered_len = float(col_count) * float(cell_size)
+    line_offset = 0.5 * float(max(0.0, line_len - covered_len))
     start_offset = -0.5 * float(row_count) * float(cell_size)
 
     polygons: list[tuple[list[tuple[float, float]], tuple[int, int, int] | tuple[int, int, int, int]]] = []
@@ -84,16 +117,16 @@ def build_start_checker_polygons(
         row_offset_1 = float(row_offset_0 + cell_size)
         for col in range(col_count):
             cell_color = COLOR_DARK_NEUTRAL if ((row + col) % 2) == 0 else COLOR_LIGHT_NEUTRAL
-            alpha0 = float(col) / float(col_count)
-            alpha1 = float(col + 1) / float(col_count)
-            x00 = float(left_pt[0]) + dx * alpha0 + tx * row_offset_0
-            y00 = float(left_pt[1]) + dy * alpha0 + ty * row_offset_0
-            x10 = float(left_pt[0]) + dx * alpha1 + tx * row_offset_0
-            y10 = float(left_pt[1]) + dy * alpha1 + ty * row_offset_0
-            x11 = float(left_pt[0]) + dx * alpha1 + tx * row_offset_1
-            y11 = float(left_pt[1]) + dy * alpha1 + ty * row_offset_1
-            x01 = float(left_pt[0]) + dx * alpha0 + tx * row_offset_1
-            y01 = float(left_pt[1]) + dy * alpha0 + ty * row_offset_1
+            line_pos_0 = float(line_offset + col * cell_size)
+            line_pos_1 = float(line_pos_0 + cell_size)
+            x00 = float(left_pt[0]) + ux * line_pos_0 + tx * row_offset_0
+            y00 = float(left_pt[1]) + uy * line_pos_0 + ty * row_offset_0
+            x10 = float(left_pt[0]) + ux * line_pos_1 + tx * row_offset_0
+            y10 = float(left_pt[1]) + uy * line_pos_1 + ty * row_offset_0
+            x11 = float(left_pt[0]) + ux * line_pos_1 + tx * row_offset_1
+            y11 = float(left_pt[1]) + uy * line_pos_1 + ty * row_offset_1
+            x01 = float(left_pt[0]) + ux * line_pos_0 + tx * row_offset_1
+            y01 = float(left_pt[1]) + uy * line_pos_0 + ty * row_offset_1
             polygons.append(
                 (
                     [
@@ -108,34 +141,155 @@ def build_start_checker_polygons(
     return polygons
 
 
+def build_track_surface_pattern_rects(
+    road_blocks: np.ndarray,
+    *,
+    pattern_seed: int,
+    block_size_px: int = ROAD_BLOCK_SIZE_PX,
+    square_size_px: int = VROOM_SURFACE_PATTERN_SQUARE_SIZE_PX,
+    density: float = VROOM_SURFACE_PATTERN_DENSITY,
+) -> list[tuple[int, int, int, int]]:
+    if road_blocks.ndim != 2:
+        raise ValueError("Track surface pattern expects a 2D road block mask.")
+
+    block_size = max(1, int(block_size_px))
+    square_size = max(1, min(int(square_size_px), block_size))
+    density_ratio = max(0.0, min(1.0, float(density)))
+    max_offset = max(0, block_size - square_size)
+    rng = np.random.default_rng(int(pattern_seed))
+
+    rects: list[tuple[int, int, int, int]] = []
+    for row in range(int(road_blocks.shape[0])):
+        for col in range(int(road_blocks.shape[1])):
+            if not bool(road_blocks[row, col]):
+                continue
+            if float(rng.random()) > density_ratio:
+                continue
+
+            offset_x = int(rng.integers(0, max_offset + 1)) if max_offset > 0 else 0
+            offset_y = int(rng.integers(0, max_offset + 1)) if max_offset > 0 else 0
+            left = int(col * block_size + offset_x)
+            top = int(row * block_size + offset_y)
+            rects.append((left, top, left + square_size, top + square_size))
+
+    return rects
+
+
+def build_track_surface_pattern_marks(
+    road_blocks: np.ndarray,
+    *,
+    pattern_seed: int,
+    block_size_px: int = ROAD_BLOCK_SIZE_PX,
+    square_size_px: int = VROOM_SURFACE_PATTERN_SQUARE_SIZE_PX,
+    density: float = VROOM_SURFACE_PATTERN_DENSITY,
+) -> list[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]]:
+    rects = build_track_surface_pattern_rects(
+        road_blocks,
+        pattern_seed=int(pattern_seed),
+        block_size_px=int(block_size_px),
+        square_size_px=int(square_size_px),
+        density=float(density),
+    )
+    if not rects:
+        return []
+
+    light_count = len(rects) // 2
+    color_rng = np.random.default_rng(int(pattern_seed) ^ 0x9E3779B9)
+    light_indices = {int(idx) for idx in color_rng.permutation(len(rects))[:light_count]}
+
+    marks: list[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]] = []
+    for idx, rect in enumerate(rects):
+        color = VROOM_SURFACE_PATTERN_LIGHT_COLOR if idx in light_indices else VROOM_SURFACE_PATTERN_DARK_COLOR
+        marks.append((rect, color))
+    return marks
+
+
 def mask_to_texture(
     mask: np.ndarray,
     *,
     texture_name: str,
     track_color: tuple[int, int, int],
-    dash_polygons: list[list[tuple[float, float]]] | None = None,
+    pattern_seed: int,
     start_checker_polygons: list[
         tuple[list[tuple[float, float]], tuple[int, int, int] | tuple[int, int, int, int]]
     ] | None = None,
 ) -> arcade.Texture:
     height, width = int(mask.shape[0]), int(mask.shape[1])
-    rgba = np.zeros((height, width, 4), dtype=np.uint8)
-    rgba[..., 0] = int(track_color[0])
-    rgba[..., 1] = int(track_color[1])
-    rgba[..., 2] = int(track_color[2])
-    rgba[..., 3] = mask
-    image = Image.fromarray(rgba, mode="RGBA")
-    if dash_polygons or start_checker_polygons:
+    road_blocks = build_track_block_mask(mask)
+    image = Image.new("RGBA", (int(width), int(height)), (0, 0, 0, 0))
+    drawer = ImageDraw.Draw(image, "RGBA")
+    fill_color = (int(track_color[0]), int(track_color[1]), int(track_color[2]), 255)
+    outline_color = (int(COLOR_FOG_GRAY[0]), int(COLOR_FOG_GRAY[1]), int(COLOR_FOG_GRAY[2]), 255)
+    block_size = int(ROAD_BLOCK_SIZE_PX)
+    outline_width = int(ROAD_BLOCK_OUTLINE_WIDTH_PX)
+
+    for row in range(int(road_blocks.shape[0])):
+        top = int(row * block_size)
+        bottom = min(int(height), top + block_size)
+        if bottom <= top:
+            continue
+        for col in range(int(road_blocks.shape[1])):
+            if not bool(road_blocks[row, col]):
+                continue
+            left = int(col * block_size)
+            right = min(int(width), left + block_size)
+            if right <= left:
+                continue
+            drawer.rectangle((left, top, right - 1, bottom - 1), fill=fill_color)
+
+    # Bake an irregular surface pattern into the static road texture once per
+    # generated track instead of reconstructing it during frame rendering.
+    for (left, top, right, bottom), color in build_track_surface_pattern_marks(
+        road_blocks,
+        pattern_seed=int(pattern_seed),
+    ):
+        drawer.rectangle(
+            (left, top, right - 1, bottom - 1),
+            fill=color,
+        )
+
+    for row in range(int(road_blocks.shape[0])):
+        top = int(row * block_size)
+        bottom = min(int(height), top + block_size)
+        if bottom <= top:
+            continue
+        for col in range(int(road_blocks.shape[1])):
+            if not bool(road_blocks[row, col]):
+                continue
+            left = int(col * block_size)
+            right = min(int(width), left + block_size)
+            if right <= left:
+                continue
+
+            top_open = row == 0 or not bool(road_blocks[row - 1, col])
+            bottom_open = row == int(road_blocks.shape[0]) - 1 or not bool(road_blocks[row + 1, col])
+            left_open = col == 0 or not bool(road_blocks[row, col - 1])
+            right_open = col == int(road_blocks.shape[1]) - 1 or not bool(road_blocks[row, col + 1])
+
+            if top_open:
+                edge_bottom = min(bottom, top + outline_width)
+                drawer.rectangle((left, top, right - 1, edge_bottom - 1), fill=outline_color)
+            if bottom_open:
+                edge_top = max(top, bottom - outline_width)
+                drawer.rectangle((left, edge_top, right - 1, bottom - 1), fill=outline_color)
+            if left_open:
+                edge_right = min(right, left + outline_width)
+                drawer.rectangle((left, top, edge_right - 1, bottom - 1), fill=outline_color)
+            if right_open:
+                edge_left = max(left, right - outline_width)
+                drawer.rectangle((edge_left, top, right - 1, bottom - 1), fill=outline_color)
+
+    if start_checker_polygons:
         overlay = Image.new("RGBA", (int(width), int(height)), (0, 0, 0, 0))
         drawer = ImageDraw.Draw(overlay, "RGBA")
-        if dash_polygons:
-            for polygon in dash_polygons:
-                if len(polygon) >= 3:
-                    drawer.polygon(polygon, fill=ROAD_DASH_COLOR)
         if start_checker_polygons:
             for polygon, color in start_checker_polygons:
                 if len(polygon) >= 3:
                     drawer.polygon(polygon, fill=color)
+        overlay_rgba = np.asarray(overlay, dtype=np.uint8).copy()
+        base_alpha = np.asarray(image, dtype=np.uint8)[..., 3]
+        overlay_rgba[..., 3] = np.minimum(overlay_rgba[..., 3], base_alpha)
+        overlay = Image.fromarray(overlay_rgba, mode="RGBA")
         image = Image.alpha_composite(image, overlay)
     return arcade.Texture(image=image, hash=str(texture_name))
 
@@ -173,24 +327,12 @@ def generate_track(
 
     if bool(build_texture):
         mask_signature = hash(road_mask.tobytes())
-        dash_base = float(geometry.half_width) * 2.0
-        dash_length = road_dash_length(float(dash_base)) * 0.84
-        dash_width = road_dash_thickness(float(dash_base))
-        dash_gap = road_dash_gap(float(dash_base))
-        dash_polygons = build_dashed_path_top_left_polygons(
-            path_length=float(geometry.length),
-            sample_fn=lambda s: sample_track_at_s(geometry, float(geometry.start_s) + float(s))[:2],
-            dash_length=float(dash_length),
-            dash_width=float(dash_width),
-            gap_length=float(dash_gap),
-            curve_step=max(4.0, min(10.0, 0.24 * float(dash_length))),
-        )
         start_checker_polygons = build_start_checker_polygons(geometry)
         road_texture = mask_to_texture(
             road_mask,
-            texture_name=f"vroom_track_{seed}_{width}x{height}_{mask_signature}",
+            texture_name=f"vroom_track_blocky_v2_{seed}_{width}x{height}_{mask_signature}",
             track_color=track_color,
-            dash_polygons=dash_polygons,
+            pattern_seed=int(seed),
             start_checker_polygons=start_checker_polygons,
         )
     else:

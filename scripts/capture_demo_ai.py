@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import os
 from pathlib import Path
 
 import arcade
 from PIL import Image
 
+from core.shared_config import FPS as SHOW_GAME_FPS
 from core.game import (
     apply_generic_launch_level,
     apply_seed_from_config,
@@ -35,7 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--algo", default=None, help="Override algorithm id; use auto/default to keep the game's default")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
     parser.add_argument("--checkpoint", default=None, help="Explicit checkpoint path to load")
-    parser.add_argument("--level", type=int, default=3, help="Curriculum level selector")
+    parser.add_argument(
+        "--level",
+        type=int,
+        default=None,
+        help="Difficulty selector (defaults to L5 for curriculum games and Osero 6x6)",
+    )
     parser.add_argument(
         "--set",
         dest="set_values",
@@ -56,13 +61,6 @@ def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
     if args.checkpoint:
         set_nested_override(overrides, "common.checkpoint_path", str(Path(args.checkpoint)))
     return overrides
-
-
-def _resolve_game_fps(game_id: str) -> int:
-    config_module = importlib.import_module(f"games.{str(game_id).strip().lower()}.config")
-    return max(1, int(getattr(config_module, "FPS", 12)))
-
-
 def _draw_current_frame(env: object) -> None:
     draw_frame = getattr(env, "draw_frame", None)
     if callable(draw_frame):
@@ -109,7 +107,7 @@ def _save_gif(frames: list[Image.Image], output_path: Path, capture_fps: int) ->
 def main() -> None:
     args = parse_args()
     configure_logging()
-    level = int(apply_generic_launch_level(args.game, args.level))
+    level = int(apply_generic_launch_level(args.game, args.level, mode="eval"))
 
     prepared = prepare_run(args.game, args.algo, mode="eval", user_overrides=_build_eval_overrides(args))
     run_paths = prepared.run_paths
@@ -129,7 +127,7 @@ def main() -> None:
     composed_config["common"]["checkpoint_path"] = str(model_path)
     algorithm.load(str(model_path))
 
-    native_fps = _resolve_game_fps(game_id)
+    native_fps = int(SHOW_GAME_FPS)
     capture_fps = int(CAPTURE_FPS)
     capture_period_frames = float(native_fps) / float(capture_fps)
     target_frame_count = max(1, int(CAPTURE_DURATION_SECONDS) * int(capture_fps))

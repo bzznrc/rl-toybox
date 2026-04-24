@@ -21,7 +21,7 @@ Top-down football environment with a shared LEFT-team policy and a centralized c
 - Move: `W/A/S/D`
 - Shoot: hold/release `Space` for low, mid, or high kicks
 - Human mode keeps automatic player switching behavior
-- Rendered overlays: `X` toggles the grey formation ghosts and safe-zone overlays during `play-user` and `play-ai`
+- Rendered overlays: `X` toggles the grey formation ghosts and role-zone overlays during `play-user` and `play-ai`
 
 ## Observation / Actions
 
@@ -65,17 +65,19 @@ In RL mode the environment expects one action per LEFT player each step.
 - Physical owner comes from `ball_owner`.
 - Effective possession uses the current owner when owned and `last_touch_team` when the ball is free.
 - Formation and anchor behavior use that same effective-possession interpretation so the team shape does not snap while the ball is airborne.
-- Progress shaping is credited to the responsible LEFT player:
-  - current LEFT owner while controlled
-  - `last_touch_player_id` after a LEFT touch while the ball is free
+- Controlled progress ignores free-ball phases:
+  - it only rewards the current LEFT physical owner
+  - the same LEFT owner must hold the ball for `3` consecutive frames before progress starts paying out
+  - the progress frontier resets whenever the physical owner or owning team changes
 
 ### Ghost / Ideal Position
 
 - Each LEFT player keeps a defensive base at its role `home_x` / `home_y`.
 - When LEFT is effectively attacking, the ideal anchor shifts forward on `x` by a small role-specific amount; when LEFT is defending, the ideal `x` returns to `home_x`.
 - `y` shifts only modestly with normalized ball lane so the whole shape can slide up or down without becoming twitchy.
-- The displayed grey ghost and player-to-ghost line use the same smoothed anchor that also feeds `map_anchor_*` and the zone-discipline penalty.
-- Zone discipline uses one shared outfield anchor ellipse plus a dedicated goalkeeper ellipse: no bonus or penalty inside the tolerance zone, then a progressive negative penalty outside it with more freedom on `x` than `y`.
+- The goalkeeper is the exception: its ghost/role-zone anchor stays fixed just outside the goal itself, with the goalkeeper zone grazing the goal edge.
+- The displayed grey ghost and player-to-ghost line use the same smoothed anchor that also feeds `map_anchor_*` and the role-zone penalty.
+- Role zone uses one shared outfield anchor ellipse plus a dedicated goalkeeper ellipse: no penalty inside the tolerance zone, then a small progressive penalty outside it with more freedom on `x` than `y`.
 
 ### Shoot Mode
 
@@ -110,25 +112,30 @@ In RL mode the environment expects one action per LEFT player each step.
 ### Diagnostics
 
 - Training prints PPO diagnostics after episodes.
-- `KICK_DEBUG_SANITY=1` enables runtime checks for observation shape, masked invalid kicks, GK-catch exclusions, and reward-vector consistency.
+- `KICK_DEBUG_SANITY=1` enables runtime checks for observation shape, masked invalid kicks, and reward-vector consistency.
 
 ## Rewards (Training)
 
-Logged reward codes are `G C T A P B Z`:
+Logged reward codes are `G C P B TS RZ`:
 
 - `G`: team score bonus, total `+10.0`, normalized across LEFT players
 - `C`: team concede penalty, total `-5.0`, normalized across LEFT players
-- `T`: turnover penalty for the responsible LEFT player
-- `A`: pass reward for the passer when a LEFT teammate receives the kick
-- `P`: dense ball-progress shaping toward the opponent goal while LEFT has attacking control
-- `B`: dense ball-approach shaping for the single closest LEFT outfield challenger when LEFT does not have possession
-  - `ball_improve = prev_ball_dist - curr_ball_dist`
-  - `B = 0.02 * clip(ball_improve, -0.05, 0.05)`
-- `Z`: zone-discipline penalty based on distance from the role anchor
+- `P`: controlled forward ball progress for the current LEFT owner after stable physical possession
+  - requires the same LEFT owner for `3` consecutive frames
+  - only pays positive forward gains and resets its frontier on any owner/team change
+  - `P = 1.0 * clip(max(0, ball_depth - frontier), 0.0, 0.01)`
+- `B`: bounded ball-support shaping for one active LEFT outfielder near the ball / active play
+  - picks the nearest LEFT outfielder to the ball; if LEFT owns the ball, the carrier is excluded so the reward goes to a support runner
+  - target support distance is `2.5 * TILE_SIZE`, so collapsing directly onto the ball is not rewarded
+  - `B = 0.01 * clip(prev_error - curr_error, -0.25, 0.25)` where `error = abs(dist_to_ball - target_dist)`
+- `TS`: team-shape anti-clumping penalty for LEFT outfield players
+  - uses each outfielder's nearest-teammate spacing shortfall against `TEAM_SHAPE_MIN_DIST_NORM = 0.065`
+  - `TS_i = -clip(0.001 * s + 0.01 * s^2, 0.0, 0.00006)` where `s = max(0, min_dist_norm - nearest_teammate_dist_norm)`
+- `RZ`: soft role-zone penalty based on distance from the role anchor
   - disabled for the LEFT ball carrier, shoot-mode players, and the active closest LEFT outfield challenger when LEFT is out of possession
   - `d = sqrt((dx / tol_x)^2 + (dy / tol_y)^2)` using `map_anchor_*`-equivalent offsets
   - inside zone (`d <= 1.0`): `0.0`
-  - outside zone: `-(0.0005 * e + 0.004 * e^2)` where `e = d - 1.0`
+  - outside zone: `-(0.000015 * e + 0.000015 * e^2)` where `e = d - 1.0`
 
 ## Curriculum (Train)
 

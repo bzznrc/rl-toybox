@@ -65,6 +65,9 @@ ROLE_ATTACK_SHIFT_TILES_BY_ROLE = {
     role: float(base_shift) * float(ATTACKING_ANCHOR_SHIFT_SCALE)
     for role, base_shift in BASE_ROLE_ATTACK_SHIFT_TILES_BY_ROLE.items()
 }
+# Keep the goalkeeper's ghost/role-zone target fixed just outside the goal
+# itself. A zero margin makes the keeper zone graze the goal edge.
+GOALKEEPER_STATIC_ANCHOR_OUTSIDE_GOAL_MARGIN_TILES = 0.0
 
 
 # IO
@@ -202,28 +205,34 @@ LEVEL_SETTINGS = {
 # REWARDS
 REWARD_SCORE = 10.0
 PENALTY_CONCEDE = -5.0
-PENALTY_TURNOVER = -0.25
-REWARD_PASS = 0.25
-REWARD_PROGRESS = 2.0
-B_SCALE = 0.02
-B_CLIP = 0.05
-# Keep one shared safe-zone ellipse for all outfield players so tuning stays
-# simple and affects both scripted behavior and RL shaping consistently.
-ZONE_TOL_X = 0.32
-ZONE_TOL_Y = 0.16
-ZONE_TOL_X_GK = 0.05
-ZONE_TOL_Y_GK = 0.05
-ZONE_PENALTY_LINEAR_COEF = 0.0005
-ZONE_PENALTY_QUADRATIC_COEF = 0.004
+REWARD_PROGRESS_CONTROLLED = 2.0
+CONTROLLED_PROGRESS_STABLE_STEPS = 2
+CONTROLLED_PROGRESS_STEP_CLIP = 0.025
+
+BALL_SUPPORT_SCALE = 0.01
+BALL_SUPPORT_CLIP = 0.25
+BALL_SUPPORT_TARGET_DIST_TILES = 2.5
+
+TEAM_SHAPE_MIN_DIST_NORM = 0.065
+TEAM_SHAPE_LINEAR_COEF = 0.001
+TEAM_SHAPE_QUADRATIC_COEF = 0.01
+TEAM_SHAPE_CLIP = 0.000075
+
+# Role-zone uses the existing anchor ellipse as a weak positional prior.
+ROLE_ZONE_TOL_X = 0.30
+ROLE_ZONE_TOL_Y = 0.15
+ROLE_ZONE_TOL_X_GK = 0.005
+ROLE_ZONE_TOL_Y_GK = 0.075
+ROLE_ZONE_LINEAR_COEF = 0.000015
+ROLE_ZONE_QUADRATIC_COEF = 0.000015
 
 REWARD_COMPONENTS = {
     "outcome.reward_score": REWARD_SCORE,
     "outcome.penalty_concede": PENALTY_CONCEDE,
-    "event.penalty_turnover": PENALTY_TURNOVER,
-    "event.reward_pass": REWARD_PASS,
-    "progress.reward_progress": REWARD_PROGRESS,
-    "event.reward_ball_approach": B_SCALE * B_CLIP,
-    "event.penalty_zone": -(ZONE_PENALTY_LINEAR_COEF + ZONE_PENALTY_QUADRATIC_COEF),
+    "progress.reward_controlled": REWARD_PROGRESS_CONTROLLED * CONTROLLED_PROGRESS_STEP_CLIP,
+    "support.reward_ball_support": BALL_SUPPORT_SCALE * BALL_SUPPORT_CLIP,
+    "shape.penalty_team_shape": -TEAM_SHAPE_CLIP,
+    "shape.penalty_role_zone": -(ROLE_ZONE_LINEAR_COEF + ROLE_ZONE_QUADRATIC_COEF),
 }
 
 
@@ -247,8 +256,8 @@ ENV_METADATA = {
 
 # TRAINING
 DEFAULT_MODEL_CONFIG = {
-    "hidden_sizes": [96, 96],
-    "critic_hidden_sizes": [192, 192],
+    "hidden_sizes": [64, 64], #[96, 96],
+    "critic_hidden_sizes": [128, 128], #[192, 192],
 }
 ALGO_CONFIG_OVERRIDES = {
     "ppo": {
@@ -257,7 +266,7 @@ ALGO_CONFIG_OVERRIDES = {
     }
 }
 DEFAULT_TRAIN_CONFIG = {
-    "budget": 12_000_000,
+    "budget": 24_000_000,
     "rollout_steps": 2_048,
     "checkpoint_every": 10,
 }

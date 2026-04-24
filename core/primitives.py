@@ -682,6 +682,7 @@ def draw_status_bar(
     left_text_entries: Sequence[StatusTextEntry] | None = None,
     text_color: tuple[int, int, int] | tuple[int, int, int, int] = COLOR_FOG_GRAY,
     text_inset_x: float = 0.0,
+    text_tab_gap_px: float | None = None,
 ) -> StatusBarLayout:
     arcade.draw_lbwh_rectangle_filled(
         0,
@@ -708,6 +709,7 @@ def draw_status_bar(
             entries=left_text_entries,
             color=text_color,
             inset_x=float(text_inset_x),
+            tab_gap_px=text_tab_gap_px,
         )
     return layout
 

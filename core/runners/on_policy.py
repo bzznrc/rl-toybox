@@ -18,6 +18,18 @@ from core.logging_utils import (
     log_save_line,
     should_emit_train_progress_log,
 )
+from core.runners.env_access import (
+    act_with_optional_signals,
+    broadcast_team_signal,
+    curriculum_avg_success_for_level,
+    extract_action_mask,
+    extract_centralized_state,
+    infer_current_level,
+    reset_policy_state,
+    reward_for_storage,
+    reward_scalar,
+    safe_level,
+)
 
 
 @dataclass
@@ -27,39 +39,6 @@ class OnPolicyConfig:
     checkpoint_every_iterations: int = 10
     reward_window: int = 100
     min_episodes_for_stats: int = 100
-
-
-def _safe_level(value: object, default: int) -> int:
-    try:
-        return max(1, int(value))
-    except (TypeError, ValueError):
-        return max(1, int(default))
-
-
-def _infer_current_level(env: Env, default: int = 1) -> int:
-    level_value = getattr(env, "_current_level", None)
-    if level_value is None:
-        game = getattr(env, "game", None)
-        level_value = getattr(game, "level", None)
-    return _safe_level(level_value, default)
-
-
-def _curriculum_avg_success_for_level(env: Env, level: int) -> float | None:
-    curriculum = getattr(env, "_curriculum", None)
-    if curriculum is None:
-        return None
-    episodes_in_level = getattr(curriculum, "episodes_in_level", None)
-    avg_success_in_level = getattr(curriculum, "avg_success_in_level", None)
-    curriculum_config = getattr(curriculum, "config", None)
-    if not callable(episodes_in_level) or not callable(avg_success_in_level):
-        return None
-    min_episodes = max(1, int(getattr(curriculum_config, "min_episodes_per_level", 100)))
-    if int(episodes_in_level(int(level))) < int(min_episodes):
-        return None
-    avg_success = avg_success_in_level(int(level))
-    if avg_success is None:
-        return None
-    return float(avg_success)
 
 
 def _apply_level_entropy_coef(algorithm: Algorithm, env: Env, level: int) -> float | None:
@@ -97,127 +76,13 @@ def _should_log_ppo_metrics_line(env: Env) -> bool:
     return bool(flag)
 
 
-def _broadcast_team_signal(obs: object, value: float | bool, *, dtype: np.dtype):
-    obs_array = np.asarray(obs)
-    if obs_array.ndim == 2:
-        return np.full((int(obs_array.shape[0]),), value, dtype=dtype)
-    return value
-
-
-def _extract_action_mask(env: Env, obs: object) -> np.ndarray | None:
-    for method_name in ("get_action_mask", "action_mask"):
-        getter = getattr(env, method_name, None)
-        if not callable(getter):
-            continue
-        try:
-            mask = getter(obs)
-        except TypeError:
-            mask = getter()
-        if mask is None:
-            return None
-        return np.asarray(mask, dtype=np.bool_)
-    return None
-
-
-def _extract_centralized_state(env: Env, obs: object) -> np.ndarray | None:
-    for method_name in ("get_centralized_state", "centralized_state", "get_central_state", "central_state"):
-        getter = getattr(env, method_name, None)
-        if not callable(getter):
-            continue
-        try:
-            state = getter(obs)
-        except TypeError:
-            state = getter()
-        if state is None:
-            return None
-        return np.asarray(state, dtype=np.float32)
-    return None
-
-
-def _act_with_optional_mask(
-    algorithm: Algorithm,
-    obs: object,
-    *,
-    explore: bool,
-    action_mask: np.ndarray | None,
-    central_obs: np.ndarray | None,
-):
-    if action_mask is None and central_obs is None:
-        return algorithm.act(obs, explore=explore)
-    if action_mask is None:
-        try:
-            return algorithm.act(obs, explore=explore, central_obs=central_obs)
-        except TypeError:
-            return algorithm.act(obs, explore=explore)
-    if central_obs is None:
-        try:
-            return algorithm.act(obs, explore=explore, action_mask=action_mask)
-        except TypeError:
-            return algorithm.act(obs, explore=explore)
-    try:
-        return algorithm.act(obs, explore=explore, action_mask=action_mask, central_obs=central_obs)
-    except TypeError:
-        try:
-            return algorithm.act(obs, explore=explore, action_mask=action_mask)
-        except TypeError:
-            try:
-                return algorithm.act(obs, explore=explore, central_obs=central_obs)
-            except TypeError:
-                return algorithm.act(obs, explore=explore)
-
-
-def _reward_for_storage(obs: object, reward: object, info: object) -> np.ndarray | float:
-    obs_array = np.asarray(obs)
-    if isinstance(info, dict) and "reward_vec" in info:
-        reward_vec = np.asarray(info.get("reward_vec"), dtype=np.float32).reshape(-1)
-        if obs_array.ndim == 2:
-            batch_size = int(obs_array.shape[0])
-            if int(reward_vec.size) != int(batch_size):
-                raise ValueError(
-                    f"On-policy runner expected info['reward_vec'] batch size {int(batch_size)}, "
-                    f"got {int(reward_vec.size)}."
-                )
-            return reward_vec.astype(np.float32, copy=False)
-        if int(reward_vec.size) > 0:
-            return float(reward_vec[0])
-
-    if obs_array.ndim != 2:
-        reward_array = np.asarray(reward, dtype=np.float32).reshape(-1)
-        if int(reward_array.size) == 0:
-            return 0.0
-        return float(reward_array[0])
-
-    batch_size = int(obs_array.shape[0])
-    reward_array = np.asarray(reward, dtype=np.float32).reshape(-1)
-    if int(reward_array.size) == 1:
-        return np.full((batch_size,), float(reward_array.item()), dtype=np.float32)
-    if int(reward_array.size) != int(batch_size):
-        raise ValueError(
-            f"On-policy runner expected reward batch size {int(batch_size)}, got {int(reward_array.size)}."
-        )
-    return reward_array.astype(np.float32, copy=False)
-
-
-def _reward_scalar(reward: object) -> float:
-    reward_array = np.asarray(reward, dtype=np.float32).reshape(-1)
-    if int(reward_array.size) == 0:
-        return 0.0
-    return float(reward_array.sum())
-
-
-def _reset_policy_state(algorithm: Algorithm) -> None:
-    reset_fn = getattr(algorithm, "reset_policy_state", None)
-    if callable(reset_fn):
-        reset_fn()
-
-
 def run_on_policy_training(
     env: Env,
     algorithm: Algorithm,
     run_paths: RunPaths,
     config: OnPolicyConfig,
 ) -> dict[str, float | int]:
-    _reset_policy_state(algorithm)
+    reset_policy_state(algorithm)
     obs = env.reset()
     episode_reward = 0.0
     episode_steps = 0
@@ -227,18 +92,19 @@ def run_on_policy_training(
     reward_window_by_level: dict[int, deque[float]] = {}
     min_episodes_for_stats = max(0, int(config.min_episodes_for_stats))
     best_avg_reward_by_level: dict[int, float] = {}
+    best_avg_success_by_level: dict[int, float] = {}
     total_steps = 0
     total_episodes = 0
     last_loss = 0.0
     last_ppo_update_metrics: dict[str, float] | None = None
-    current_level = _infer_current_level(env, default=1)
+    current_level = infer_current_level(env, default=1)
     _apply_level_entropy_coef(algorithm, env, int(current_level))
 
     for iteration in range(1, int(config.max_iterations) + 1):
         for _ in range(int(config.rollout_steps)):
-            action_mask = _extract_action_mask(env, obs)
-            central_obs = _extract_centralized_state(env, obs)
-            action = _act_with_optional_mask(
+            action_mask = extract_action_mask(env, obs)
+            central_obs = extract_centralized_state(env, obs)
+            action = act_with_optional_signals(
                 algorithm,
                 obs,
                 explore=True,
@@ -246,16 +112,16 @@ def run_on_policy_training(
                 central_obs=central_obs,
             )
             next_obs, reward, done, info = env.step(action)
-            next_central_obs = _extract_centralized_state(env, next_obs)
-            reward_for_storage = _reward_for_storage(obs, reward, info)
-            done_for_storage = _broadcast_team_signal(obs, bool(done), dtype=np.bool_)
+            next_central_obs = extract_centralized_state(env, next_obs)
+            storage_reward = reward_for_storage(obs, reward, info)
+            done_for_storage = broadcast_team_signal(obs, bool(done), dtype=np.bool_)
             algorithm.observe(
                 {
                     "obs": obs,
                     "central_obs": central_obs,
                     "action": action,
                     "action_mask": action_mask,
-                    "reward": reward_for_storage,
+                    "reward": storage_reward,
                     "next_obs": next_obs,
                     "next_central_obs": next_central_obs,
                     "done": done_for_storage,
@@ -263,14 +129,14 @@ def run_on_policy_training(
                 }
             )
             total_steps += 1
-            episode_reward += _reward_scalar(reward)
+            episode_reward += reward_scalar(reward)
             episode_steps += 1
             obs = next_obs
 
             if done:
                 total_episodes += 1
                 reward_window.append(episode_reward)
-                episode_level = _safe_level(info.get("level", current_level), current_level)
+                episode_level = safe_level(info.get("level", current_level), current_level)
                 level_reward_window = reward_window_by_level.setdefault(
                     int(episode_level),
                     deque(maxlen=max(1, int(config.reward_window))),
@@ -288,19 +154,32 @@ def run_on_policy_training(
                 episodes_by_level[int(episode_level)] = int(episodes_by_level.get(int(episode_level), 0)) + 1
                 if bool(info.get("level_changed", False)):
                     bump_epsilon_to_cap(algorithm)
-                current_level = _infer_current_level(env, default=episode_level)
+                current_level = infer_current_level(env, default=episode_level)
                 _apply_level_entropy_coef(algorithm, env, int(current_level))
                 level_episode_count = int(episodes_by_level.get(int(episode_level), 0))
                 stats_ready_level = level_episode_count >= int(min_episodes_for_stats)
                 avg_reward_ep = float(mean(level_reward_window)) if stats_ready_level else None
-                avg_success_ep = _curriculum_avg_success_for_level(env, int(episode_level))
+                avg_success_ep = curriculum_avg_success_for_level(env, int(episode_level))
                 if avg_success_ep is None and stats_ready_level:
                     avg_success_ep = float(mean(level_success_window)) if level_success_window else None
 
                 if stats_ready_level:
                     avg_reward_level = float(mean(level_reward_window))
-                    best_avg_level = best_avg_reward_by_level.get(int(episode_level), float("-inf"))
-                    if avg_reward_level > float(best_avg_level):
+                    avg_success_level = (
+                        float(avg_success_ep)
+                        if avg_success_ep is not None
+                        else float(mean(level_success_window)) if level_success_window else 0.0
+                    )
+                    best_success_level = best_avg_success_by_level.get(int(episode_level), float("-inf"))
+                    best_reward_level = best_avg_reward_by_level.get(int(episode_level), float("-inf"))
+                    if (
+                        avg_success_level > float(best_success_level)
+                        or (
+                            avg_success_level == float(best_success_level)
+                            and avg_reward_level > float(best_reward_level)
+                        )
+                    ):
+                        best_avg_success_by_level[int(episode_level)] = float(avg_success_level)
                         best_avg_reward_by_level[int(episode_level)] = float(avg_reward_level)
                         best_path = run_paths.model_path(level=int(episode_level), kind="best")
                         algorithm.save(str(best_path))
@@ -359,7 +238,7 @@ def run_on_policy_training(
                         reward_components=components_text,
                     )
                 obs = env.reset()
-                _reset_policy_state(algorithm)
+                reset_policy_state(algorithm)
                 episode_reward = 0.0
                 episode_steps = 0
 
@@ -399,6 +278,7 @@ def run_on_policy_training(
         "total_episodes": total_episodes,
         "best_avg_reward": best_avg_reward if best_avg_reward > float("-inf") else 0.0,
         "best_avg_reward_by_level": {int(level): float(value) for level, value in best_avg_reward_by_level.items()},
+        "best_avg_success_by_level": {int(level): float(value) for level, value in best_avg_success_by_level.items()},
         "last_loss": last_loss,
         "config": asdict(config),
     }

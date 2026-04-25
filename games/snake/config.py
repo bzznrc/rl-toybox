@@ -8,6 +8,7 @@ from core.utils import env_flag
 # RUNTIME
 WINDOW_TITLE = "Snake AI"
 USE_GPU = env_flag("SNAKE_USE_GPU", False)
+SHOW_GHOST_OVERLAY = env_flag("SNAKE_SHOW_GHOST_OVERLAY", False)
 
 
 # ENV

@@ -21,8 +21,10 @@ WINDOW_TITLE = "Jump"
 USE_GPU = env_flag("JUMP_USE_GPU", False)
 PPO_METRICS_LOG_ENABLED = False
 SHOW_SENS_PATCH_GRID = False
-SENS_PATCH_GRID_ALPHA = 128
-SENS_PATCH_CELL_TILES = 2
+SHOW_GHOST_OVERLAY = env_flag("JUMP_SHOW_GHOST_OVERLAY", SHOW_SENS_PATCH_GRID)
+GHOST_OVERLAY_ALPHA = 128
+# Backward-compatible names for older local launch scripts.
+SENS_PATCH_GRID_ALPHA = GHOST_OVERLAY_ALPHA
 
 
 # ENV
@@ -83,40 +85,44 @@ ADVANCED_LANE_DELTA_CHOICES = [0, 1, 1, -1, -1]
 
 
 # IO
-# Observation order: SELF (3) + SENS (20) + LAND (3) + OPP (3) + FLAG (3) = 32.
+# Observation order: SELF (4) + SENS (8) + LAND (10) + OPP (6) + HAZ (4) + FLAG (4) = 36.
 INPUT_FEATURE_NAMES = [
     "self_vx_norm",
     "self_vy_norm",
     "self_grounded",
-    "sens_patch_rm2_cm1",
-    "sens_patch_rm2_c0",
-    "sens_patch_rm2_cp1",
-    "sens_patch_rm2_cp2",
-    "sens_patch_rm1_cm1",
-    "sens_patch_rm1_c0",
-    "sens_patch_rm1_cp1",
-    "sens_patch_rm1_cp2",
-    "sens_patch_r0_cm1",
-    "sens_patch_r0_c0",
-    "sens_patch_r0_cp1",
-    "sens_patch_r0_cp2",
-    "sens_patch_rp1_cm1",
-    "sens_patch_rp1_c0",
-    "sens_patch_rp1_cp1",
-    "sens_patch_rp1_cp2",
-    "sens_patch_rp2_cm1",
-    "sens_patch_rp2_c0",
-    "sens_patch_rp2_cp1",
-    "sens_patch_rp2_cp2",
+    "self_lane_norm",
+    "sens_ground_l2",
+    "sens_ground_l1",
+    "sens_ground_c0",
+    "sens_ground_r1",
+    "sens_ground_r2",
+    "sens_gap_f1",
+    "sens_gap_f2",
+    "sens_gap_f3",
+    "land_next_dx",
+    "land_next_dy",
+    "land_next_width",
+    "land_next_lane_delta",
+    "land_gap_dx",
+    "land_gap_width",
     "land_move_dx",
     "land_move_dy",
     "land_move_vx_norm",
+    "land_move_phase",
     "opp1_dx",
     "opp1_dy",
     "opp1_vx_norm",
+    "opp1_tti",
+    "opp2_dx",
+    "opp2_dy",
+    "haz_route_dx",
+    "haz_route_tti",
+    "haz_lane_dx",
+    "haz_lane_tti",
     "flag_goal_dx",
     "flag_goal_dy",
     "flag_progress_norm",
+    "flag_time_left",
 ]
 ACTION_NAMES = [
     "move_left",
@@ -126,8 +132,8 @@ ACTION_NAMES = [
 ]
 OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
-if OBS_DIM != 32:
-    raise RuntimeError(f"Jump INPUT_FEATURE_NAMES expected 32 entries, got {OBS_DIM}.")
+if OBS_DIM != 36:
+    raise RuntimeError(f"Jump INPUT_FEATURE_NAMES expected 36 entries, got {OBS_DIM}.")
 
 ACTION_MOVE_LEFT = 0
 ACTION_MOVE_RIGHT = 1
@@ -167,13 +173,13 @@ LEVEL_SETTINGS = {
         "length_tiles": 80,
         "lane_count": 2,
         "enemy_frequency": 0.25,
-        "moving_platform_frequency": 0.25,
+        "moving_platform_frequency": 0.0,
     },
     4: {
         "length_tiles": 104,
         "lane_count": 2,
         "enemy_frequency": 0.50,
-        "moving_platform_frequency": 0.50,
+        "moving_platform_frequency": 0.35,
     },
     5: {
         "length_tiles": 128,
@@ -189,17 +195,16 @@ REWARD_FINISH = 10.0
 PENALTY_FAIL = -5.0
 REWARD_STOMP = 1.00
 REWARD_STOMP_MAX = 5.00
-FORWARD_PROGRESS_SCALE = 2.5
-FORWARD_PROGRESS_CLIP = 0.10
-BACKTRACK_PENALTY_SCALE = 2.5
-BACKTRACK_PENALTY_CLIP = 0.10
-PENALTY_STEP = -0.001
+PROGRESS_SCALE = 2.5
+PROGRESS_CLIP = 0.10
+STALL_PROGRESS_EPS = 0.0005
+PENALTY_STALL = -0.005
 REWARD_COMPONENTS = {
     "outcome.reward_finish": REWARD_FINISH,
     "outcome.penalty_fail": PENALTY_FAIL,
     "combat.reward_stomp": REWARD_STOMP,
-    "progress.forward_scale": FORWARD_PROGRESS_SCALE,
-    "step.penalty_step": PENALTY_STEP,
+    "progress.scale": PROGRESS_SCALE,
+    "progress.penalty_stall": PENALTY_STALL,
 }
 
 
@@ -209,8 +214,8 @@ DEFAULT_MODEL_CONFIG = {
 }
 ALGO_CONFIG_OVERRIDES = {
     "ppo": {
-    "minibatch_size": 256,
-    "entropy_coef": 0.005,
+        "minibatch_size": 256,
+        "entropy_coef": 0.005,
     }
 }
 DEFAULT_TRAIN_CONFIG = {

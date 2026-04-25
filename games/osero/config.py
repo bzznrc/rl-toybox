@@ -31,6 +31,7 @@ def _resolve_board_size(raw_value: object) -> int:
 WINDOW_TITLE = "Osero"
 USE_GPU = env_flag("OSERO_USE_GPU", False)
 BOARD_SIZE = _resolve_board_size(os.getenv("OSERO_BOARD_SIZE", str(DEFAULT_BOARD_SIZE)))
+AI_STEP_DELAY_SECONDS = 0.25
 
 
 # ENV
@@ -86,20 +87,20 @@ DEFAULT_MODEL_CONFIG_BY_SIZE = {
 ALGO_CONFIG_OVERRIDES_BY_SIZE = {
     4: {
         "search_play": {
-        "simulations_per_move": 32,
-        "dirichlet_alpha": 0.5,
+            "simulations_per_move": 32,
+            "dirichlet_alpha": 0.5,
         },
     },
     6: {
         "search_play": {
-        "simulations_per_move": 48,
-        "dirichlet_alpha": 0.35,
+            "simulations_per_move": 48,
+            "dirichlet_alpha": 0.35,
         },
     },
     8: {
         "search_play": {
-        "simulations_per_move": 64,
-        "dirichlet_alpha": 0.25,
+            "simulations_per_move": 64,
+            "dirichlet_alpha": 0.25,
         },
     },
 }
@@ -112,6 +113,10 @@ TEMPERATURE_SAMPLE_MOVES = 10
 DEFAULT_MODEL_CONFIG = dict(DEFAULT_MODEL_CONFIG_BY_SIZE[int(BOARD_SIZE)])
 ALGO_CONFIG_OVERRIDES = dict(ALGO_CONFIG_OVERRIDES_BY_SIZE[int(BOARD_SIZE)])
 DEFAULT_TRAIN_CONFIG = {
-    "budget": 12_000_000,
+    "budget": {4: 2_000, 6: 5_000, 8: 10_000}[int(BOARD_SIZE)],
+    "train_after_games": {4: 4, 6: 8, 8: 12}[int(BOARD_SIZE)],
+    "updates_per_game": {4: 4, 6: 3, 8: 2}[int(BOARD_SIZE)],
     "checkpoint_every": 25,
+    "arena_every_games": 25,
+    "arena_games_per_opponent": {4: 4, 6: 3, 8: 2}[int(BOARD_SIZE)],
 }

@@ -11,38 +11,40 @@ Top-down football environment with a shared LEFT-team policy and a centralized c
 - Default algorithm: `ppo`
 - Teams: true `7v7` max on both sides
 - Roles: `GK LB RB LM CM RM CS`
-- Per-player IO: `obs=56`, `act=12`
-- Shared actor: `56 -> 96 -> 96 -> 12`
-- Centralized critic: `405 -> 192 -> 192 -> 1`
+- Per-player IO: `obs=63`, `act=11`
+- Shared actor trunk: `63 -> 64 -> 64` with 4 role heads (`GK`, `DEF`, `MID`, `ATK`) ending in `-> 11`
+- Centralized critic: `454 -> 128 -> 128 -> 1`
 - Critic input: padded team state plus local agent context
 
 ## Controls (Human)
 
 - Move: `W/A/S/D`
-- Shoot: hold/release `Space` for low, mid, or high kicks
+- Pass: `Space`
+- Shoot: `Enter`
 - Human mode keeps automatic player switching behavior
-- Rendered overlays: `X` toggles the grey formation ghosts and role-zone overlays during `play-user` and `play-ai`
+- Rendered overlays: `X` toggles translucent grey formation ghosts and role-zone overlays during `play-user` and `play-ai`
 
 ## Observation / Actions
 
 - Observation family: arcade / egocentric `SELF -> TGT -> LAND -> ALLY -> OPP -> MAP -> FLAG`, emitted once per LEFT player
 - Observation:
-  - RL mode (`train` / `eval`): `(N_left, 56)` where each row is one LEFT-player feature vector
-  - Human mode: single `(56,)` vector for the currently controlled player
+  - RL mode (`train` / `eval`): `(N_left, 63)` where each row is one LEFT-player feature vector
+  - Human mode: single `(63,)` vector for the currently controlled player
 - Feature blocks in exact order:
-  - `SELF` (16): `self_x_norm self_y_norm self_vx self_vy self_theta_cos self_theta_sin self_has_ball self_stamina self_stamina_delta self_role_gk self_role_lb self_role_rb self_role_lm self_role_lcm self_role_rm self_role_lcs`
+  - `SELF` (19): `self_x_norm self_y_norm self_vx self_vy self_theta_cos self_theta_sin self_has_ball self_stamina self_stamina_delta self_last_move_x self_last_move_y self_action_changed self_role_gk self_role_lb self_role_rb self_role_lm self_role_lcm self_role_rm self_role_lcs`
   - `TGT` (6): `tgt_dx tgt_dy tgt_dist_norm tgt_rel_ang_sin tgt_rel_ang_cos tgt_dvx`
-  - `LAND` (7): `land_opp_goal_dx land_opp_goal_dy land_own_goal_dx land_own_goal_dy land_gk_dx land_gk_dy land_gk_dvy`
+  - `LAND` (11): `land_opp_goal_dx land_opp_goal_dy land_own_goal_dx land_own_goal_dy land_own_gk_dx land_own_gk_dy land_shot_line_dy land_shot_tti land_gk_dx land_gk_dy land_gk_dvy`
   - `ALLY` (12): `ally1_dx ally1_dy ally1_dvx ally1_dvy ally2_dx ally2_dy ally2_dvx ally2_dvy ally3_dx ally3_dy ally3_dvx ally3_dvy`
   - `OPP` (12): `opp1_dx opp1_dy opp1_dvx opp1_dvy opp2_dx opp2_dy opp2_dvx opp2_dvy opp3_dx opp3_dy opp3_dvx opp3_dvy`
   - `MAP` (2): `map_anchor_dx map_anchor_dy`
-  - `FLAG` (1): `flag_shoot_mode`
+  - `FLAG` (1): `flag_shot_quality`
 - Role one-hot features keep the compact names `self_role_lcm` / `self_role_lcs`, which correspond to the gameplay roles `CM` / `CS`.
 - Nearest teammate/opponent selection is deterministic: sort by `(distance, player.slot_index)`
 - `ALLY` and `OPP` each encode exactly 3 nearest outfield players and always exclude the goalkeeper.
 - Reduced-opponent curriculum levels keep those 3 slots by zero-padding any missing outfield opponents.
-- Goalkeeper context stays in `LAND` through `land_gk_dx`, `land_gk_dy`, and `land_gk_dvy`.
-- Actions: `Discrete(12)` (`ACTION_NAMES`, ordered)
+- Goalkeeper context stays in `LAND`; opponent-goalkeeper geometry supports shooting, while own-goalkeeper and incoming-shot features help the goalkeeper learn coverage.
+- PPO uses role-conditioned policy heads: `GK`, `DEF` (`LB/RB`), `MID` (`LM/CM/RM`), and `ATK` (`CS`).
+- Actions: `Discrete(11)` (`ACTION_NAMES`, ordered)
   - `0 stay`
   - `1 move_n`
   - `2 move_ne`
@@ -52,11 +54,10 @@ Top-down football environment with a shared LEFT-team policy and a centralized c
   - `6 move_sw`
   - `7 move_w`
   - `8 move_nw`
-  - `9 kick_low`
-  - `10 kick_mid`
-  - `11 kick_high`
+  - `9 pass`
+  - `10 shoot`
 
-In RL mode the environment expects one action per LEFT player each step.
+In RL mode the environment expects one action per LEFT player each decision. Each decision is held for `12` physics frames, so the policy acts five times per rendered second at the standard `60 FPS`.
 
 ## Environment Notes
 
@@ -65,10 +66,10 @@ In RL mode the environment expects one action per LEFT player each step.
 - Physical owner comes from `ball_owner`.
 - Effective possession uses the current owner when owned and `last_touch_team` when the ball is free.
 - Formation and anchor behavior use that same effective-possession interpretation so the team shape does not snap while the ball is airborne.
-- Controlled progress ignores free-ball phases:
-  - it only rewards the current LEFT physical owner
-  - the same LEFT owner must hold the ball for `3` consecutive frames before progress starts paying out
-  - the progress frontier resets whenever the physical owner or owning team changes
+- Controlled progress pays only stable LEFT physical possession:
+  - the same LEFT owner must hold the ball for `3` consecutive physics frames
+  - only positive forward ball-depth gains are rewarded
+  - the progress frontier resets on any owner or team change
 
 ### Ghost / Ideal Position
 
@@ -79,27 +80,31 @@ In RL mode the environment expects one action per LEFT player each step.
 - The displayed grey ghost and player-to-ghost line use the same smoothed anchor that also feeds `map_anchor_*` and the role-zone penalty.
 - Role zone uses one shared outfield anchor ellipse plus a dedicated goalkeeper ellipse: no penalty inside the tolerance zone, then a small progressive penalty outside it with more freedom on `x` than `y`.
 
-### Shoot Mode
+### Pass / Shoot
 
-- `flag_shoot_mode` turns on only when the ball carrier has possession, is close enough to the opponent goal, and is facing sufficiently into a forward attack cone.
-- Outside shoot mode, `kick_low`, `kick_mid`, and `kick_high` remain straight passes / clearances along the current facing direction.
-- Inside shoot mode, those same three actions become goalkeeper-aware shots:
-  - `kick_low`: fastest / safest finish toward center or open-center.
-  - `kick_mid`: balanced finish toward an inner open lane.
-  - `kick_high`: highest-power finish toward the outer open lane just inside the post.
-- Shot targeting uses visible goal-mouth and opponent-goalkeeper geometry, with only modest spread; the old hidden random goalkeeper-bypass behavior is gone.
-- When shoot mode is active, the player's normal fill stays in place and three small overlay squares appear across the body; while the human shot is charging, the low/mid/high segments light up one-by-one in the outline color.
+- `flag_shot_quality` is a continuous `0..1` cue for the ball carrier: it rises when the carrier is closer to the opponent goal and broadly facing it. For LEFT, the viable facing band is the goal-facing diagonal/straight set (`NE`, `E`, `SE`); the mirrored band applies for RIGHT.
+- `pass` chooses a safe teammate broadly aligned with the carrier's current facing, otherwise it kicks along the current facing direction. The pass assist can bend toward a teammate, but it no longer forces every pass forward.
+- `shoot` is a single semantic action. The environment bends strongly toward an open goal-mouth lane using opponent-goalkeeper geometry whenever `flag_shot_quality` is non-zero, with higher quality tightening the angle and spread so diagonal goal-facing shots can still be angled into the net.
+- The ball carrier shows a small shot-quality bar above the player: it spans the same width as the player and fills from `0..1` using the player's fill color at 50% transparency.
+
+### Scripted Team
+
+- Scripted outfield players use a compact rule set: advance in possession, pass when pressured, and shoot once shot quality clears a slightly randomized per-possession threshold.
+- When pressured with a pass available, the scripted carrier passes most of the time and occasionally commits to a short diagonal dribble burst to break deadlocks.
+- Off-ball teammates keep moving: in possession they spread into simple support lanes, and out of possession one hunter presses while the rest drop into compact defensive positions between the ball and their goal.
+- Goalkeepers defend on a shallow semicircle in front of the goal: they step out most near the center line, move back toward the line near the posts, and track the expected shot lane with smoothing.
+- If a goalkeeper is already in a good covering position between the ball and goal, it holds that position until the target moves outside a small hysteresis band.
 
 ### Centralized Critic State
 
 - The centralized state is fixed-size and robust to team-size changes.
 - It pads observations up to `MAX_LEFT_PLAYERS=7`.
 - `central_mask` distinguishes present players from padded slots.
-- `CENTRAL_OBS_DIM = (7 * 56) + 7 + 6 = 405`.
+- `CENTRAL_OBS_DIM = (7 * 63) + 7 + 6 = 454`.
 
 ### Action Masking
 
-- If `self_has_ball == 0`, `kick_low`, `kick_mid`, and `kick_high` are invalid.
+- If `self_has_ball == 0`, `pass` and `shoot` are invalid.
 - Masking is applied in both training and evaluation.
 - Eval uses masked action selection, so invalid kicks are not chosen.
 
@@ -111,17 +116,17 @@ In RL mode the environment expects one action per LEFT player each step.
 
 ### Diagnostics
 
-- Training prints PPO diagnostics after episodes.
+- Training prints PPO diagnostics after episodes without per-reward-term suffixes.
 - `KICK_DEBUG_SANITY=1` enables runtime checks for observation shape, masked invalid kicks, and reward-vector consistency.
 
 ## Rewards (Training)
 
-Logged reward codes are `G C P B TS RZ`:
+Reward terms are intentionally kept internal to the environment and are not rendered in the bottom bar or appended to training logs:
 
 - `G`: team score bonus, total `+10.0`, normalized across LEFT players
 - `C`: team concede penalty, total `-5.0`, normalized across LEFT players
 - `P`: controlled forward ball progress for the current LEFT owner after stable physical possession
-  - requires the same LEFT owner for `3` consecutive frames
+  - requires the same LEFT owner for `3` consecutive physics frames
   - only pays positive forward gains and resets its frontier on any owner/team change
   - `P = 1.0 * clip(max(0, ball_depth - frontier), 0.0, 0.01)`
 - `B`: bounded ball-support shaping for one active LEFT outfielder near the ball / active play
@@ -132,7 +137,7 @@ Logged reward codes are `G C P B TS RZ`:
   - uses each outfielder's nearest-teammate spacing shortfall against `TEAM_SHAPE_MIN_DIST_NORM = 0.065`
   - `TS_i = -clip(0.001 * s + 0.01 * s^2, 0.0, 0.00006)` where `s = max(0, min_dist_norm - nearest_teammate_dist_norm)`
 - `RZ`: soft role-zone penalty based on distance from the role anchor
-  - disabled for the LEFT ball carrier, shoot-mode players, and the active closest LEFT outfield challenger when LEFT is out of possession
+  - disabled for the LEFT ball carrier and the active closest LEFT outfield challenger when LEFT is out of possession
   - `d = sqrt((dx / tol_x)^2 + (dy / tol_y)^2)` using `map_anchor_*`-equivalent offsets
   - inside zone (`d <= 1.0`): `0.0`
   - outside zone: `-(0.000015 * e + 0.000015 * e^2)` where `e = d - 1.0`
@@ -143,11 +148,11 @@ Logged reward codes are `G C P B TS RZ`:
 - Promotion settings live in `games/kick/config.py` under `CURRICULUM_PROMOTION`
 - LEFT always stays at `7` RL-controlled players
 - Opponent scaling:
-  - Level 1: `7v1` vs `GK`, goals `3.0x`, enemy stamina `0.25`, `start_possession=RND_LEFT`
-  - Level 2: `7v3` vs `GK LM RM`, goals `2.25x`, enemy stamina `0.50`, `start_possession=RND_LEFT`
-  - Level 3: `7v5` vs `GK LB RB CM CS`, goals `1.75x`, enemy stamina `0.625`, `start_possession=CEN`
-  - Level 4: `7v7` vs `GK LB RB LM CM RM CS`, goals `1.25x`, enemy stamina `0.75`, `start_possession=CEN`
-  - Level 5: `7v7` vs `GK LB RB LM CM RM CS`, standard goals, enemy stamina `1.00`, `start_possession=CEN`
+  - Level 1: `players_opponent=1`, `goals_size_scale=3`, `enemy_stamina_scale=0.25`, `entropy_coef=0.02`, `start_possession=RND_LEFT`
+  - Level 2: `players_opponent=3`, `goals_size_scale=2.25`, `enemy_stamina_scale=0.5`, `entropy_coef=0.015`, `start_possession=RND_LEFT`
+  - Level 3: `players_opponent=5`, `goals_size_scale=1.75`, `enemy_stamina_scale=0.625`, `entropy_coef=0.01`, `start_possession=CEN`
+  - Level 4: `players_opponent=7`, `goals_size_scale=1.25`, `enemy_stamina_scale=0.75`, `entropy_coef=0.0075`, `start_possession=CEN`
+  - Level 5: `players_opponent=7`, `goals_size_scale=1`, `enemy_stamina_scale=1`, `entropy_coef=0.005`, `start_possession=CEN`
 
 `start_possession` supports `CEN` for a free center-ball start, `RND_LEFT` for a random LEFT outfielder start, and `RND_RIGHT` for a random RIGHT outfielder start.
 In levels `1` and `2`, `RND_LEFT` seeds possession on a random LEFT outfield player and excludes the goalkeeper.

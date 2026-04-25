@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from core.shared_config import (
     FPS,
-    PHYSICS_DT,
     TILE_SIZE,
 )
 from core.utils import env_float, env_flag
@@ -22,7 +21,7 @@ BALL_RADIUS_SCALE = 1.8
 PLAYER_V_MAX_PX_PER_SEC = 3.8 * FPS * GAME_SPEED_SCALE
 PLAYER_A_MAX_PX_PER_SEC2 = PLAYER_V_MAX_PX_PER_SEC * 4.0
 SHOW_ZONE_TARGET_CLONES = False
-SHOW_BOTTOM_REWARD_BREAKDOWN = True
+SHOW_GHOST_OVERLAY = SHOW_ZONE_TARGET_CLONES
 ZONE_TARGET_CLONE_ALPHA = 128
 DEBUG_SANITY_CHECKS = env_flag("KICK_DEBUG_SANITY", False)
 
@@ -81,6 +80,9 @@ INPUT_FEATURE_NAMES = [
     "self_has_ball",
     "self_stamina",
     "self_stamina_delta",
+    "self_last_move_x",
+    "self_last_move_y",
+    "self_action_changed",
     *[ROLE_FEATURE_NAME_BY_ROLE[role] for role in ROLE_NAMES],
     "tgt_dx",
     "tgt_dy",
@@ -92,6 +94,10 @@ INPUT_FEATURE_NAMES = [
     "land_opp_goal_dy",
     "land_own_goal_dx",
     "land_own_goal_dy",
+    "land_own_gk_dx",
+    "land_own_gk_dy",
+    "land_shot_line_dy",
+    "land_shot_tti",
     "land_gk_dx",
     "land_gk_dy",
     "land_gk_dvy",
@@ -121,7 +127,7 @@ INPUT_FEATURE_NAMES = [
     "opp3_dvy",
     "map_anchor_dx",
     "map_anchor_dy",
-    "flag_shoot_mode",
+    "flag_shot_quality",
 ]
 ACTION_NAMES = [
     "stay",
@@ -133,14 +139,15 @@ ACTION_NAMES = [
     "move_sw",
     "move_w",
     "move_nw",
-    "kick_low",
-    "kick_mid",
-    "kick_high",
+    "pass",
+    "shoot",
 ]
 OBS_DIM = len(INPUT_FEATURE_NAMES)
 ACT_DIM = len(ACTION_NAMES)
-if OBS_DIM != 56:
-    raise RuntimeError(f"Kick INPUT_FEATURE_NAMES expected 56 entries, got {OBS_DIM}.")
+if OBS_DIM != 63:
+    raise RuntimeError(f"Kick INPUT_FEATURE_NAMES expected 63 entries, got {OBS_DIM}.")
+if ACT_DIM != 11:
+    raise RuntimeError(f"Kick ACTION_NAMES expected 11 entries, got {ACT_DIM}.")
 
 
 # GAME
@@ -205,9 +212,9 @@ LEVEL_SETTINGS = {
 # REWARDS
 REWARD_SCORE = 10.0
 PENALTY_CONCEDE = -5.0
-REWARD_PROGRESS_CONTROLLED = 2.0
-CONTROLLED_PROGRESS_STABLE_STEPS = 2
-CONTROLLED_PROGRESS_STEP_CLIP = 0.025
+REWARD_PROGRESS_CONTROLLED = 1.0
+CONTROLLED_PROGRESS_STABLE_STEPS = 3
+CONTROLLED_PROGRESS_STEP_CLIP = 0.010
 
 BALL_SUPPORT_SCALE = 0.01
 BALL_SUPPORT_CLIP = 0.25
@@ -216,7 +223,7 @@ BALL_SUPPORT_TARGET_DIST_TILES = 2.5
 TEAM_SHAPE_MIN_DIST_NORM = 0.065
 TEAM_SHAPE_LINEAR_COEF = 0.001
 TEAM_SHAPE_QUADRATIC_COEF = 0.01
-TEAM_SHAPE_CLIP = 0.000075
+TEAM_SHAPE_CLIP = 0.00006
 
 # Role-zone uses the existing anchor ellipse as a weak positional prior.
 ROLE_ZONE_TOL_X = 0.30
@@ -225,6 +232,10 @@ ROLE_ZONE_TOL_X_GK = 0.005
 ROLE_ZONE_TOL_Y_GK = 0.075
 ROLE_ZONE_LINEAR_COEF = 0.000015
 ROLE_ZONE_QUADRATIC_COEF = 0.000015
+
+# RL commands are held for this many physics frames. At 60 FPS, 12 frames
+# means five policy decisions per rendered second.
+RL_ACTION_REPEAT_FRAMES = 12
 
 REWARD_COMPONENTS = {
     "outcome.reward_score": REWARD_SCORE,
@@ -243,11 +254,12 @@ CENTRAL_OBS_BALL_FEATURES = 6
 CENTRAL_OBS_DIM = (MAX_LEFT_PLAYERS * OBS_DIM) + CENTRAL_OBS_MASK_DIM + CENTRAL_OBS_BALL_FEATURES
 if MAX_LEFT_PLAYERS != 7:
     raise RuntimeError(f"Kick MAX_LEFT_PLAYERS expected 7, got {MAX_LEFT_PLAYERS}.")
-if CENTRAL_OBS_DIM != 405:
-    raise RuntimeError(f"Kick CENTRAL_OBS_DIM expected 405, got {CENTRAL_OBS_DIM}.")
+if CENTRAL_OBS_DIM != 454:
+    raise RuntimeError(f"Kick CENTRAL_OBS_DIM expected 454, got {CENTRAL_OBS_DIM}.")
 
 GAME_CAPABILITIES = {
     "centralized_critic_required": True,
+    "multi_agent": True,
 }
 ENV_METADATA = {
     "central_obs_dim": int(CENTRAL_OBS_DIM),
@@ -256,13 +268,23 @@ ENV_METADATA = {
 
 # TRAINING
 DEFAULT_MODEL_CONFIG = {
-    "hidden_sizes": [64, 64], #[96, 96],
-    "critic_hidden_sizes": [128, 128], #[192, 192],
+    "hidden_sizes": [64, 64],
+    "critic_hidden_sizes": [128, 128],
+    "policy_head_feature_groups": [
+        [INPUT_FEATURE_NAMES.index("self_role_gk")],
+        [INPUT_FEATURE_NAMES.index("self_role_lb"), INPUT_FEATURE_NAMES.index("self_role_rb")],
+        [
+            INPUT_FEATURE_NAMES.index("self_role_lm"),
+            INPUT_FEATURE_NAMES.index("self_role_lcm"),
+            INPUT_FEATURE_NAMES.index("self_role_rm"),
+        ],
+        [INPUT_FEATURE_NAMES.index("self_role_lcs")],
+    ],
 }
 ALGO_CONFIG_OVERRIDES = {
     "ppo": {
-    "minibatch_size": 512,
-    "entropy_coef": float(LEVEL_SETTINGS[int(MIN_LEVEL)]["entropy_coef"]),
+        "minibatch_size": 512,
+        "entropy_coef": float(LEVEL_SETTINGS[int(MIN_LEVEL)]["entropy_coef"]),
     }
 }
 DEFAULT_TRAIN_CONFIG = {

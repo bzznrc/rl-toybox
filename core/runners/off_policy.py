@@ -17,54 +17,13 @@ from core.logging_utils import (
     log_save_line,
     should_emit_train_progress_log,
 )
-
-
-def _extract_action_mask(env: Env, obs: object) -> object | None:
-    for method_name in ("get_action_mask", "action_mask"):
-        getter = getattr(env, method_name, None)
-        if not callable(getter):
-            continue
-        try:
-            mask = getter(obs)
-        except TypeError:
-            mask = getter()
-        if mask is None:
-            return None
-        return mask
-    return None
-
-
-def _act_with_optional_mask(
-    algorithm: Algorithm,
-    obs: object,
-    *,
-    explore: bool,
-    action_mask: object | None,
-):
-    if action_mask is None:
-        return algorithm.act(obs, explore=explore)
-    try:
-        return algorithm.act(obs, explore=explore, action_mask=action_mask)
-    except TypeError:
-        return algorithm.act(obs, explore=explore)
-
-
-def _curriculum_avg_success_for_level(env: Env, level: int) -> float | None:
-    curriculum = getattr(env, "_curriculum", None)
-    if curriculum is None:
-        return None
-    episodes_in_level = getattr(curriculum, "episodes_in_level", None)
-    avg_success_in_level = getattr(curriculum, "avg_success_in_level", None)
-    curriculum_config = getattr(curriculum, "config", None)
-    if not callable(episodes_in_level) or not callable(avg_success_in_level):
-        return None
-    min_episodes = max(1, int(getattr(curriculum_config, "min_episodes_per_level", 100)))
-    if int(episodes_in_level(int(level))) < int(min_episodes):
-        return None
-    avg_success = avg_success_in_level(int(level))
-    if avg_success is None:
-        return None
-    return float(avg_success)
+from core.runners.env_access import (
+    act_with_optional_signals,
+    curriculum_avg_success_for_level,
+    extract_action_mask,
+    infer_current_level,
+    safe_level,
+)
 
 
 @dataclass
@@ -77,21 +36,6 @@ class OffPolicyConfig:
     checkpoint_every_steps: int = 50_000
     reward_window: int = 100
     min_episodes_for_stats: int = 100
-
-
-def _safe_level(value: object, default: int) -> int:
-    try:
-        return max(1, int(value))
-    except (TypeError, ValueError):
-        return max(1, int(default))
-
-
-def _infer_current_level(env: Env, default: int = 1) -> int:
-    level_value = getattr(env, "_current_level", None)
-    if level_value is None:
-        game = getattr(env, "game", None)
-        level_value = getattr(game, "level", None)
-    return _safe_level(level_value, default)
 
 
 def run_off_policy_training(
@@ -118,24 +62,25 @@ def run_off_policy_training(
     episodes_by_level: dict[int, int] = {}
     min_episodes_for_stats = max(0, int(config.min_episodes_for_stats))
     best_avg_reward_by_level: dict[int, float] = {}
+    best_avg_success_by_level: dict[int, float] = {}
     update_attempts = 0
     updates = 0
     last_loss = 0.0
-    current_level = _infer_current_level(env, default=1)
+    current_level = infer_current_level(env, default=1)
 
     while total_steps < int(config.max_steps):
         if config.max_episodes is not None and total_episodes >= int(config.max_episodes):
             break
 
-        action_mask = _extract_action_mask(env, obs)
-        action = _act_with_optional_mask(
+        action_mask = extract_action_mask(env, obs, dtype=None)
+        action = act_with_optional_signals(
             algorithm,
             obs,
             explore=True,
             action_mask=action_mask,
         )
         next_obs, reward, done, info = env.step(action)
-        next_action_mask = None if done else _extract_action_mask(env, next_obs)
+        next_action_mask = None if done else extract_action_mask(env, next_obs, dtype=None)
 
         transition = {
             "obs": obs,
@@ -175,7 +120,7 @@ def run_off_policy_training(
         if done:
             total_episodes += 1
             exploration_window.append(episode_reward)
-            episode_level = _safe_level(info.get("level", current_level), current_level)
+            episode_level = safe_level(info.get("level", current_level), current_level)
             level_reward_window = reward_window_by_level.setdefault(
                 int(episode_level),
                 deque(maxlen=reward_window_size),
@@ -193,7 +138,7 @@ def run_off_policy_training(
             level_success_window.append(int(episode_success))
             if bool(info.get("level_changed", False)):
                 bump_epsilon_to_cap(algorithm)
-            current_level = _infer_current_level(env, default=episode_level)
+            current_level = infer_current_level(env, default=episode_level)
             level_episode_count = int(episodes_by_level.get(int(episode_level), 0))
             stats_ready_level = level_episode_count >= min_episodes_for_stats
 
@@ -202,13 +147,23 @@ def run_off_policy_training(
             exploration_event: dict[str, float | int | str] | None = None
             if stats_ready_level:
                 avg_reward = float(mean(level_reward_window))
-                avg_success = _curriculum_avg_success_for_level(env, int(episode_level))
+                avg_success = curriculum_avg_success_for_level(env, int(episode_level))
                 if avg_success is None:
                     avg_success = float(mean(level_success_window)) if level_success_window else None
                 exploration_avg_reward = float(mean(exploration_window))
 
-                best_avg_level = best_avg_reward_by_level.get(int(episode_level), float("-inf"))
-                if avg_reward > float(best_avg_level):
+                avg_success_level = (
+                    float(avg_success)
+                    if avg_success is not None
+                    else float(mean(level_success_window)) if level_success_window else 0.0
+                )
+                best_success_level = best_avg_success_by_level.get(int(episode_level), float("-inf"))
+                best_reward_level = best_avg_reward_by_level.get(int(episode_level), float("-inf"))
+                if (
+                    avg_success_level > float(best_success_level)
+                    or (avg_success_level == float(best_success_level) and avg_reward > float(best_reward_level))
+                ):
+                    best_avg_success_by_level[int(episode_level)] = float(avg_success_level)
                     best_avg_reward_by_level[int(episode_level)] = float(avg_reward)
                     best_path = run_paths.model_path(level=int(episode_level), kind="best")
                     algorithm.save(str(best_path))
@@ -263,7 +218,7 @@ def run_off_policy_training(
             episode_steps = 0
 
     if total_episodes >= min_episodes_for_stats:
-        current_level = _infer_current_level(env, default=current_level)
+        current_level = infer_current_level(env, default=current_level)
         checkpoint_path = run_paths.model_path(level=int(current_level), kind="check")
         algorithm.save(str(checkpoint_path))
         log_save_line(
@@ -302,6 +257,7 @@ def run_off_policy_training(
         "updates": updates,
         "best_avg_reward": best_avg_reward if best_avg_reward > float("-inf") else 0.0,
         "best_avg_reward_by_level": {int(level): float(value) for level, value in best_avg_reward_by_level.items()},
+        "best_avg_success_by_level": {int(level): float(value) for level, value in best_avg_success_by_level.items()},
         "last_loss": last_loss,
         "config": asdict(config),
     }

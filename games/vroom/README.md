@@ -19,7 +19,7 @@ Top-down one-lap racing with procedural closed-loop tracks and continuous `steer
 - Throttle: `W` or up arrow
 - Brake: `S` or down arrow
 - Coast: release throttle and brake
-- Rendered overlays: `X` toggles the sensor-ray visualization during `play-user` and `play-ai`
+- Rendered overlays: `X` toggles translucent `sens_*` ray ghosts during `play-user` and `play-ai`
 
 ## Observation / Actions
 

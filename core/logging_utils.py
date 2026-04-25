@@ -317,21 +317,28 @@ def log_search_play_game_line(
     loss: float | None,
     policy_loss: float | None = None,
     value_loss: float | None = None,
+    arena_score: float | None = None,
+    reward_components: str | None = None,
 ) -> None:
     segments = [
         f"Game:{int(game):>5}",
         f"Len:{int(moves):>5}",
-        f"W:{str(winner):>5}",
-        f"BW:{'n/a' if black_win_rate is None else f'{float(black_win_rate):.2f}':>5}",
-        f"DR:{'n/a' if draw_rate is None else f'{float(draw_rate):.2f}':>5}",
-        f"AL:{'n/a' if avg_length is None else f'{float(avg_length):.1f}':>6}",
-        f"L:{'n/a' if loss is None else f'{float(loss):.3f}':>7}",
+        f"Win:{str(winner):>5}",
+        f"BlackWin:{'n/a' if black_win_rate is None else f'{float(black_win_rate):.2f}':>5}",
+        f"Draw:{'n/a' if draw_rate is None else f'{float(draw_rate):.2f}':>5}",
+        f"AvgLen:{'n/a' if avg_length is None else f'{float(avg_length):.1f}':>6}",
+        f"Loss:{'n/a' if loss is None else f'{float(loss):.3f}':>7}",
     ]
+    if arena_score is not None:
+        segments.append(f"Arena:{float(arena_score):>5.2f}")
     if policy_loss is not None:
-        segments.append(f"PL:{float(policy_loss):>7.3f}")
+        segments.append(f"PolicyLoss:{float(policy_loss):>7.3f}")
     if value_loss is not None:
-        segments.append(f"VL:{float(value_loss):>7.3f}")
-    logging.getLogger("rl_toybox.train").info("\t".join(segments))
+        segments.append(f"ValueLoss:{float(value_loss):>7.3f}")
+    line = "\t".join(segments)
+    if reward_components:
+        line += "\t" + str(reward_components)
+    logging.getLogger("rl_toybox.train").info(line)
 
 
 def log_save_line(

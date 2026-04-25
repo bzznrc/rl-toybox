@@ -25,6 +25,7 @@ from core.curriculum import (
     validate_curriculum_level_settings,
 )
 from core.envs.base import Env
+from core.ghost_overlay import update_ghost_overlay_toggle
 from core.io_schema import clip_signed, clip_unit, normalize_last_action, ordered_feature_vector, signed_potential_shaping
 from core.match_tracker import compact_count_to_icons
 from core.primitives import (
@@ -36,6 +37,7 @@ from core.primitives import (
     spawn_connected_random_walk_shapes,
     status_icon_size,
 )
+from core.ray_viz import draw_player_rays
 from core.rewards import RewardBreakdown
 from core.shared_config import (
     BB_HEIGHT,
@@ -63,6 +65,7 @@ from games.snake.config import (
     PROGRESS_SCALE,
     REWARD_FOOD,
     PENALTY_STEP,
+    SHOW_GHOST_OVERLAY,
     SUCCESS_FOODS_REQUIRED,
     WINDOW_TITLE,
     WRAP_AROUND,
@@ -98,6 +101,9 @@ class BaseSnakeGame:
         self.width = SCREEN_WIDTH
         self.height = SCREEN_HEIGHT
         self.show_game = bool(show_game)
+        self.show_ghost_overlay = bool(SHOW_GHOST_OVERLAY)
+        self.ghost_overlay_allowed = True
+        self._prev_ghost_overlay_toggle_down = False
         self.frame_clock = ArcadeFrameClock()
         self.window_controller = ArcadeWindowController(
             self.width,
@@ -128,6 +134,12 @@ class BaseSnakeGame:
 
     def poll_events(self) -> None:
         self.window_controller.poll_events_or_raise()
+        self.show_ghost_overlay, self._prev_ghost_overlay_toggle_down = update_ghost_overlay_toggle(
+            window_controller=self.window_controller,
+            visible=bool(self.show_ghost_overlay),
+            previous_down=bool(self._prev_ghost_overlay_toggle_down),
+            enabled=bool(self.show_game and self.ghost_overlay_allowed),
+        )
 
     def reset(self) -> None:
         self.direction = Direction.RIGHT
@@ -321,11 +333,81 @@ class BaseSnakeGame:
             packed_marker_size=float(marker_size),
         )
 
+    @staticmethod
+    def _direction_vector(direction: Direction) -> tuple[int, int]:
+        if direction == Direction.RIGHT:
+            return 1, 0
+        if direction == Direction.LEFT:
+            return -1, 0
+        if direction == Direction.UP:
+            return 0, -1
+        return 0, 1
+
+    @staticmethod
+    def _left_vector(dx: int, dy: int) -> tuple[int, int]:
+        return dy, -dx
+
+    @staticmethod
+    def _right_vector(dx: int, dy: int) -> tuple[int, int]:
+        return -dy, dx
+
+    def _grid_dims(self) -> tuple[int, int]:
+        return int(self.width // TILE_SIZE), int((self.height - BB_HEIGHT) // TILE_SIZE)
+
+    def _cell_from_point(self, point: Point) -> tuple[int, int]:
+        return int(point.x // TILE_SIZE), int(point.y // TILE_SIZE)
+
+    def _point_from_cell(self, cell_x: int, cell_y: int) -> Point:
+        return Point(float(cell_x * TILE_SIZE), float(cell_y * TILE_SIZE))
+
+    def _is_collision_for_cell(self, cell_x: int, cell_y: int) -> bool:
+        grid_w, grid_h = self._grid_dims()
+        if WRAP_AROUND:
+            cell_x = int(cell_x % grid_w)
+            cell_y = int(cell_y % grid_h)
+        else:
+            if cell_x < 0 or cell_x >= grid_w or cell_y < 0 or cell_y >= grid_h:
+                return True
+        point = self._point_from_cell(cell_x, cell_y)
+        return bool(point in self.snake[1:] or point in self.obstacles)
+
+    def _ray_distance_to_collision(self, dir_x: int, dir_y: int) -> float:
+        head_cell_x, head_cell_y = self._cell_from_point(self.head)
+        grid_w, grid_h = self._grid_dims()
+        max_range = max(1, int(max(grid_w, grid_h)))
+        for step in range(1, max_range + 1):
+            cell_x = head_cell_x + int(dir_x) * step
+            cell_y = head_cell_y + int(dir_y) * step
+            if self._is_collision_for_cell(cell_x, cell_y):
+                return float(step - 1) / float(max_range)
+        return 1.0
+
+    def _draw_ghost_overlay(self) -> None:
+        if not bool(self.show_ghost_overlay and self.show_game):
+            return
+        dir_x, dir_y = self._direction_vector(self.direction)
+        left_x, left_y = self._left_vector(dir_x, dir_y)
+        right_x, right_y = self._right_vector(dir_x, dir_y)
+        ray_dirs = ((dir_x, dir_y), (left_x, left_y), (right_x, right_y))
+        ray_values = tuple(float(self._ray_distance_to_collision(dx, dy)) for dx, dy in ray_dirs)
+        grid_w, grid_h = self._grid_dims()
+        max_distance = float(max(1, int(max(grid_w, grid_h))) * TILE_SIZE)
+        draw_player_rays(
+            origin_x=float(self.head.x + TILE_SIZE * 0.5),
+            origin_y=float(self.head.y + TILE_SIZE * 0.5),
+            ray_dirs=ray_dirs,
+            ray_values=ray_values,
+            ray_max_distances=(max_distance,) * len(ray_dirs),
+            to_screen=lambda x, y: (float(x), float(self.window_controller.to_arcade_y(float(y)))),
+            line_width=1.5,
+        )
+
     def draw_frame(self) -> None:
         if self.window is None:
             return
 
         self.window_controller.clear(COLOR_DARK_NEUTRAL)
+        self._draw_ghost_overlay()
         self._draw_tile_batch(self.snake, COLOR_AQUA, COLOR_DEEP_TEAL)
         self._draw_tile(self.food, COLOR_CORAL, COLOR_BRICK_RED)
         self._draw_tile_batch(self.obstacles, COLOR_FOG_GRAY, COLOR_SLATE_GRAY)
@@ -722,6 +804,7 @@ class SnakeEnv(Env):
         else:
             self.game = TrainingSnakeGame(show_game=bool(render))
             self._apply_level_settings(int(self._current_level))
+        self.game.ghost_overlay_allowed = bool(self.mode in {"human", "eval"})
         self.window_controller = self.game.window_controller
         self.window = self.game.window
 

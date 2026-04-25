@@ -51,6 +51,8 @@ class PPOConfig:
     actor_head_hidden_sizes: list[int] | None = None
     critic_head_hidden_sizes: list[int] | None = None
     recurrent_seq_len: int = 32
+    policy_loss_mode: str = "ppo"
+    policy_head_feature_groups: list[list[int]] | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,9 @@ class PPOAlgorithm(Algorithm):
             raise ValueError("PPO recurrent_type must be 'none', 'lstm', or 'gru'.")
         self._is_recurrent = bool(self._recurrent_type in {"lstm", "gru"})
         self._recurrent_seq_len = max(1, int(config.recurrent_seq_len))
+        self._policy_loss_mode = str(config.policy_loss_mode).strip().lower()
+        if self._policy_loss_mode not in {"ppo", "a2c"}:
+            raise ValueError("PPO policy_loss_mode must be 'ppo' or 'a2c'.")
 
         self._use_centralized_critic = bool(config.centralized_critic)
         if self._is_recurrent and self._use_centralized_critic:
@@ -137,6 +142,7 @@ class PPOAlgorithm(Algorithm):
                 init_log_std=float(config.init_log_std),
                 min_log_std=float(config.min_log_std),
                 max_log_std=float(config.max_log_std),
+                policy_head_feature_groups=config.policy_head_feature_groups,
             ).to(self.device)
         else:
             self.model = ActorCritic(
@@ -771,12 +777,15 @@ class PPOAlgorithm(Algorithm):
 
                 ratio = torch.exp(log_probs - batch_old_log_probs)
                 unclipped = ratio * batch_advantages
-                clipped = torch.clamp(
-                    ratio,
-                    1.0 - float(self.config.clip_ratio),
-                    1.0 + float(self.config.clip_ratio),
-                ) * batch_advantages
-                policy_loss = -torch.min(unclipped, clipped).mean()
+                if self._policy_loss_mode == "a2c":
+                    policy_loss = -unclipped.mean()
+                else:
+                    clipped = torch.clamp(
+                        ratio,
+                        1.0 - float(self.config.clip_ratio),
+                        1.0 + float(self.config.clip_ratio),
+                    ) * batch_advantages
+                    policy_loss = -torch.min(unclipped, clipped).mean()
 
                 value_loss = nn.functional.mse_loss(values, batch_returns)
                 loss = (
@@ -1009,12 +1018,15 @@ class PPOAlgorithm(Algorithm):
 
                 ratio = torch.exp(log_probs - old_log_prob_tensor)
                 unclipped = ratio * advantage_tensor
-                clipped = torch.clamp(
-                    ratio,
-                    1.0 - float(self.config.clip_ratio),
-                    1.0 + float(self.config.clip_ratio),
-                ) * advantage_tensor
-                policy_loss = -self._masked_mean(torch.min(unclipped, clipped), valid_tensor)
+                if self._policy_loss_mode == "a2c":
+                    policy_loss = -self._masked_mean(unclipped, valid_tensor)
+                else:
+                    clipped = torch.clamp(
+                        ratio,
+                        1.0 - float(self.config.clip_ratio),
+                        1.0 + float(self.config.clip_ratio),
+                    ) * advantage_tensor
+                    policy_loss = -self._masked_mean(torch.min(unclipped, clipped), valid_tensor)
                 value_loss = self._masked_mean((values - returns_tensor) ** 2, valid_tensor)
                 entropy = self._masked_mean(entropy_terms, valid_tensor)
                 loss = (

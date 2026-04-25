@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import re
+import importlib
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACTIVE_GAME_ORDER = ("snake", "bang", "jump", "vroom", "osero", "kick")
+STRICT_LEVEL_MIRROR_GAMES = {"jump", "kick"}
 REQUIRED_GAME_HEADINGS = (
     "Clip",
     "Algorithm / Network",
@@ -42,6 +44,55 @@ def _extract_second_level_headings(text: str) -> list[str]:
     return headings
 
 
+def _config_module(game_id: str):
+    return importlib.import_module(f"games.{game_id}.config")
+
+
+def _require_snippet(errors: list[str], *, path: Path, text: str, snippet: str) -> None:
+    if str(snippet) not in text:
+        errors.append(f"{path.relative_to(REPO_ROOT)} is missing config mirror snippet: {snippet!r}")
+
+
+def _validate_config_mirror(errors: list[str], *, game_id: str, readme_path: Path, readme_text: str) -> None:
+    config = _config_module(game_id)
+    obs_dim = int(getattr(config, "OBS_DIM"))
+    act_dim = int(getattr(config, "ACT_DIM"))
+    _require_snippet(errors, path=readme_path, text=readme_text, snippet=f"obs={obs_dim}")
+    _require_snippet(errors, path=readme_path, text=readme_text, snippet=f"act={act_dim}")
+
+    model_config = dict(getattr(config, "DEFAULT_MODEL_CONFIG", {}))
+    hidden_sizes = model_config.get("hidden_sizes")
+    if isinstance(hidden_sizes, list) and hidden_sizes:
+        hidden_text = " -> ".join(str(int(size)) for size in hidden_sizes)
+        _require_snippet(errors, path=readme_path, text=readme_text, snippet=hidden_text)
+
+    critic_sizes = model_config.get("critic_hidden_sizes")
+    if isinstance(critic_sizes, list) and critic_sizes:
+        critic_text = " -> ".join(str(int(size)) for size in critic_sizes)
+        _require_snippet(errors, path=readme_path, text=readme_text, snippet=critic_text)
+
+    if game_id not in STRICT_LEVEL_MIRROR_GAMES:
+        return
+
+    level_settings = getattr(config, "LEVEL_SETTINGS", None)
+    if isinstance(level_settings, dict):
+        for level, settings in sorted(level_settings.items()):
+            _require_snippet(errors, path=readme_path, text=readme_text, snippet=f"Level {int(level)}:")
+            for key, value in dict(settings).items():
+                if isinstance(value, list):
+                    continue
+                if isinstance(value, float):
+                    value_text = f"{float(value):.2f}".rstrip("0").rstrip(".")
+                else:
+                    value_text = str(value)
+                _require_snippet(
+                    errors,
+                    path=readme_path,
+                    text=readme_text,
+                    snippet=f"{str(key)}={value_text}",
+                )
+
+
 def validate() -> list[str]:
     errors: list[str] = []
 
@@ -58,7 +109,9 @@ def validate() -> list[str]:
     root_readme = REPO_ROOT / "README.md"
     if root_readme.is_file():
         root_text = _read_text(root_readme)
-        root_order = [game_id for game_id in _extract_table_game_order(root_text) if game_id in ACTIVE_GAME_ORDER]
+        root_order = list(
+            dict.fromkeys(game_id for game_id in _extract_table_game_order(root_text) if game_id in ACTIVE_GAME_ORDER)
+        )
         if root_order != list(ACTIVE_GAME_ORDER):
             errors.append(
                 "README.md active game order does not match ACTIVE_GAME_ORDER: "
@@ -75,7 +128,9 @@ def validate() -> list[str]:
     repo_guide = REPO_ROOT / "docs" / "repo-guide.md"
     if repo_guide.is_file():
         repo_text = _read_text(repo_guide)
-        repo_order = [game_id for game_id in _extract_table_game_order(repo_text) if game_id in ACTIVE_GAME_ORDER]
+        repo_order = list(
+            dict.fromkeys(game_id for game_id in _extract_table_game_order(repo_text) if game_id in ACTIVE_GAME_ORDER)
+        )
         if repo_order != list(ACTIVE_GAME_ORDER):
             errors.append(
                 "docs/repo-guide.md active lineup order does not match ACTIVE_GAME_ORDER: "
@@ -105,11 +160,13 @@ def validate() -> list[str]:
             errors.append(f"Missing game README: games/{game_id}/README.md")
             continue
         headings = _extract_second_level_headings(_read_text(readme_path))
+        readme_text = _read_text(readme_path)
         if headings != list(REQUIRED_GAME_HEADINGS):
             errors.append(
                 f"games/{game_id}/README.md has unexpected section order: "
                 f"expected {list(REQUIRED_GAME_HEADINGS)}, got {headings}"
             )
+        _validate_config_mirror(errors, game_id=game_id, readme_path=readme_path, readme_text=readme_text)
 
     return errors
 

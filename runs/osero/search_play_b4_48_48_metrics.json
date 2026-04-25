@@ -1,0 +1,28 @@
+{
+  "avg_length": 12.35,
+  "best_arena_score": 1.0,
+  "best_loss": 0.673275900632143,
+  "black_win_rate": 0.06,
+  "config": {
+    "arena_every_games": 25,
+    "arena_games_per_opponent": 4,
+    "checkpoint_every_games": 25,
+    "max_games": 2000,
+    "train_after_games": 4,
+    "updates_per_game": 4
+  },
+  "draw_rate": 0.0,
+  "last_arena_metrics": {
+    "arena_score": 0.9375,
+    "greedy_score": 1.0,
+    "random_score": 0.875
+  },
+  "last_metrics": {
+    "buffer_size": 20000.0,
+    "loss": 0.6144808530807495,
+    "policy_loss": 0.5729499757289886,
+    "value_loss": 0.04153086245059967
+  },
+  "total_games": 2000,
+  "total_steps": 24987
+}

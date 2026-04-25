@@ -10,7 +10,8 @@ Compact Osero/Reversi implementation built around self-play, MCTS, and a small p
 
 - Default algorithm: `search_play`
 - Search: lightweight PUCT MCTS with policy priors and value estimates from the shared network
-- Training flow: self-play games produce MCTS visit-count policy targets and final-outcome value targets
+- Training flow: self-play games produce MCTS visit-count policy targets and final-outcome value targets, then augment replay with board symmetries
+- Best checkpoints are selected by a small arena score against random and greedy opponents, not by training loss alone
 - Default board: `6x6`
 - Supported boards: `4x4`, `6x6`, `8x8`
 - IO / network by board size:
@@ -58,6 +59,7 @@ Action names follow row-major board order plus `pass`.
   - winner from final stone counts
 - Black moves first.
 - Rendering uses the same square-tile visual language as the rest of the repo instead of glossy discs.
+- `play-ai --render` uses a `0.25` second decision delay so individual moves remain readable.
 
 ## Rewards (Training)
 
@@ -67,6 +69,7 @@ Action names follow row-major board order plus `pass`.
 - Terminal loss: `-1`
 
 The search trainer primarily learns from normalized MCTS visit counts for the policy target and final game outcome for the value target.
+Training logs use compact terminal reward codes `W D L` plus tab-spaced KPIs such as `Game`, `Len`, `Win`, `BlackWin`, `Draw`, `AvgLen`, `Loss`, and `Arena`.
 
 ## Curriculum (Train)
 
@@ -75,6 +78,7 @@ There is no environment curriculum for `osero`. It is the repo's temporary excep
 - `4x4` is the smallest option and a useful easy/debug board
 - `6x6` is the default recommended setup
 - `8x8` is supported with a larger model
+- Default training budgets are board-size specific: `4x4=2000`, `6x6=5000`, `8x8=10000` self-play games.
 
 Choose the board before running train or play commands:
 

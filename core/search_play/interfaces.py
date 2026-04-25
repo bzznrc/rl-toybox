@@ -35,3 +35,5 @@ class SearchPlayTrainConfig:
     train_after_games: int
     updates_per_game: int
     checkpoint_every_games: int
+    arena_every_games: int = 25
+    arena_games_per_opponent: int = 2

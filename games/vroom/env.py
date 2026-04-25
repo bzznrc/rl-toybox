@@ -31,6 +31,7 @@ from core.curriculum import (
     validate_curriculum_level_settings,
 )
 from core.envs.base import Env
+from core.ghost_overlay import update_ghost_overlay_toggle
 from core.io_schema import (
     clip_signed,
     clip_unit,
@@ -333,7 +334,7 @@ class VroomEnv(Env):
         self.steps = 0
         self.done = False
         self.show_rays = bool(DRAW_RAYS)
-        self._prev_overlay_toggle_down = False
+        self._prev_ghost_overlay_toggle_down = False
         self.last_action = np.zeros((self.ACT_DIM,), dtype=np.float32)
         self._last_ray_values = np.ones((5,), dtype=np.float32)
         self._last_ray_origin = (0.0, 0.0)
@@ -795,13 +796,12 @@ class VroomEnv(Env):
         return bool(self.show_game and self.mode in {"human", "eval"})
 
     def _update_visual_overlay_toggle(self) -> None:
-        if not self._can_toggle_visual_overlay():
-            self._prev_overlay_toggle_down = False
-            return
-        toggle_down = bool(self.window_controller.is_key_down(arcade.key.X))
-        if toggle_down and not self._prev_overlay_toggle_down:
-            self.show_rays = not bool(self.show_rays)
-        self._prev_overlay_toggle_down = bool(toggle_down)
+        self.show_rays, self._prev_ghost_overlay_toggle_down = update_ghost_overlay_toggle(
+            window_controller=self.window_controller,
+            visible=bool(self.show_rays),
+            previous_down=bool(self._prev_ghost_overlay_toggle_down),
+            enabled=bool(self._can_toggle_visual_overlay()),
+        )
 
     def _ai_lane_limit(self) -> float:
         return max(4.0, float(self.track_half_width) - float(self.track_probe_radius) - 1.0)

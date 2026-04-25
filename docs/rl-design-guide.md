@@ -29,8 +29,10 @@ Current implementation snapshots are owned by each `games/<game>/README.md`.
 ### Frame pacing
 
 - Use `ArcadeFrameClock.tick(...)` when a game renders in real time.
+- New rendered games should use `ArcadeEnvMixin` for window setup, frame pacing, and close behavior unless they need a documented exception.
 - Keep render FPS and training FPS separate.
 - `TRAINING_FPS=0` means max-throughput training.
+- Use explicit eval/play step-delay knobs when a game advances one full decision per rendered frame and the default FPS would make play unreadable.
 
 ### Terminal commit
 
@@ -56,6 +58,7 @@ Current implementation snapshots are owned by each `games/<game>/README.md`.
 - Prefer composing visuals from these square units instead of introducing unrelated bespoke shapes or gradients.
 - Prefer the shared palette from `core/arcade_style.py`; new visuals should read as arrangements of standard blocks plus palette colors, not as independent art systems.
 - When outlines are used, keep their thickness intentional relative to the standard block and avoid decorative inner grid noise unless it carries gameplay meaning.
+- Optional observation ghosts use `X` as the standard rendered-mode toggle. Sensor rays, SENS grids, route probes, and role/area guides should use the shared light-neutral ghost color at roughly 50% alpha through `core.ghost_overlay`.
 
 ## 3) Config Contract
 
@@ -155,6 +158,7 @@ For board self-play, the action mask stays outside the observation.
 - Dense shaping should support, not dominate, outcomes.
 - Prefer interpretable, bounded shaping terms.
 - Log realized reward contributions, not just reward constants.
+- Prefer declaring a compact `RewardSpec` from the game's config constants and mapping realized reward keys to short display codes.
 
 ## 7) Curriculum Framework
 
@@ -208,3 +212,5 @@ Before merging environment changes:
 - [ ] Action masking is consistent when used.
 - [ ] README and docs still describe the implemented game accurately.
 - [ ] `python -m scripts.validate_docs` passes after README/doc edits.
+
+For code changes that intentionally move away from this guide, ask first, then update the guide in the same approved change so future work follows the new rule instead of the old one.

@@ -461,6 +461,7 @@ def _build_algo_specs() -> dict[str, AlgoSpec]:
             capabilities=AlgoCapabilities(
                 supported_action_spaces=("discrete", "continuous"),
                 supports_masked_actions=True,
+                supports_multi_agent=True,
                 supports_centralized_critic=True,
             ),
             defaults={
@@ -495,6 +496,7 @@ def _build_algo_specs() -> dict[str, AlgoSpec]:
             capabilities=AlgoCapabilities(
                 supported_action_spaces=("discrete", "continuous"),
                 supports_masked_actions=True,
+                supports_multi_agent=True,
                 supports_centralized_critic=True,
             ),
             defaults={
@@ -504,18 +506,19 @@ def _build_algo_specs() -> dict[str, AlgoSpec]:
                         "learning_rate": 3e-4,
                         "gamma": 0.99,
                         "gae_lambda": 0.95,
-                        "clip_ratio": 0.2,
-                        "update_epochs": 4,
+                        "clip_ratio": 999.0,
+                        "update_epochs": 1,
                         "minibatch_size": 256,
                         "entropy_coef": 0.01,
                         "value_coef": 0.5,
                         "max_grad_norm": 0.5,
+                        "policy_loss_mode": "a2c",
                     }
                 },
                 "run": {
                     "train": build_on_policy_train_config(
                         max_iterations=8_000,
-                        rollout_steps=1_024,
+                        rollout_steps=512,
                         checkpoint_every_iterations=10,
                         reward_window=100,
                         min_episodes_for_stats=100,
@@ -634,6 +637,8 @@ def _build_algo_specs() -> dict[str, AlgoSpec]:
                         "train_after_games": 8,
                         "updates_per_game": 2,
                         "checkpoint_every": 25,
+                        "arena_every_games": 25,
+                        "arena_games_per_opponent": 2,
                     }
                 },
             },

@@ -9,6 +9,7 @@ from core.utils import env_flag
 # RUNTIME
 WINDOW_TITLE = "Bang AI"
 USE_GPU = env_flag("BANG_USE_GPU", False)
+SHOW_GHOST_OVERLAY = env_flag("BANG_SHOW_GHOST_OVERLAY", False)
 
 
 # ENV

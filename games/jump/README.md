@@ -9,23 +9,23 @@ Compact side-view micro-platformer built around short procedural runs, timing wi
 ## Algorithm / Network
 
 - Default algorithm: `ppo`
-- IO: `obs=32`, `act=4`
-- Default actor: `32 -> 32 -> 32 -> 4`
-- Default critic: `32 -> 32 -> 32 -> 1`
+- IO: `obs=36`, `act=4`
+- Default actor: `36 -> 32 -> 32 -> 4`
+- Default critic: `36 -> 32 -> 32 -> 1`
 
 ## Controls (Human)
 
 - Move left: `A` or left arrow
 - Move right: `D` or right arrow
 - Jump: `W`, up arrow, or `Space`
-- Toggle SENS ghost grid: `X`
+- Rendered overlays: `X` toggles the translucent route/SENS ghost overlay during `play-user` and `play-ai`
 - Stop horizontal movement: release left/right
 - Jump keeps the current horizontal velocity, matching the RL action contract
 
 ## Observation / Actions
 
-- Observation family: arcade / egocentric `SELF -> SENS -> LAND -> OPP -> FLAG`
-- Observation: `32` floats (`INPUT_FEATURE_NAMES`, exact order)
+- Observation family: arcade / egocentric `SELF -> SENS -> LAND -> OPP -> HAZ -> FLAG`
+- Observation: `36` floats (`INPUT_FEATURE_NAMES`, exact order)
 
 ```python
 [
@@ -33,39 +33,44 @@ Compact side-view micro-platformer built around short procedural runs, timing wi
     "self_vx_norm",
     "self_vy_norm",
     "self_grounded",
+    "self_lane_norm",
     # SENS
-    "sens_patch_rm2_cm1",
-    "sens_patch_rm2_c0",
-    "sens_patch_rm2_cp1",
-    "sens_patch_rm2_cp2",
-    "sens_patch_rm1_cm1",
-    "sens_patch_rm1_c0",
-    "sens_patch_rm1_cp1",
-    "sens_patch_rm1_cp2",
-    "sens_patch_r0_cm1",
-    "sens_patch_r0_c0",
-    "sens_patch_r0_cp1",
-    "sens_patch_r0_cp2",
-    "sens_patch_rp1_cm1",
-    "sens_patch_rp1_c0",
-    "sens_patch_rp1_cp1",
-    "sens_patch_rp1_cp2",
-    "sens_patch_rp2_cm1",
-    "sens_patch_rp2_c0",
-    "sens_patch_rp2_cp1",
-    "sens_patch_rp2_cp2",
+    "sens_ground_l2",
+    "sens_ground_l1",
+    "sens_ground_c0",
+    "sens_ground_r1",
+    "sens_ground_r2",
+    "sens_gap_f1",
+    "sens_gap_f2",
+    "sens_gap_f3",
     # LAND
+    "land_next_dx",
+    "land_next_dy",
+    "land_next_width",
+    "land_next_lane_delta",
+    "land_gap_dx",
+    "land_gap_width",
     "land_move_dx",
     "land_move_dy",
     "land_move_vx_norm",
+    "land_move_phase",
     # OPP
     "opp1_dx",
     "opp1_dy",
     "opp1_vx_norm",
+    "opp1_tti",
+    "opp2_dx",
+    "opp2_dy",
+    # HAZ
+    "haz_route_dx",
+    "haz_route_tti",
+    "haz_lane_dx",
+    "haz_lane_tti",
     # FLAG
     "flag_goal_dx",
     "flag_goal_dy",
     "flag_progress_norm",
+    "flag_time_left",
 ]
 ```
 
@@ -75,11 +80,10 @@ Compact side-view micro-platformer built around short procedural runs, timing wi
   - `2 jump`
   - `3 move_stop`
 
-- `SENS` is a forward/upward-biased `5x4` binary terrain patch with rows `rm2, rm1, r0, rp1, rp2` and cols `cm1, c0, cp1, cp2`.
-- Each logical SENS cell samples a `2x2` local box so nearby landing surfaces read more clearly.
-- Patch cells are `1.0` when collidable terrain or a moving platform currently occupies that local cell, otherwise `0.0`.
-- `LAND` tracks the nearest relevant moving platform's landing anchor plus its current horizontal velocity and zero-fills when no nearby mover is relevant.
-- `OPP` tracks the single closest relevant enemy ahead or behind plus its current horizontal velocity, and zero-fills when no nearby enemy is relevant.
+- `SENS` is a compact symmetric route sensor: five local ground slots from left to right plus three forward gap probes. The `X` ghost overlay mirrors these current probes rather than the old patch grid.
+- `LAND` tracks the next route platform, current gap, and nearest relevant moving platform including its travel phase.
+- `OPP` tracks the two closest relevant enemies; the first enemy also includes velocity and time-to-impact.
+- `HAZ` separates route-level and same-lane forward enemy threat.
 - `flag_goal_dx` and `flag_goal_dy` are egocentric signed goal deltas.
 
 ## Environment Notes
@@ -123,9 +127,9 @@ An episode counts as a success when the player reaches the flag.
 - `REWARD_FINISH = +10.0` on flag reach
 - `PENALTY_FAIL = -5.0` on enemy collision, falling into a gap, or timeout
 - `combat.reward_stomp = +1.00` per stomp, capped at `+5.00` in a single step
-- Forward shaping rewards only new furthest progress toward the flag, capped at `+0.10` per step, with `FORWARD_PROGRESS_SCALE = 2.5`
-- Backtracking away from the best progress reached so far applies a small shaping penalty, clipped at `-0.02`
-- `PENALTY_STEP = -0.001` every training step
+- Progress shaping rewards only new furthest progress and penalizes backward steps, capped at `+/-0.10` per step, with `PROGRESS_SCALE = 2.5`
+- `PENALTY_STALL = -0.005` only when progress is effectively flat for the step
+- There is no generic step penalty; the pressure comes from new-progress reward, moving backward, standing still, timeout failure, and the finish bonus
 
 ## Curriculum (Train)
 
@@ -140,9 +144,9 @@ An episode counts as a success when the player reaches the flag.
 - The ramp starts with a flat single-lane tutorial, then reintroduces regular gaps, enemies, extra lanes, and moving platforms before the unchanged `L5`.
 - Levels:
   - Level 1: `length_tiles=48`, `lane_count=1`, `enemy_frequency=0.0`, `moving_platform_frequency=0.0`
-  - Level 2: `length_tiles=64`, `lane_count=1`, `enemy_frequency=0.10`, `moving_platform_frequency=0.0`
-  - Level 3: `length_tiles=80`, `lane_count=1`, `enemy_frequency=0.25`, `moving_platform_frequency=0.0`
-  - Level 4: `length_tiles=104`, `lane_count=2`, `enemy_frequency=0.50`, `moving_platform_frequency=0.50`
+  - Level 2: `length_tiles=64`, `lane_count=1`, `enemy_frequency=0.25`, `moving_platform_frequency=0.0`
+  - Level 3: `length_tiles=80`, `lane_count=2`, `enemy_frequency=0.25`, `moving_platform_frequency=0.0`
+  - Level 4: `length_tiles=104`, `lane_count=2`, `enemy_frequency=0.50`, `moving_platform_frequency=0.35`
   - Level 5: `length_tiles=128`, `lane_count=3`, `enemy_frequency=0.75`, `moving_platform_frequency=0.75`
 
 ## Run Commands

@@ -25,6 +25,7 @@ from core.curriculum import (
     validate_curriculum_level_settings,
 )
 from core.envs.base import Env
+from core.ghost_overlay import draw_ghost_line, draw_ghost_rect, ghost_color, update_ghost_overlay_toggle
 from core.io_schema import clip_signed, clip_unit, ordered_feature_vector
 from core.match_tracker import MatchTracker
 from core.primitives import (
@@ -149,13 +150,13 @@ class JumpEnv(Env):
     ACTION_NAMES = tuple(config.ACTION_NAMES)
     OBS_DIM = int(config.OBS_DIM)
     ACT_DIM = int(config.ACT_DIM)
-    REWARD_COMPONENT_ORDER = ("F", "X", "T", "P", "S")
+    REWARD_COMPONENT_ORDER = ("F", "X", "T", "P", "I")
     REWARD_COMPONENT_KEY_TO_CODE = {
         "outcome.reward_finish": "F",
         "outcome.penalty_fail": "X",
         "combat.reward_stomp": "T",
-        "progress.forward_scale": "P",
-        "step.penalty_step": "S",
+        "progress.shape": "P",
+        "progress.penalty_stall": "I",
     }
 
     def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
@@ -251,8 +252,8 @@ class JumpEnv(Env):
         self._best_progress_potential = 0.0
         self._last_step_breakdown = self._empty_reward_breakdown()
         self._prev_jump_down = False
-        self.show_sens_patch_grid = bool(config.SHOW_SENS_PATCH_GRID)
-        self._prev_overlay_toggle_down = False
+        self.show_ghost_overlay = bool(config.SHOW_GHOST_OVERLAY)
+        self._prev_ghost_overlay_toggle_down = False
 
         self._apply_level_settings(int(self._current_level))
         self.reset()
@@ -263,8 +264,8 @@ class JumpEnv(Env):
             "outcome.reward_finish": 0.0,
             "outcome.penalty_fail": 0.0,
             "combat.reward_stomp": 0.0,
-            "progress.forward_scale": 0.0,
-            "step.penalty_step": 0.0,
+            "progress.shape": 0.0,
+            "progress.penalty_stall": 0.0,
         }
 
     def _segment_target_for_length(self, length_tiles: int) -> int:
@@ -932,16 +933,15 @@ class JumpEnv(Env):
         return bool(self.show_game and self.mode in {"human", "eval"})
 
     def _update_visual_overlay_toggle(self) -> None:
-        if not self._can_toggle_visual_overlay():
-            self._prev_overlay_toggle_down = False
-            return
-        toggle_down = bool(self.window_controller.is_key_down(arcade.key.X))
-        if toggle_down and not self._prev_overlay_toggle_down:
-            self.show_sens_patch_grid = not bool(self.show_sens_patch_grid)
-        self._prev_overlay_toggle_down = bool(toggle_down)
+        self.show_ghost_overlay, self._prev_ghost_overlay_toggle_down = update_ghost_overlay_toggle(
+            window_controller=self.window_controller,
+            visible=bool(self.show_ghost_overlay),
+            previous_down=bool(self._prev_ghost_overlay_toggle_down),
+            enabled=bool(self._can_toggle_visual_overlay()),
+        )
 
-    def _should_draw_sens_patch_grid(self) -> bool:
-        return bool(self.show_sens_patch_grid and self.show_game and self.mode != "train")
+    def _should_draw_ghost_overlay(self) -> bool:
+        return bool(self.show_ghost_overlay and self.show_game and self.mode != "train")
 
     def _apply_action(self, action_idx: int) -> None:
         if int(action_idx) == int(config.ACTION_MOVE_LEFT):
@@ -1081,45 +1081,46 @@ class JumpEnv(Env):
     def _time_left_ratio(self) -> float:
         return float(self._history.remaining_time_ratio(int(self.steps)))
 
-    def _sens_patch_cells(self) -> list[tuple[str, Rect]]:
+    def _route_transition_label(self, prev_support: int | None, next_support: int | None) -> str:
+        if prev_support is None and next_support is None:
+            return "air"
+        if prev_support is None:
+            return "land"
+        if next_support is None:
+            return "jump"
+        if int(next_support) > int(prev_support):
+            return "advance"
+        if int(next_support) < int(prev_support):
+            return "back"
+        return "same"
+
+    def _sens_ghost_probe_states(self) -> list[tuple[str, Rect, bool]]:
         player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
-        player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
         tile_size = float(config.TILE_SIZE)
-        cell_size = float(max(1, int(config.SENS_PATCH_CELL_TILES))) * tile_size
-        cell_stride_tiles = int(max(1, int(config.SENS_PATCH_CELL_TILES)))
-        anchor_col = int(player_center_x / tile_size)
-        anchor_row = int(player_center_y / tile_size)
-        row_offsets = [(-2, "rm2"), (-1, "rm1"), (0, "r0"), (1, "rp1"), (2, "rp2")]
-        col_offsets = [(-1, "cm1"), (0, "c0"), (1, "cp1"), (2, "cp2")]
-        cells: list[tuple[str, Rect]] = []
-        for row_offset, row_label in row_offsets:
-            for col_offset, col_label in col_offsets:
-                cells.append(
-                    (
-                        f"sens_patch_{row_label}_{col_label}",
-                        Rect(
-                            left=float((anchor_col + (col_offset * cell_stride_tiles)) * tile_size),
-                            top=float((anchor_row + (row_offset * cell_stride_tiles)) * tile_size),
-                            width=float(cell_size),
-                            height=float(cell_size),
-                        ),
-                    )
-                )
-        return cells
+        current_lane = self._lane_index_for_y(float(self.player_y))
+        fallback_surface_y = float(config.LANE_SURFACE_ROWS[int(current_lane)] * config.TILE_SIZE)
+        probe_states: list[tuple[str, Rect, bool]] = []
 
-    def _sens_patch_cell_states(self) -> list[tuple[str, Rect, float]]:
-        support_surfaces = self._support_surfaces()
-        cell_states: list[tuple[str, Rect, float]] = []
-        for feature_name, cell_rect in self._sens_patch_cells():
-            is_active = 1.0 if any(cell_rect.colliderect(surface.rect) for surface in support_surfaces) else 0.0
-            cell_states.append((feature_name, cell_rect, float(is_active)))
-        return cell_states
+        def probe_rect(sample_x: float, surface: TerrainSegment | MovingPlatform | None) -> Rect:
+            surface_y = fallback_surface_y if surface is None else float(surface.surface_y)
+            return Rect(
+                left=float(sample_x - tile_size * 0.5),
+                top=float(surface_y - tile_size),
+                width=float(tile_size),
+                height=float(tile_size),
+            )
 
-    def _sens_patch_feature_values(self) -> dict[str, float]:
-        feature_values: dict[str, float] = {}
-        for feature_name, _, is_active in self._sens_patch_cell_states():
-            feature_values[feature_name] = float(is_active)
-        return feature_values
+        for label, offset_tiles in (("ground_l2", -4), ("ground_l1", -2), ("ground_c0", 0), ("ground_r1", 2), ("ground_r2", 4)):
+            sample_x = float(player_center_x + tile_size * float(offset_tiles))
+            support = self._support_at_x(float(sample_x))
+            probe_states.append((f"sens_{label}", probe_rect(float(sample_x), support), support is not None))
+
+        for idx, offset_tiles in enumerate((4, 8, 12), start=1):
+            sample_x = float(player_center_x + tile_size * float(offset_tiles))
+            support = self._support_at_x(float(sample_x))
+            probe_states.append((f"sens_gap_f{idx}", probe_rect(float(sample_x), support), support is None))
+
+        return probe_states
 
     @staticmethod
     def _moving_platform_anchor(platform: MovingPlatform) -> tuple[float, float]:
@@ -1159,6 +1160,7 @@ class JumpEnv(Env):
                 "land_move_dx": 0.0,
                 "land_move_dy": 0.0,
                 "land_move_vx_norm": 0.0,
+                "land_move_phase": 0.0,
             }
 
         anchor_x, anchor_y = self._moving_platform_anchor(platform)
@@ -1171,6 +1173,14 @@ class JumpEnv(Env):
                 clip_signed((float(anchor_y) - player_center_y) / float(config.LOCAL_DY_NORM_PX))
             ),
             "land_move_vx_norm": float(clip_signed(float(platform.vx) / platform_speed_norm)),
+            "land_move_phase": float(
+                np.clip(
+                    (float(platform.left) - float(platform.min_left))
+                    / max(1.0, float(platform.max_left) - float(platform.min_left)),
+                    0.0,
+                    1.0,
+                )
+            ),
         }
 
     def _closest_relevant_enemy(self) -> JumpEnemy | None:
@@ -1197,37 +1207,180 @@ class JumpEnv(Env):
                 best_match = (score, enemy)
         return None if best_match is None else best_match[1]
 
+    def _closest_relevant_enemies(self, *, k: int) -> list[JumpEnemy]:
+        player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
+        scored: list[tuple[tuple[float, float, float, int], JumpEnemy]] = []
+        for enemy in self.enemies:
+            rect = self._enemy_rect(enemy)
+            enemy_center_x = float(rect.left + rect.width * 0.5)
+            enemy_center_y = float(rect.top + rect.height * 0.5)
+            dx = float(enemy_center_x - player_center_x)
+            dy = float(enemy_center_y - player_center_y)
+            if abs(dx) > float(config.LOCAL_DX_NORM_PX) or abs(dy) > float(config.LOCAL_DY_NORM_PX):
+                continue
+            scored.append(
+                (
+                    (float((dx * dx) + (dy * dy)), float(abs(dx)), float(abs(dy)), int(enemy.spawn_index)),
+                    enemy,
+                )
+            )
+        scored.sort(key=lambda item: item[0])
+        return [enemy for _, enemy in scored[: max(0, int(k))]]
+
     def _enemy_feature_values(self) -> dict[str, float]:
         player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
         player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
-        enemy = self._closest_relevant_enemy()
-        if enemy is None:
+        enemy_speed_norm = float(max(1.0, config.ENEMY_RUN_SPEED_PX_PER_SEC))
+        enemies = self._closest_relevant_enemies(k=2)
+        values = {
+            "opp1_dx": 0.0,
+            "opp1_dy": 0.0,
+            "opp1_vx_norm": 0.0,
+            "opp1_tti": 0.0,
+            "opp2_dx": 0.0,
+            "opp2_dy": 0.0,
+        }
+        for idx, enemy in enumerate(enemies, start=1):
+            rect = self._enemy_rect(enemy)
+            enemy_center_x = float(rect.left + rect.width * 0.5)
+            enemy_center_y = float(rect.top + rect.height * 0.5)
+            dx = float(enemy_center_x - player_center_x)
+            dy = float(enemy_center_y - player_center_y)
+            values[f"opp{idx}_dx"] = float(clip_signed(dx / float(config.LOCAL_DX_NORM_PX)))
+            values[f"opp{idx}_dy"] = float(clip_signed(dy / float(config.LOCAL_DY_NORM_PX)))
+            if idx == 1:
+                rel_speed = max(0.0, float(self.player_vx) - float(enemy.vx))
+                values["opp1_vx_norm"] = float(clip_signed(float(enemy.vx) / enemy_speed_norm))
+                values["opp1_tti"] = (
+                    0.0
+                    if dx <= 0.0 or rel_speed <= 1e-6
+                    else float(np.clip(1.0 - ((dx / rel_speed) / 2.0), 0.0, 1.0))
+                )
+        return values
+
+    def _lane_index_for_y(self, y: float) -> int:
+        surface_rows = tuple(int(row) for row in config.LANE_SURFACE_ROWS)
+        surface_y = float(y + config.PLAYER_SIZE)
+        return int(
+            min(
+                range(len(surface_rows)),
+                key=lambda idx: abs(float(surface_y) - float(surface_rows[idx] * config.TILE_SIZE)),
+            )
+        )
+
+    def _support_at_x(self, x: float) -> TerrainSegment | MovingPlatform | None:
+        best: tuple[float, TerrainSegment | MovingPlatform] | None = None
+        foot_y = float(self.player_y + config.PLAYER_SIZE)
+        for surface in self._support_surfaces():
+            if not (float(surface.left) <= float(x) <= float(surface.right)):
+                continue
+            vertical_gap = abs(float(surface.surface_y) - foot_y)
+            if best is None or vertical_gap < best[0]:
+                best = (float(vertical_gap), surface)
+        return None if best is None else best[1]
+
+    def _sens_route_feature_values(self) -> dict[str, float]:
+        center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        tile = float(config.TILE_SIZE)
+        values: dict[str, float] = {}
+        for label, offset_tiles in (("l2", -4), ("l1", -2), ("c0", 0), ("r1", 2), ("r2", 4)):
+            values[f"sens_ground_{label}"] = 1.0 if self._support_at_x(center_x + tile * offset_tiles) else 0.0
+        for idx, offset_tiles in enumerate((4, 8, 12), start=1):
+            values[f"sens_gap_f{idx}"] = 0.0 if self._support_at_x(center_x + tile * offset_tiles) else 1.0
+        return values
+
+    def _next_route_segment(self) -> TerrainSegment | None:
+        center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        current_idx = self.player_support_index
+        candidates = [
+            segment
+            for segment in self.segments
+            if float(segment.right) > center_x + float(config.TILE_SIZE)
+            and (current_idx is None or int(segment.index) > int(current_idx))
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda segment: (float(segment.left), int(segment.index)))
+
+    def _route_feature_values(self) -> dict[str, float]:
+        center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
+        current_lane = self._lane_index_for_y(float(self.player_y))
+        lane_norm = float(clip_signed((current_lane / max(1, config.LANE_COUNT - 1)) * 2.0 - 1.0))
+        next_segment = self._next_route_segment()
+        if next_segment is None:
             return {
-                "opp1_dx": 0.0,
-                "opp1_dy": 0.0,
-                "opp1_vx_norm": 0.0,
+                "self_lane_norm": lane_norm,
+                "land_next_dx": 0.0,
+                "land_next_dy": 0.0,
+                "land_next_width": 0.0,
+                "land_next_lane_delta": 0.0,
+                "land_gap_dx": 0.0,
+                "land_gap_width": 0.0,
             }
 
-        rect = self._enemy_rect(enemy)
-        enemy_center_x = float(rect.left + rect.width * 0.5)
-        enemy_center_y = float(rect.top + rect.height * 0.5)
-        enemy_speed_norm = float(max(1.0, config.ENEMY_RUN_SPEED_PX_PER_SEC))
+        next_center_x = float(next_segment.left + next_segment.width * 0.5)
+        next_center_y = float(next_segment.surface_y - config.PLAYER_SIZE * 0.5)
+        gap_left = center_x
+        if self.player_support_index is not None and 0 <= int(self.player_support_index) < len(self.segments):
+            gap_left = float(self.segments[int(self.player_support_index)].right)
+        gap_width = max(0.0, float(next_segment.left) - float(gap_left))
+        lane_delta = int(next_segment.lane_index) - int(current_lane)
         return {
-            "opp1_dx": float(
-                clip_signed((enemy_center_x - player_center_x) / float(config.LOCAL_DX_NORM_PX))
-            ),
-            "opp1_dy": float(
-                clip_signed((enemy_center_y - player_center_y) / float(config.LOCAL_DY_NORM_PX))
-            ),
-            "opp1_vx_norm": float(clip_signed(float(enemy.vx) / enemy_speed_norm)),
+            "self_lane_norm": lane_norm,
+            "land_next_dx": float(clip_signed((next_center_x - center_x) / float(config.LOCAL_DX_NORM_PX))),
+            "land_next_dy": float(clip_signed((next_center_y - center_y) / float(config.LOCAL_DY_NORM_PX))),
+            "land_next_width": float(np.clip(float(next_segment.width) / float(config.LOCAL_DX_NORM_PX), 0.0, 1.0)),
+            "land_next_lane_delta": float(clip_signed(float(lane_delta) / max(1.0, float(config.LANE_COUNT - 1)))),
+            "land_gap_dx": float(clip_signed((float(gap_left) - center_x) / float(config.LOCAL_DX_NORM_PX))),
+            "land_gap_width": float(np.clip(gap_width / float(config.LOCAL_DX_NORM_PX), 0.0, 1.0)),
+        }
+
+    def _hazard_feature_values(self) -> dict[str, float]:
+        center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        current_lane = self._lane_index_for_y(float(self.player_y))
+        route_enemy: JumpEnemy | None = None
+        lane_enemy: JumpEnemy | None = None
+        for enemy in self.enemies:
+            segment = self.segments[int(enemy.platform_index)]
+            rect = self._enemy_rect(enemy)
+            enemy_center_x = float(rect.left + rect.width * 0.5)
+            if enemy_center_x < center_x:
+                continue
+            if route_enemy is None or enemy_center_x < float(self._enemy_rect(route_enemy).left):
+                route_enemy = enemy
+            if int(segment.lane_index) == int(current_lane):
+                if lane_enemy is None or enemy_center_x < float(self._enemy_rect(lane_enemy).left):
+                    lane_enemy = enemy
+
+        def _encode(enemy: JumpEnemy | None) -> tuple[float, float]:
+            if enemy is None:
+                return 0.0, 0.0
+            rect = self._enemy_rect(enemy)
+            enemy_center_x = float(rect.left + rect.width * 0.5)
+            dx = max(0.0, enemy_center_x - center_x)
+            rel_speed = max(0.0, float(self.player_vx) - float(enemy.vx))
+            tti = 0.0 if rel_speed <= 1e-6 else float(np.clip(1.0 - ((dx / rel_speed) / 2.0), 0.0, 1.0))
+            return float(clip_signed(dx / float(config.LOCAL_DX_NORM_PX))), float(tti)
+
+        route_dx, route_tti = _encode(route_enemy)
+        lane_dx, lane_tti = _encode(lane_enemy)
+        return {
+            "haz_route_dx": route_dx,
+            "haz_route_tti": route_tti,
+            "haz_lane_dx": lane_dx,
+            "haz_lane_tti": lane_tti,
         }
 
     def _compute_obs(self) -> np.ndarray:
         player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
         player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
-        patch_features = self._sens_patch_feature_values()
+        sens_features = self._sens_route_feature_values()
+        route_features = self._route_feature_values()
         landing_features = self._moving_platform_feature_values()
         enemy_features = self._enemy_feature_values()
+        hazard_features = self._hazard_feature_values()
         feature_values = {
             "self_vx_norm": float(
                 clip_signed(float(self.player_vx) / float(max(1.0, config.PLAYER_RUN_SPEED_PX_PER_SEC)))
@@ -1243,9 +1396,12 @@ class JumpEnv(Env):
                 clip_signed((float(self.flag_rect.top + self.flag_rect.height * 0.5) - player_center_y) / float(config.LOCAL_DY_NORM_PX))
             ),
             "flag_progress_norm": float(self._player_flag_progress()),
-            **patch_features,
+            "flag_time_left": float(self._time_left_ratio()),
+            **sens_features,
+            **route_features,
             **landing_features,
             **enemy_features,
+            **hazard_features,
         }
         obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
         if obs.shape != (self.OBS_DIM,):
@@ -1432,32 +1588,55 @@ class JumpEnv(Env):
             inset=float(config.CELL_INSET),
         )
 
-    def _draw_sens_patch_grid(self) -> None:
-        if not self._should_draw_sens_patch_grid():
+    def _draw_ghost_overlay(self) -> None:
+        if not self._should_draw_ghost_overlay():
             return
         camera_x = self._camera_x()
-        grid_color = COLOR_LIGHT_NEUTRAL + (int(config.SENS_PATCH_GRID_ALPHA),)
-        line_width = 1.5
-        for _, cell_rect, is_active in self._sens_patch_cell_states():
+        overlay_color = ghost_color(int(config.GHOST_OVERLAY_ALPHA))
+        player_center_x = float(self.player_x + config.PLAYER_SIZE * 0.5)
+        player_center_y = float(self.player_y + config.PLAYER_SIZE * 0.5)
+
+        for _, cell_rect, is_active in self._sens_ghost_probe_states():
             if float(cell_rect.right) < float(camera_x) or float(cell_rect.left) > float(camera_x + config.SCREEN_WIDTH):
                 continue
-            bottom = self.window_controller.top_left_to_bottom(float(cell_rect.top), float(cell_rect.height))
-            if float(is_active) > 0.0:
-                arcade.draw_lbwh_rectangle_filled(
-                    float(cell_rect.left - camera_x),
-                    float(bottom),
-                    float(cell_rect.width),
-                    float(cell_rect.height),
-                    grid_color,
-                )
-            arcade.draw_lbwh_rectangle_outline(
-                float(cell_rect.left - camera_x),
-                float(bottom),
-                float(cell_rect.width),
-                float(cell_rect.height),
-                grid_color,
-                float(line_width),
+            draw_ghost_line(
+                self.window_controller,
+                start_x=player_center_x,
+                start_y=player_center_y,
+                end_x=float(cell_rect.left + cell_rect.width * 0.5),
+                end_y=float(cell_rect.top + cell_rect.height * 0.5),
+                camera_x=float(camera_x),
+                color=overlay_color,
+                line_width=1.0,
             )
+            draw_ghost_rect(
+                self.window_controller,
+                cell_rect,
+                camera_x=float(camera_x),
+                color=overlay_color,
+                fill=bool(is_active),
+                outline=True,
+                line_width=1.5,
+            )
+
+        next_segment = self._next_route_segment()
+        if next_segment is not None:
+            segment_rect = Rect(
+                left=float(next_segment.left),
+                top=float(next_segment.surface_y - config.TILE_SIZE),
+                width=float(next_segment.width),
+                height=float(config.TILE_SIZE),
+            )
+            if float(segment_rect.right) >= float(camera_x) and float(segment_rect.left) <= float(camera_x + config.SCREEN_WIDTH):
+                draw_ghost_rect(
+                    self.window_controller,
+                    segment_rect,
+                    camera_x=float(camera_x),
+                    color=overlay_color,
+                    fill=False,
+                    outline=True,
+                    line_width=2.0,
+                )
 
     def _draw_history_icon(self, success: bool, center_x: float, center_y: float, size: float) -> None:
         outer_color = COLOR_AQUA if bool(success) else COLOR_CORAL
@@ -1524,6 +1703,7 @@ class JumpEnv(Env):
         self._update_visual_overlay_toggle()
         action_idx = int(self._resolve_human_action() if self.mode == "human" else self._parse_action(action))
         progress_prev_step = float(self._player_flag_progress())
+        prev_support_index = self.player_support_index
         self._apply_action(int(action_idx))
         prev_player_rect = self._player_rect()
 
@@ -1536,25 +1716,24 @@ class JumpEnv(Env):
         reward = 0.0
         reward_breakdown = self._empty_reward_breakdown()
         if self.mode != "human":
-            reward += float(config.PENALTY_STEP)
-            reward_breakdown["step.penalty_step"] = float(config.PENALTY_STEP)
-
-            phi_prev = float(self._best_progress_potential)
+            phi_best = float(self._best_progress_potential)
             phi_next = float(self._player_flag_progress())
-            progress_delta = max(0.0, float(phi_next - phi_prev))
+            progress_delta = float(phi_next - progress_prev_step)
             forward_reward = min(
-                float(config.FORWARD_PROGRESS_CLIP),
-                float(config.FORWARD_PROGRESS_SCALE) * float(progress_delta),
+                float(config.PROGRESS_CLIP),
+                float(config.PROGRESS_SCALE) * max(0.0, float(phi_next - phi_best)),
             )
-            backtrack_delta = max(0.0, float(progress_prev_step - phi_next))
             backtrack_penalty = min(
-                float(config.BACKTRACK_PENALTY_CLIP),
-                float(config.BACKTRACK_PENALTY_SCALE) * float(backtrack_delta),
+                float(config.PROGRESS_CLIP),
+                float(config.PROGRESS_SCALE) * max(0.0, float(progress_prev_step - phi_next)),
             )
             progress_reward = float(forward_reward - backtrack_penalty)
             reward += float(progress_reward)
-            reward_breakdown["progress.forward_scale"] = float(progress_reward)
-            self._best_progress_potential = float(max(phi_prev, phi_next))
+            reward_breakdown["progress.shape"] = float(progress_reward)
+            if abs(float(progress_delta)) <= float(config.STALL_PROGRESS_EPS):
+                reward += float(config.PENALTY_STALL)
+                reward_breakdown["progress.penalty_stall"] = float(config.PENALTY_STALL)
+            self._best_progress_potential = float(max(phi_best, phi_next))
 
         episode_level = int(self._current_level)
         episode_success = 0
@@ -1606,6 +1785,9 @@ class JumpEnv(Env):
             "time_left_ratio": float(self._time_left_ratio()),
             "stomps": int(stomps_this_step),
             "failure_reason": str(self.failure_reason),
+            "route_transition": self._route_transition_label(prev_support_index, self.player_support_index),
+            "enemy_count": int(len(self.enemies)),
+            "moving_platform_count": int(len(self.moving_platforms)),
             "level_changed": False,
             "reward_breakdown": reward_breakdown if self.mode != "human" else {},
         }
@@ -1627,7 +1809,7 @@ class JumpEnv(Env):
             return
         self.window_controller.clear(COLOR_SLATE_GRAY)
         self._draw_world()
-        self._draw_sens_patch_grid()
+        self._draw_ghost_overlay()
         self._draw_bottom_bar()
         self.window_controller.flip()
 

@@ -16,6 +16,7 @@ from core.arcade_style import (
     COLOR_SAND,
     COLOR_SLATE_GRAY,
 )
+from core.envs.arcade import ArcadeEnvMixin
 from core.envs.base import Env
 from core.primitives import (
     draw_status_bar,
@@ -25,7 +26,6 @@ from core.primitives import (
     draw_two_tone_tile,
     status_icon_size,
 )
-from core.runtime import ArcadeFrameClock, ArcadeWindowController
 from core.shared_config import BB_HEIGHT, FPS, SCREEN_HEIGHT, SCREEN_WIDTH, TRAINING_FPS, WORLD_HEIGHT
 from games.osero import config
 from games.osero.rules import (
@@ -64,7 +64,7 @@ class BoardLayout:
     board_pixels: float
 
 
-class OseroEnv(Env):
+class OseroEnv(ArcadeEnvMixin, Env):
     """AlphaZero-lite friendly Osero environment."""
 
     INPUT_FEATURE_NAMES = tuple(config.INPUT_FEATURE_NAMES)
@@ -75,18 +75,18 @@ class OseroEnv(Env):
     def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
         self.mode = str(mode)
         self.board_size = int(config.BOARD_SIZE)
-        self.show_game = bool(render)
         self._current_level = max(1, int(1 if level is None else level))
-        self.frame_clock = ArcadeFrameClock()
-        self.window_controller = ArcadeWindowController(
-            SCREEN_WIDTH,
-            SCREEN_HEIGHT,
-            config.WINDOW_TITLE,
-            enabled=self.show_game,
+        self._init_arcade_runtime(
+            width=SCREEN_WIDTH,
+            height=SCREEN_HEIGHT,
+            title=config.WINDOW_TITLE,
+            render=bool(render),
             queue_input_events=self.mode == "human",
             vsync=False,
+            render_fps=FPS,
+            training_fps=TRAINING_FPS,
+            eval_step_delay_seconds=float(config.AI_STEP_DELAY_SECONDS if self.mode == "eval" else 0.0),
         )
-        self.window = self.window_controller.window
         self._board_layout = self._build_board_layout()
         self._state = initial_state(self.board_size)
         self._last_obs = observation_from_state(self._state)
@@ -231,7 +231,7 @@ class OseroEnv(Env):
                 return self.reset(), 0.0, False, {"level": int(self._current_level)}
 
         self.render()
-        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+        self._tick_arcade_frame(delay_seconds=0.0)
         return np.asarray(self._last_obs, dtype=np.float32), 0.0, False, self._state_info()
 
     def _step_human(self) -> tuple[np.ndarray, float, bool, dict[str, object]]:
@@ -245,7 +245,7 @@ class OseroEnv(Env):
             if self._done:
                 return self._handle_human_terminal()
             self.render()
-            self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+            self._tick_arcade_frame(delay_seconds=0.0)
             return obs, 0.0, bool(done), info
 
         for mouse_press in self.window_controller.consume_mouse_presses():
@@ -256,11 +256,11 @@ class OseroEnv(Env):
             if done:
                 return self._handle_human_terminal()
             self.render()
-            self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+            self._tick_arcade_frame(delay_seconds=0.0)
             return obs, 0.0, False, info
 
         self.render()
-        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+        self._tick_arcade_frame(delay_seconds=0.0)
         return np.asarray(self._last_obs, dtype=np.float32), 0.0, False, self._state_info()
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
@@ -283,7 +283,7 @@ class OseroEnv(Env):
         obs, reward, done, info = self._apply_action_and_collect(action_index)
         if self.show_game:
             self.render()
-        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+        self._tick_arcade_frame()
         return obs, float(reward), bool(done), info
 
     def _draw_board(self) -> None:
@@ -437,7 +437,3 @@ class OseroEnv(Env):
         self._draw_hover_outline()
         self._draw_hud()
         self.window_controller.flip()
-
-    def close(self) -> None:
-        self.window_controller.close()
-        self.window = None

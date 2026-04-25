@@ -2,7 +2,45 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable, Mapping
+
+
+@dataclass(frozen=True)
+class RewardTerm:
+    key: str
+    code: str
+    scale: float = 0.0
+
+
+@dataclass(frozen=True)
+class RewardSpec:
+    terms: tuple[RewardTerm, ...]
+
+    @property
+    def codes(self) -> tuple[str, ...]:
+        return tuple(term.code for term in self.terms)
+
+    @property
+    def key_to_code(self) -> dict[str, str]:
+        return {term.key: term.code for term in self.terms}
+
+    @classmethod
+    def from_mappings(
+        cls,
+        *,
+        reward_components: Mapping[str, object],
+        key_to_code: Mapping[str, str],
+    ) -> "RewardSpec":
+        terms: list[RewardTerm] = []
+        for key, code in key_to_code.items():
+            raw_scale = reward_components.get(str(key), 0.0)
+            try:
+                scale = float(raw_scale)
+            except (TypeError, ValueError):
+                scale = 0.0
+            terms.append(RewardTerm(key=str(key), code=str(code), scale=float(scale)))
+        return cls(terms=tuple(terms))
 
 
 class RewardBreakdown:

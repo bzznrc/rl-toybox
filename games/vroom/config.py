@@ -9,6 +9,7 @@ from core.utils import env_flag
 WINDOW_TITLE = "Vroom"
 USE_GPU = env_flag("VROOM_USE_GPU", False)
 DRAW_RAYS = env_flag("VROOM_DRAW_RAYS", False)
+SHOW_GHOST_OVERLAY = DRAW_RAYS
 
 
 # ENV

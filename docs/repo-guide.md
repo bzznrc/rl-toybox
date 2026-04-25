@@ -63,6 +63,12 @@ Per-game snapshots live in `games/<game>/README.md`.
 - compact MCTS, self-play training, and policy/value helpers for `osero`
 - `core/io/`, `core/runners/`, and `core/logging_utils.py`
 - shared run IO, training loops, and logging behavior
+- `core/runners/env_access.py`
+- shared runner accessors for action masks, centralized state, reward storage, policy-state reset, and curriculum success stats
+- `core/envs/arcade.py`
+- opt-in Arcade mixin for common window setup, frame pacing, and close behavior
+- `core/ghost_overlay.py` and `core/ray_viz.py`
+- shared translucent observation/debug overlay primitives, including the standard `X` toggle path and ray drawing
 
 ### Ownership boundaries
 
@@ -81,6 +87,7 @@ Per-game snapshots live in `games/<game>/README.md`.
   - `2x` for larger composite cells or overlays, such as Jump's grid-style patch visuals.
   - `0.5x` for finer raster detail, such as Vroom's block-derived track surface and lane markers.
 - New visuals should prefer these square components plus the shared palette in `core/arcade_style.py` instead of introducing separate visual systems.
+- Observation ghosts should use light-neutral 50% alpha overlays and the shared `X` toggle, so rays, SENS probes, and role/area guides behave consistently across games.
 
 ## 4) Logging Framework
 
@@ -106,12 +113,23 @@ Per-game snapshots live in `games/<game>/README.md`.
 ### `core/actor_critic/`
 
 - Used by: `jump`, `vroom`, `kick`
-- Contains: PPO, recurrent PPO support, SAC, shared actor-critic rollout machinery, and centralized-critic support
+- Contains: PPO, A2C-style unclipped actor-critic updates, recurrent PPO support, SAC, shared actor-critic rollout machinery, role-conditioned policy heads, and centralized-critic support
 
 ### `core/search_play/`
 
 - Used by: `osero`
 - Contains: compact MCTS, search-play training, and small policy/value helpers
+
+### Default algorithm matrix
+
+| Game | Default | Supported alternates |
+| --- | --- | --- |
+| `snake` | `qlearn` | `dqn`, `ppo`, `a2c` |
+| `bang` | `dqn` | `qlearn`, `ppo`, `a2c` |
+| `jump` | `ppo` | `a2c`, `dqn` |
+| `vroom` | `sac` | `ppo`, `a2c` |
+| `osero` | `search_play` | none; requires self-play/search support |
+| `kick` | `ppo` | `mappo`, `a2c`; requires centralized critic and multi-agent support |
 
 ## 7) Special Areas
 

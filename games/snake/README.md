@@ -15,6 +15,7 @@ Classic grid Snake with a small obstacle curriculum, compact observations, and l
 ## Controls (Human)
 
 - Move: `W/A/S/D`
+- Rendered overlays: `X` toggles translucent `sens_*` ray ghosts during `play-user` and `play-ai`
 
 ## Observation / Actions
 

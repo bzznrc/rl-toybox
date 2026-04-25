@@ -73,7 +73,7 @@ Current active examples:
 
 - `snake`: `self_*`, `sens_*`, `tgt_*`
 - `bang`: `self_*`, `sens_*`, `opp*_*`, `haz_*`
-- `jump`: `self_*`, `sens_*`, `land_*`, `opp*_*`, `flag_*`
+- `jump`: `self_*`, `sens_*`, `land_*`, `opp*_*`, `haz_*`, `flag_*`
 - `vroom`: `self_*`, `sens_*`, `flag_*`
 - `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`, `map_*`, `flag_*`
 - `osero`: `board_r*_c*`
@@ -84,9 +84,9 @@ Per-game `config.py` owns the exact observation/action names, order, dimensions,
 
 - `snake` -> `qlearn`, `obs=12`, `act=3`, Q-network `12 -> 32 -> 3`
 - `bang` -> `dqn`, `obs=28`, `act=8`, Q-network `28 -> 64 -> 64 -> 8` with double-Q, a dueling head, and prioritized replay
-- `jump` -> `ppo`, `obs=32`, `act=4`, actor `32 -> 32 -> 32 -> 4`, critic `32 -> 32 -> 32 -> 1`
+- `jump` -> `ppo`, `obs=36`, `act=4`, actor `36 -> 32 -> 32 -> 4`, critic `36 -> 32 -> 32 -> 1`
 - `vroom` -> `sac`, `obs=20`, `act=3`, actor `20 -> 64 -> 64 -> 3`, twin critics `(20 + 3) -> 64 -> 64 -> 1`
 - `osero` -> `search_play`, default `6x6`, `obs=36`, `act=37`, policy/value net `36 -> 64 -> 64 -> (37 + 1)`; `4x4` uses `16 -> 48 -> 48`, `8x8` uses `64 -> 96 -> 96`
-- `kick` -> `ppo`, `obs=56/player`, `act=12`, shared actor `56 -> 96 -> 96 -> 12`, centralized critic `405 -> 192 -> 192 -> 1`
+- `kick` -> `ppo`, `obs=63/player`, `act=11`, shared actor trunk `63 -> 64 -> 64` with 4 role heads `-> 11`, centralized critic `454 -> 128 -> 128 -> 1`; actions are 8 movement directions plus direction-respecting semantic `pass` / `shoot`
 
 There is no post-config pair-override layer for the active games. Shared algorithm defaults provide the family baseline, and each active game's `config.py` is the final default source before explicit user overrides.

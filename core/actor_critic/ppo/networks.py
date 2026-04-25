@@ -55,6 +55,7 @@ class ActorCritic(nn.Module):
         init_log_std: float = -0.5,
         min_log_std: float = -5.0,
         max_log_std: float = 2.0,
+        policy_head_feature_groups: list[list[int]] | None = None,
     ):
         super().__init__()
         self.action_type = str(action_type).strip().lower()
@@ -63,6 +64,11 @@ class ActorCritic(nn.Module):
 
         critic_input_dim = int(obs_dim) if critic_obs_dim is None else int(critic_obs_dim)
         self.share_backbone = bool(share_backbone)
+        self.policy_head_feature_groups = [
+            [int(index) for index in group]
+            for group in ([] if policy_head_feature_groups is None else policy_head_feature_groups)
+            if group
+        ]
         if self.share_backbone and int(critic_input_dim) != int(obs_dim):
             raise ValueError("Shared-backbone PPO requires critic_obs_dim to match obs_dim.")
 
@@ -73,12 +79,18 @@ class ActorCritic(nn.Module):
             self.actor_backbone = nn.Identity()
             self.critic_backbone = nn.Identity()
             self.policy_head = nn.Linear(shared_out_dim, int(action_dim))
+            self.policy_heads = nn.ModuleList(
+                [nn.Linear(shared_out_dim, int(action_dim)) for _ in self.policy_head_feature_groups]
+            )
             self.value_head = nn.Linear(shared_out_dim, 1)
         else:
             actor_backbone, actor_out_dim = build_mlp(int(obs_dim), list(hidden_sizes))
             self.shared_backbone = None
             self.actor_backbone = actor_backbone
             self.policy_head = nn.Linear(actor_out_dim, int(action_dim))
+            self.policy_heads = nn.ModuleList(
+                [nn.Linear(actor_out_dim, int(action_dim)) for _ in self.policy_head_feature_groups]
+            )
             critic_sizes = list(hidden_sizes) if critic_hidden_sizes is None else list(critic_hidden_sizes)
             critic_backbone, critic_out_dim = build_mlp(critic_input_dim, critic_sizes)
             self.critic_backbone = critic_backbone
@@ -100,6 +112,8 @@ class ActorCritic(nn.Module):
             _init_mlp(self.critic_backbone)
 
         _init_linear(self.policy_head, gain=0.01)
+        for policy_head in self.policy_heads:
+            _init_linear(policy_head, gain=0.01)
         _init_linear(self.value_head, gain=1.0)
 
     def policy(self, obs: torch.Tensor) -> torch.Tensor:
@@ -109,6 +123,17 @@ class ActorCritic(nn.Module):
             features = self.shared_backbone(obs)
         else:
             features = self.actor_backbone(obs)
+        if self.policy_heads:
+            logits = torch.stack([head(features) for head in self.policy_heads], dim=1)
+            group_scores: list[torch.Tensor] = []
+            for group in self.policy_head_feature_groups:
+                valid_indices = [index for index in group if 0 <= int(index) < int(obs.shape[1])]
+                if valid_indices:
+                    group_scores.append(obs[:, valid_indices].amax(dim=1))
+                else:
+                    group_scores.append(torch.zeros((int(obs.shape[0]),), dtype=obs.dtype, device=obs.device))
+            head_indices = torch.stack(group_scores, dim=1).argmax(dim=1)
+            return logits[torch.arange(int(obs.shape[0]), device=obs.device), head_indices]
         return self.policy_head(features)
 
     def policy_log_std(self) -> torch.Tensor:
@@ -134,7 +159,10 @@ class ActorCritic(nn.Module):
             if obs.dim() == 1:
                 obs = obs.unsqueeze(0)
             shared_features = self.shared_backbone(obs)
-            logits = self.policy_head(shared_features)
+            if self.policy_heads:
+                logits = self.policy(obs)
+            else:
+                logits = self.policy_head(shared_features)
             value = self.value_head(shared_features).squeeze(-1)
             return logits, value
         logits = self.policy(obs)

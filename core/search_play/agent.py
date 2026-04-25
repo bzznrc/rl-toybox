@@ -109,6 +109,53 @@ class SearchPlayAlgorithm(Algorithm):
         probs = weights / weight_sum
         return int(np.random.choice(legal_actions, p=probs))
 
+    def _symmetry_samples(
+        self,
+        observation: np.ndarray,
+        policy_target: np.ndarray,
+        value_target: float,
+    ) -> list[ReplaySample]:
+        size = int(self.config.board_size)
+        board = np.asarray(observation, dtype=np.float32).reshape(size, size)
+        policy = np.asarray(policy_target, dtype=np.float32).reshape(-1)
+        pass_value = float(policy[-1]) if int(policy.size) == int(size * size + 1) else 0.0
+        policy_board = np.zeros((size, size), dtype=np.float32)
+        copy_count = min(int(size * size), int(policy.size))
+        if copy_count > 0:
+            policy_board.reshape(-1)[:copy_count] = policy[:copy_count]
+
+        samples: list[ReplaySample] = []
+        seen: set[tuple[bytes, bytes]] = set()
+        transforms = (
+            lambda value: value,
+            lambda value: np.rot90(value, 1),
+            lambda value: np.rot90(value, 2),
+            lambda value: np.rot90(value, 3),
+            lambda value: np.fliplr(value),
+            lambda value: np.flipud(value),
+            lambda value: np.transpose(value),
+            lambda value: np.fliplr(np.rot90(value, 1)),
+        )
+        for transform in transforms:
+            obs_board = np.asarray(transform(board), dtype=np.float32)
+            tgt_board = np.asarray(transform(policy_board), dtype=np.float32)
+            transformed_policy = np.concatenate(
+                (tgt_board.reshape(-1), np.asarray([pass_value], dtype=np.float32)),
+                axis=0,
+            ).astype(np.float32, copy=False)
+            key = (obs_board.tobytes(), transformed_policy.tobytes())
+            if key in seen:
+                continue
+            seen.add(key)
+            samples.append(
+                ReplaySample(
+                    observation=obs_board.reshape(-1).astype(np.float32, copy=False),
+                    policy_target=transformed_policy,
+                    value_target=float(value_target),
+                )
+            )
+        return samples
+
     def act(self, obs: np.ndarray, explore: bool, action_mask: np.ndarray | None = None) -> int:
         observation = np.asarray(obs, dtype=np.float32).reshape(-1)
         if int(observation.size) != int(self.obs_dim):
@@ -151,13 +198,13 @@ class SearchPlayAlgorithm(Algorithm):
 
         outcome = float(transition.get("reward", 0.0))
         for sample in reversed(self._episode_history):
-            self.replay.append(
-                ReplaySample(
-                    observation=np.asarray(sample["observation"], dtype=np.float32),
-                    policy_target=np.asarray(sample["policy_target"], dtype=np.float32),
-                    value_target=float(outcome),
-                )
+            augmented_samples = self._symmetry_samples(
+                np.asarray(sample["observation"], dtype=np.float32),
+                np.asarray(sample["policy_target"], dtype=np.float32),
+                float(outcome),
             )
+            for replay_sample in augmented_samples:
+                self.replay.append(replay_sample)
             outcome = -float(outcome)
 
         self.completed_games += 1

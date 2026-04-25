@@ -25,6 +25,7 @@ from core.arcade_style import (
 )
 from core.curriculum import SharedCurriculum, advance_curriculum, build_curriculum_config
 from core.envs.base import Env
+from core.ghost_overlay import update_ghost_overlay_toggle
 from core.io_schema import (
     clip_signed,
     clip_unit,
@@ -45,6 +46,7 @@ from core.primitives import (
     spawn_connected_random_walk_shapes,
     status_icon_size,
 )
+from core.ray_viz import draw_player_rays
 from core.rewards import RewardBreakdown
 from core.shared_config import (
     BB_HEIGHT,
@@ -102,6 +104,7 @@ from games.bang.config import (
     REWARD_WIN,
     SAFE_RADIUS,
     SHOOT_COOLDOWN_FRAMES,
+    SHOW_GHOST_OVERLAY,
     SPAWN_Y_OFFSET,
     WINDOW_TITLE,
 )
@@ -333,6 +336,8 @@ class Renderer:
                 inner_color=COLOR_SLATE_GRAY,
             )
 
+        self._draw_ghost_overlay()
+
         for player_id in self.game.player_order:
             actor = self.game.players_by_id[player_id]
             if not actor.is_alive:
@@ -360,6 +365,30 @@ class Renderer:
 
         self._draw_status_bar()
         self.window_controller.flip()
+
+    def _draw_ghost_overlay(self) -> None:
+        if not bool(self.game.show_ghost_overlay and self.game.show_game):
+            return
+        player = self.game.player
+        if player is None or not bool(player.is_alive):
+            return
+        angles = (
+            float(player.angle),
+            float(player.angle - 90.0),
+            float(player.angle + 90.0),
+            float(player.angle + 180.0),
+        )
+        ray_dirs = tuple((math.cos(math.radians(angle)), math.sin(math.radians(angle))) for angle in angles)
+        ray_values = tuple(float(self.game._ray_distance(angle)) for angle in angles)
+        draw_player_rays(
+            origin_x=float(player.position.x),
+            origin_y=float(player.position.y),
+            ray_dirs=ray_dirs,
+            ray_values=ray_values,
+            ray_max_distances=(float(self.game._ray_max_range),) * len(ray_dirs),
+            to_screen=lambda x, y: (float(x), float(self.window_controller.to_arcade_y(float(y)))),
+            line_width=1.5,
+        )
 
     def _draw_status_bar(self) -> None:
         bar_layout = draw_status_bar(
@@ -478,6 +507,9 @@ class BaseGame:
         self._ray_max_range = max(float(TILE_SIZE) * 10.0, min(float(self.width), self.playable_height) * 0.55)
         self._ray_step_size = max(0.75, float(TILE_SIZE) * 0.35)
         self.show_game = bool(show_game)
+        self.show_ghost_overlay = bool(SHOW_GHOST_OVERLAY)
+        self.ghost_overlay_allowed = True
+        self._prev_ghost_overlay_toggle_down = False
         self.frame_clock = ArcadeFrameClock()
 
         initial_level = max(MIN_LEVEL, min(int(level), MAX_LEVEL))
@@ -521,6 +553,12 @@ class BaseGame:
 
     def poll_events(self) -> None:
         self.renderer.poll_events()
+        self.show_ghost_overlay, self._prev_ghost_overlay_toggle_down = update_ghost_overlay_toggle(
+            window_controller=self.window_controller,
+            visible=bool(self.show_ghost_overlay),
+            previous_down=bool(self._prev_ghost_overlay_toggle_down),
+            enabled=bool(self.show_game and self.ghost_overlay_allowed),
+        )
 
     def draw_frame(self) -> None:
         self.renderer.draw_frame()
@@ -1720,6 +1758,7 @@ class BangEnv(Env):
                 end_on_player_death=bool(end_on_player_death),
             )
             self._apply_level_settings(int(self._current_level))
+        self.game.ghost_overlay_allowed = bool(self.mode in {"human", "eval"})
         self.window_controller = self.game.window_controller
         self.window = self.game.window
 

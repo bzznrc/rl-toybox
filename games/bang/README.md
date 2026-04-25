@@ -18,6 +18,7 @@ Top-down arena shooter focused on movement, aiming, line of sight, and timing sh
 - Move: `W/A/S/D`
 - Aim: left/right arrows
 - Shoot: `Space`
+- Rendered overlays: `X` toggles translucent `sens_*` ray ghosts during `play-user` and `play-ai`
 - If no movement key is held for a frame, movement intent becomes `move_stop`
 
 ## Observation / Actions

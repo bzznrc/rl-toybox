@@ -6,7 +6,7 @@ from typing import Callable, Sequence
 
 import arcade
 
-from core.arcade_style import COLOR_AQUA, COLOR_FOG_GRAY
+from core.ghost_overlay import ghost_color
 
 
 def draw_player_rays(
@@ -17,6 +17,7 @@ def draw_player_rays(
     ray_values: Sequence[float],
     ray_max_distances: Sequence[float],
     to_screen: Callable[[float, float], tuple[float, float]],
+    color: tuple[int, int, int, int] | None = None,
     line_width: float = 1.0,
 ) -> None:
     """Draw player sensor rays using normalized free-space fractions."""
@@ -27,6 +28,7 @@ def draw_player_rays(
 
     sx0, sy0 = to_screen(float(origin_x), float(origin_y))
     width = max(0.5, float(line_width))
+    ray_color = ghost_color() if color is None else color
     for idx in range(count):
         dir_x, dir_y = ray_dirs[idx]
         value = float(ray_values[idx])
@@ -35,5 +37,4 @@ def draw_player_rays(
         hit_x = float(origin_x) + float(dir_x) * distance
         hit_y = float(origin_y) + float(dir_y) * distance
         sx1, sy1 = to_screen(hit_x, hit_y)
-        color = COLOR_FOG_GRAY if value >= 1.0 else COLOR_AQUA
-        arcade.draw_line(float(sx0), float(sy0), float(sx1), float(sy1), color, width)
+        arcade.draw_line(float(sx0), float(sy0), float(sx1), float(sy1), ray_color, width)

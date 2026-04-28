@@ -1,4 +1,4 @@
-"""Small search/self-play interfaces used by Osero."""
+"""Small search/self-play interfaces for compact board games."""
 
 from __future__ import annotations
 

@@ -7,11 +7,13 @@ import argparse
 from core.game import (
     apply_generic_launch_level,
     apply_seed_from_config,
+    build_algo_from_config,
     build_env_from_config,
     compose_run_config,
     parse_override_assignments,
     set_nested_override,
 )
+from core.io.runs import resolve_run_paths
 from core.logging_utils import configure_logging, log_run_context
 
 
@@ -22,7 +24,7 @@ def parse_args() -> argparse.Namespace:
         "--level",
         type=int,
         default=None,
-        help="Difficulty selector (defaults to L5 for curriculum games and Osero 6x6)",
+        help="Difficulty selector (defaults to L5 for curriculum games; fixed-mode games use L1)",
     )
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
     parser.add_argument("--headless", action="store_true", help="Disable rendering")
@@ -46,6 +48,26 @@ def _build_play_overrides(args: argparse.Namespace) -> dict[str, object]:
     return overrides
 
 
+def _attach_play_user_ai_opponent(env: object, composed_config: dict[str, object], *, level: int) -> str | None:
+    attach_ai_opponent = getattr(env, "set_ai_opponent", None)
+    if not callable(attach_ai_opponent):
+        return None
+
+    run_block = dict(composed_config.get("run", {}))
+    game_id = str(dict(composed_config.get("game", {})).get("id", "")).strip()
+    algo_id = str(dict(composed_config.get("algo", {})).get("id", "")).strip()
+    run_name = str(run_block.get("name", "")).strip()
+    run_paths = resolve_run_paths(game_id, algo_id, run_name, create=True)
+    model_path = run_paths.model_path(int(level), "best")
+    if not model_path.exists():
+        raise FileNotFoundError(f"No BEST model found for play-user opponent at '{model_path}'.")
+
+    algorithm = build_algo_from_config(composed_config)
+    algorithm.load(str(model_path))
+    attach_ai_opponent(algorithm)
+    return str(model_path)
+
+
 def main() -> None:
     args = parse_args()
     configure_logging()
@@ -55,19 +77,21 @@ def main() -> None:
     apply_seed_from_config(composed_config)
     render = bool(dict(composed_config.get("common", {})).get("render", not bool(args.headless)))
     env = build_env_from_config(composed_config, mode="human", render=render, level=int(level))
-
-    log_run_context(
-        "play-user",
-        {
-            "game": str(dict(composed_config.get("game", {})).get("id", args.game)),
-            "level": int(level),
-            "render": render,
-        },
-    )
-
-    obs = env.reset()
-    del obs
     try:
+        opponent_model = _attach_play_user_ai_opponent(env, composed_config, level=int(level))
+
+        log_run_context(
+            "play-user",
+            {
+                "game": str(dict(composed_config.get("game", {})).get("id", args.game)),
+                "level": int(level),
+                "render": render,
+                "opponent": opponent_model,
+            },
+        )
+
+        obs = env.reset()
+        del obs
         while True:
             _, _, done, info = env.step(0)
             if done:

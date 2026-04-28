@@ -11,11 +11,11 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "${input:curriculumGame}",
+        "${input:activeGame}",
         "--algo",
-        "${input:curriculumAlgo}",
+        "${input:activeAlgo}",
         "--level",
-        "${input:curriculumTrainLevel}",
+        "${input:trainLevel}",
         "--resume",
         "${input:resumeMode}"
       ]
@@ -30,9 +30,9 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "${input:curriculumGame}",
+        "${input:activeGame}",
         "--level",
-        "${input:curriculumPlayLevel}"
+        "${input:playLevel}"
       ]
     },
     {
@@ -45,11 +45,11 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "${input:curriculumGame}",
+        "${input:activeGame}",
         "--algo",
-        "${input:curriculumAlgo}",
+        "${input:activeAlgo}",
         "--level",
-        "${input:curriculumPlayLevel}",
+        "${input:playLevel}",
         "--render"
       ]
     },
@@ -63,105 +63,33 @@
       "console": "integratedTerminal",
       "args": [
         "--game",
-        "${input:curriculumGame}",
+        "${input:activeGame}",
         "--algo",
-        "${input:curriculumAlgo}",
+        "${input:activeAlgo}",
         "--level",
-        "${input:curriculumPlayLevel}"
-      ]
-    },
-    {
-      "name": "Run - Train (Osero)",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.train",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "env": {
-        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
-      },
-      "args": [
-        "--game",
-        "osero",
-        "--algo",
-        "${input:oseroAlgo}",
-        "--resume",
-        "${input:resumeMode}"
-      ]
-    },
-    {
-      "name": "Run - Play User (Osero)",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.play_user",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "env": {
-        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
-      },
-      "args": [
-        "--game",
-        "osero"
-      ]
-    },
-    {
-      "name": "Run - Play AI (Osero)",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.play_ai",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "env": {
-        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
-      },
-      "args": [
-        "--game",
-        "osero",
-        "--algo",
-        "${input:oseroAlgo}",
-        "--render"
-      ]
-    },
-    {
-      "name": "Run - Capture Demo (Osero)",
-      "type": "debugpy",
-      "request": "launch",
-      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.capture_demo_ai",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "env": {
-        "OSERO_BOARD_SIZE": "${input:oseroBoardSize}"
-      },
-      "args": [
-        "--game",
-        "osero",
-        "--algo",
-        "${input:oseroAlgo}"
+        "${input:playLevel}"
       ]
     }
   ],
   "inputs": [
     {
-      "id": "curriculumGame",
+      "id": "activeGame",
       "type": "pickString",
-      "description": "Curriculum-based game using the shared L1-L5 launch flow",
+      "description": "Active game to run; fixed-mode games ignore level and use L1",
       "default": "bang",
       "options": [
         "snake",
         "bang",
         "jump",
         "vroom",
+        "four",
         "kick"
       ]
     },
     {
-      "id": "curriculumAlgo",
+      "id": "activeAlgo",
       "type": "pickString",
-      "description": "Algorithm override for the selected curriculum game (use auto for the game's default)",
+      "description": "Algorithm override for the selected game (use auto for the game's default)",
       "default": "auto",
       "options": [
         "auto",
@@ -176,9 +104,9 @@
       ]
     },
     {
-      "id": "curriculumTrainLevel",
+      "id": "trainLevel",
       "type": "pickString",
-      "description": "Training start level for curriculum games",
+      "description": "Training start level; fixed-mode games clamp to L1",
       "default": "1",
       "options": [
         "1",
@@ -189,9 +117,9 @@
       ]
     },
     {
-      "id": "curriculumPlayLevel",
+      "id": "playLevel",
       "type": "pickString",
-      "description": "Play / eval / capture level for curriculum games",
+      "description": "Play / eval / capture level; fixed-mode games clamp to L1",
       "default": "5",
       "options": [
         "1",
@@ -199,27 +127,6 @@
         "3",
         "4",
         "5"
-      ]
-    },
-    {
-      "id": "oseroAlgo",
-      "type": "pickString",
-      "description": "Algorithm override for Osero",
-      "default": "auto",
-      "options": [
-        "auto",
-        "search_play"
-      ]
-    },
-    {
-      "id": "oseroBoardSize",
-      "type": "pickString",
-      "description": "Osero board size",
-      "default": "6x6",
-      "options": [
-        "4x4",
-        "6x6",
-        "8x8"
       ]
     },
     {

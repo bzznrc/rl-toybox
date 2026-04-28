@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import asdict, dataclass
-import logging
 from statistics import mean
 
 from core.algorithms.base import Algorithm
@@ -14,6 +13,7 @@ from core.io.runs import RunPaths, write_metrics
 from core.logging_utils import (
     format_reward_components,
     log_episode_line,
+    log_periodic_event_line,
     log_save_line,
     should_emit_train_progress_log,
 )
@@ -180,8 +180,15 @@ def run_off_policy_training(
                 epsilon = float(exploration_event.get("epsilon", 0.0))
                 cooldown_steps = int(exploration_event.get("cooldown_steps", 0))
                 reason = str(exploration_event.get("reason", "Plateau"))
-                logging.getLogger("rl_toybox.train").info(
-                    f"Explore\tBump: on\tEps: {epsilon:.2f}\tCooldown Steps: {cooldown_steps}\tReason: {reason}"
+                log_periodic_event_line(
+                    "rl_toybox.train",
+                    "Explore",
+                    {
+                        "Bump": "on",
+                        "Eps": f"{epsilon:.2f}",
+                        "Cooldown Steps": int(cooldown_steps),
+                        "Reason": reason,
+                    },
                 )
 
             if should_emit_train_progress_log("off_policy_progress"):
@@ -239,14 +246,18 @@ def run_off_policy_training(
         learn_start_steps = getattr(algo_config, "learn_start_steps", "n/a")
         if learn_start_steps == "n/a":
             learn_start_steps = int(config.train_after_steps)
-        logging.getLogger("rl_toybox.train").warning(
-            "Warn\tUpdates: 0\tUpdate Attempts: %s\tReplay Len: %s\tBatch Size: %s\tTrain After Steps: %s\tLearn Start Steps: %s\tUpdate Every Steps: %s",
-            int(update_attempts),
-            replay_len,
-            batch_size,
-            int(config.train_after_steps),
-            learn_start_steps,
-            int(config.update_every_steps),
+        log_periodic_event_line(
+            "rl_toybox.train",
+            "Warn",
+            {
+                "Updates": 0,
+                "Update Attempts": int(update_attempts),
+                "Replay Len": replay_len,
+                "Batch Size": batch_size,
+                "Train After Steps": int(config.train_after_steps),
+                "Learn Start Steps": learn_start_steps,
+                "Update Every Steps": int(config.update_every_steps),
+            },
         )
 
     best_avg_reward = max(best_avg_reward_by_level.values()) if best_avg_reward_by_level else float("-inf")

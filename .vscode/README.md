@@ -9,40 +9,35 @@ The launch configs mirror the canonical CLI flow:
 
 ## How It Is Organized
 
-There are two canonical launch flows:
+There is one canonical launch flow for active games:
 
-Curriculum-based games:
 - `Run - Train`
 - `Run - Play User`
 - `Run - Play AI`
 - `Run - Capture Demo`
 
-Osero:
-- `Run - Train (Osero)`
-- `Run - Play User (Osero)`
-- `Run - Play AI (Osero)`
-- `Run - Capture Demo (Osero)`
-
-The shared curriculum flow covers:
+The shared flow covers:
 - `snake`
 - `bang`
 - `jump`
 - `vroom`
+- `four`
 - `kick`
 
-`osero` stays separate because it still uses board-size modes rather than the repo's shared curriculum ladder.
+`four` is fixed-mode. It can use the same launch configs safely because the CLI clamps fixed-mode games to `L1` and does not create a curriculum.
 
 ## Levels And Modes
 
-- Curriculum games expose `curriculumTrainLevel` and `curriculumPlayLevel` directly as `L1` through `L5`.
+- The `trainLevel` and `playLevel` inputs expose `L1` through `L5`.
 - Training defaults to `L1`.
 - `play-user`, `play-ai`, and `capture-demo` default to `L5`.
-- Osero uses `oseroBoardSize` instead of `--level`, with `4x4`, `6x6`, and `8x8` options.
-- `6x6` is the default Osero board size.
+- Curriculum games use those levels normally.
+- Four ignores higher level selections and resolves to `L1`.
+- `7x6` is the fixed Four board shape.
 
 ## Algo Dropdowns
 
-The train / play-ai / capture configs keep an algo dropdown because the CLI supports `--algo`. That applies to both the curriculum flow and the Osero-specific flow.
+The train / play-ai / capture configs keep an algo dropdown because the CLI supports `--algo`.
 
 Those dropdowns are intentionally static as well. VS Code will not auto-filter incompatible game/algo pairs. If you pick an invalid pair, the repo's compatibility checks will fail fast with a clear error.
 
@@ -52,5 +47,5 @@ The shared default is now:
 
 ## Adding A New Game Later
 
-- If a new curriculum-based game follows the shared ladder, add it to `curriculumGame` and make sure its config exposes `LEVEL_SETTINGS[1..5]`.
-- If a game behaves more like Osero, keep a separate mode-specific launch block instead of forcing it into the curriculum inputs.
+- If a new curriculum-based game follows the shared ladder, add it to `activeGame` and make sure its config exposes `LEVEL_SETTINGS[1..5]`.
+- If a new fixed-mode game is added, include it in `activeGame` and add its id to `FIXED_LEVEL_GAME_IDS` in `core/game.py`.

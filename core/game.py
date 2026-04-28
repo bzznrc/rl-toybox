@@ -6,7 +6,6 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import json
 import math
-import os
 from pathlib import Path
 import random
 import sys
@@ -39,17 +38,12 @@ ACTIVE_GAME_ORDER: tuple[str, ...] = (
     "bang",
     "jump",
     "vroom",
-    "osero",
+    "four",
     "kick",
 )
+FIXED_LEVEL_GAME_IDS = frozenset({"four"})
 DEFAULT_TRAINING_LAUNCH_LEVEL = int(DEFAULT_CURRICULUM_MIN_LEVEL)
 DEFAULT_PLAY_LAUNCH_LEVEL = int(DEFAULT_CURRICULUM_MAX_LEVEL)
-DEFAULT_OSERO_LAUNCH_LEVEL = 2
-GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE = {
-    1: 4,
-    2: 6,
-    3: 8,
-}
 
 
 @dataclass(frozen=True)
@@ -155,35 +149,19 @@ def build_game_spec_from_config(*, config_module: object, env_type: type[Env]) -
 
 def _generic_launch_level_bounds(game_id: str) -> tuple[int, int]:
     game_key = str(game_id).strip().lower()
-    if game_key == "osero":
-        return 1, int(len(GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE))
+    if game_key in FIXED_LEVEL_GAME_IDS:
+        return 1, 1
     return int(DEFAULT_CURRICULUM_MIN_LEVEL), int(DEFAULT_CURRICULUM_MAX_LEVEL)
 
 
 def _default_generic_launch_level(game_id: str, *, mode: str | None = None) -> int:
     game_key = str(game_id).strip().lower()
-    if game_key == "osero":
-        return int(DEFAULT_OSERO_LAUNCH_LEVEL)
+    if game_key in FIXED_LEVEL_GAME_IDS:
+        return 1
     mode_key = "" if mode is None else str(mode).strip().lower()
     if mode_key == "train":
         return int(DEFAULT_TRAINING_LAUNCH_LEVEL)
     return int(DEFAULT_PLAY_LAUNCH_LEVEL)
-
-
-def _resolve_osero_board_size_from_env() -> int | None:
-    raw_value = os.getenv("OSERO_BOARD_SIZE")
-    if raw_value is None:
-        return None
-    normalized = str(raw_value).strip().lower()
-    if "x" in normalized:
-        normalized = normalized.split("x", 1)[0].strip()
-    try:
-        board_size = int(normalized)
-    except (TypeError, ValueError):
-        return None
-    if board_size not in set(int(value) for value in GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE.values()):
-        return None
-    return int(board_size)
 
 
 def resolve_generic_launch_level(
@@ -196,21 +174,7 @@ def resolve_generic_launch_level(
     min_level, max_level = _generic_launch_level_bounds(game_key)
     candidate = _default_generic_launch_level(game_key, mode=mode) if generic_level is None else int(generic_level)
     level_key = max(int(min_level), min(int(max_level), int(candidate)))
-    if game_key == "osero":
-        return 1
     return int(level_key)
-
-
-def _refresh_osero_launch_modules() -> None:
-    global _GAME_SPECS
-    _GAME_SPECS = None
-    for module_name in (
-        "games.osero",
-        "games.osero.config",
-        "games.osero.rules",
-        "games.osero.env",
-    ):
-        sys.modules.pop(module_name, None)
 
 
 def apply_generic_launch_level(
@@ -223,15 +187,6 @@ def apply_generic_launch_level(
     min_level, max_level = _generic_launch_level_bounds(game_key)
     candidate = _default_generic_launch_level(game_key, mode=mode) if generic_level is None else int(generic_level)
     level_key = max(int(min_level), min(int(max_level), int(candidate)))
-    if game_key == "osero":
-        env_board_size = _resolve_osero_board_size_from_env()
-        board_size = (
-            int(env_board_size)
-            if generic_level is None and env_board_size is not None
-            else int(GENERIC_LAUNCH_LEVEL_TO_OSERO_BOARD_SIZE[int(level_key)])
-        )
-        os.environ["OSERO_BOARD_SIZE"] = f"{int(board_size)}x{int(board_size)}"
-        _refresh_osero_launch_modules()
     return int(resolve_generic_launch_level(game_key, level_key, mode=mode))
 
 
@@ -951,17 +906,28 @@ def _materialize_runner_train_block(
     return resolved
 
 
-def _derive_search_play_board_size(game_env: dict[str, object], algo_config: dict[str, object]) -> int:
-    board_size = algo_config.get("board_size", game_env.get("board_size"))
-    if board_size is not None:
-        return max(1, int(board_size))
+def _derive_search_play_board_shape(
+    game_env: dict[str, object],
+    algo_config: dict[str, object],
+) -> tuple[int, int]:
+    board_rows = algo_config.get("board_rows", game_env.get("board_rows"))
+    board_cols = algo_config.get("board_cols", game_env.get("board_cols"))
+    if board_rows is not None and board_cols is not None:
+        return max(1, int(board_rows)), max(1, int(board_cols))
     obs_dim = int(game_env.get("obs_dim", 0))
     if obs_dim <= 0:
-        raise ValueError("Unable to derive search_play board_size without game.env.board_size or obs_dim.")
-    inferred = max(1, int(round(math.sqrt(float(obs_dim)))))
-    if int(inferred) * int(inferred) != int(obs_dim):
-        raise ValueError(f"Unable to derive square board_size from obs_dim={obs_dim}.")
-    return int(inferred)
+        raise ValueError("Unable to derive search_play board shape without game.env board metadata or obs_dim.")
+    if board_cols is not None:
+        col_count = max(1, int(board_cols))
+        if obs_dim % col_count != 0:
+            raise ValueError(f"Unable to derive board_rows from obs_dim={obs_dim} and board_cols={col_count}.")
+        return max(1, int(obs_dim // col_count)), col_count
+    if board_rows is not None:
+        row_count = max(1, int(board_rows))
+        if obs_dim % row_count != 0:
+            raise ValueError(f"Unable to derive board_cols from obs_dim={obs_dim} and board_rows={row_count}.")
+        return row_count, max(1, int(obs_dim // row_count))
+    raise ValueError("search_play games must declare board_rows and board_cols.")
 
 
 def _derive_run_name(spec: GameSpec, algo_spec: AlgoSpec, composed: dict[str, object]) -> str:
@@ -970,10 +936,10 @@ def _derive_run_name(spec: GameSpec, algo_spec: AlgoSpec, composed: dict[str, ob
     hidden_sizes = _int_list(algo_config.get("hidden_sizes"))
 
     if algo_spec.algo_id == "search_play":
-        board_size = _derive_search_play_board_size(game_env, algo_config)
+        board_rows, board_cols = _derive_search_play_board_shape(game_env, algo_config)
         if hidden_sizes:
-            return f"b{int(board_size)}_{'_'.join(str(size) for size in hidden_sizes)}"
-        return f"b{int(board_size)}"
+            return f"b{int(board_rows)}x{int(board_cols)}_{'_'.join(str(size) for size in hidden_sizes)}"
+        return f"b{int(board_rows)}x{int(board_cols)}"
 
     recurrent_type = str(algo_config.get("recurrent_type", "none")).strip().lower()
     if recurrent_type in {"lstm", "gru"}:
@@ -1060,12 +1026,12 @@ def _build_game_specs() -> dict[str, GameSpec]:
     # their declarative config without separate spec shims.
     from games.bang import config as bang_config
     from games.bang.env import BangEnv
+    from games.four import config as four_config
+    from games.four.env import FourEnv
     from games.jump import config as jump_config
     from games.jump.env import JumpEnv
     from games.kick import config as kick_config
     from games.kick.env import KickEnv
-    from games.osero import config as osero_config
-    from games.osero.env import OseroEnv
     from games.snake import config as snake_config
     from games.snake.env import SnakeEnv
     from games.vroom import config as vroom_config
@@ -1076,7 +1042,7 @@ def _build_game_specs() -> dict[str, GameSpec]:
         build_game_spec_from_config(config_module=bang_config, env_type=BangEnv),
         build_game_spec_from_config(config_module=jump_config, env_type=JumpEnv),
         build_game_spec_from_config(config_module=vroom_config, env_type=VroomEnv),
-        build_game_spec_from_config(config_module=osero_config, env_type=OseroEnv),
+        build_game_spec_from_config(config_module=four_config, env_type=FourEnv),
         build_game_spec_from_config(config_module=kick_config, env_type=KickEnv),
     )
     return {spec.game_id: spec for spec in specs}
@@ -1150,13 +1116,16 @@ def _resolve_algo_runtime_config(config: dict[str, object]) -> tuple[str, int, S
         if "critic_obs_dim" not in algo_config and game_env.get("central_obs_dim") is not None:
             algo_config["critic_obs_dim"] = int(game_env["central_obs_dim"])
 
-    if algo_id == "search_play" and "board_size" not in algo_config:
-        algo_config["board_size"] = _derive_search_play_board_size(game_env, algo_config)
-
     obs_dim = int(game_env.get("obs_dim", 0))
     action_space = game_env.get("action_space")
     if not isinstance(action_space, Space):
         raise TypeError("Composed config is missing a valid game.env.action_space.")
+    if algo_id == "search_play":
+        board_rows, board_cols = _derive_search_play_board_shape(game_env, algo_config)
+        algo_config.setdefault("board_rows", int(board_rows))
+        algo_config.setdefault("board_cols", int(board_cols))
+        if isinstance(action_space, Discrete):
+            algo_config.setdefault("action_dim", int(action_space.n))
     return algo_id, int(obs_dim), action_space, algo_config
 
 

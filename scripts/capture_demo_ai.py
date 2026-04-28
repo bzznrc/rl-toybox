@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 import arcade
+import numpy as np
 from PIL import Image
 
 from core.shared_config import FPS as SHOW_GAME_FPS
@@ -21,12 +22,14 @@ from core.game import (
     set_nested_override,
 )
 from core.logging_utils import configure_logging, log_key_values, log_run_context
+from core.runners.env_access import act_with_optional_signals, extract_action_mask, extract_centralized_state
 from core.runners.eval import reset_eval_policy_state, select_eval_action
 from core.utils import PROJECT_ROOT
 
 
 CAPTURE_DURATION_SECONDS = 15
 CAPTURE_FPS = 30
+CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES = 2
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,7 +42,7 @@ def parse_args() -> argparse.Namespace:
         "--level",
         type=int,
         default=None,
-        help="Difficulty selector (defaults to L5 for curriculum games and Osero 6x6)",
+        help="Difficulty selector (defaults to L5 for curriculum games; fixed-mode games use L1)",
     )
     parser.add_argument(
         "--set",
@@ -81,6 +84,30 @@ def _capture_current_frame(env: object) -> Image.Image:
     ).convert("P", palette=Image.ADAPTIVE, colors=255)
 
 
+def _capture_pre_action_delay_seconds(env: object) -> float:
+    delay_fn = getattr(env, "capture_pre_action_delay_seconds", None)
+    if not callable(delay_fn):
+        return 0.0
+    try:
+        return max(0.0, float(delay_fn()))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _capture_repeated_current_frames(
+    env: object,
+    frames: list[Image.Image],
+    *,
+    target_frame_count: int,
+    frame_count: int,
+) -> None:
+    repeats = max(0, int(frame_count))
+    for _idx in range(repeats):
+        if len(frames) >= int(target_frame_count):
+            return
+        frames.append(_capture_current_frame(env))
+
+
 def _build_output_path(game_id: str, level: int) -> Path:
     del level
     target_dir = PROJECT_ROOT / "media"
@@ -101,6 +128,46 @@ def _save_gif(frames: list[Image.Image], output_path: Path, capture_fps: int) ->
         loop=0,
         optimize=False,
         disposal=2,
+    )
+
+
+def _should_use_exploratory_capture(composed_config: dict[str, object]) -> bool:
+    algo_id = str(dict(composed_config.get("algo", {})).get("id", "")).strip().lower()
+    return algo_id == "search_play"
+
+
+def _sample_masked_action(action_mask: object | None) -> int | None:
+    if action_mask is None:
+        return None
+    mask = np.asarray(action_mask, dtype=np.bool_).reshape(-1)
+    legal_actions = np.flatnonzero(mask)
+    if int(legal_actions.size) <= 0:
+        return None
+    return int(np.random.choice(legal_actions))
+
+
+def _select_capture_action(
+    env: object,
+    algorithm: object,
+    obs: object,
+    *,
+    explore: bool,
+    random_opening: bool,
+):
+    if not bool(explore):
+        return select_eval_action(env, algorithm, obs)
+    action_mask = extract_action_mask(env, obs)
+    if bool(random_opening):
+        sampled_action = _sample_masked_action(action_mask)
+        if sampled_action is not None:
+            return int(sampled_action)
+    central_obs = extract_centralized_state(env, obs)
+    return act_with_optional_signals(
+        algorithm,
+        obs,
+        explore=True,
+        action_mask=action_mask,
+        central_obs=central_obs,
     )
 
 
@@ -132,11 +199,13 @@ def main() -> None:
     capture_period_frames = float(native_fps) / float(capture_fps)
     target_frame_count = max(1, int(CAPTURE_DURATION_SECONDS) * int(capture_fps))
     output_path = _build_output_path(game_id, level)
+    exploratory_capture = bool(_should_use_exploratory_capture(composed_config))
 
     os.environ["RL_TOYBOX_RENDER_VISIBLE"] = "0"
     env = build_env_from_config(composed_config, mode="eval", render=True, level=int(level))
     frames: list[Image.Image] = []
     step_index = 0
+    episode_step_index = 0
     next_capture_step = 0.0
 
     def capture_if_due() -> None:
@@ -155,6 +224,10 @@ def main() -> None:
                 "native_fps": int(native_fps),
                 "capture_fps": int(capture_fps),
                 "duration_seconds": int(CAPTURE_DURATION_SECONDS),
+                "explore": bool(exploratory_capture),
+                "random_opening_plies": (
+                    int(CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES) if bool(exploratory_capture) else 0
+                ),
                 "model": model_path,
                 "output": output_path,
             },
@@ -165,13 +238,35 @@ def main() -> None:
         capture_if_due()
 
         while len(frames) < target_frame_count:
-            action = select_eval_action(env, algorithm, obs)
+            pre_action_delay_seconds = _capture_pre_action_delay_seconds(env)
+            _capture_repeated_current_frames(
+                env,
+                frames,
+                target_frame_count=int(target_frame_count),
+                frame_count=round(float(pre_action_delay_seconds) * float(capture_fps)),
+            )
+            if len(frames) >= target_frame_count:
+                break
+
+            random_opening = bool(
+                exploratory_capture
+                and int(episode_step_index) < int(CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES)
+            )
+            action = _select_capture_action(
+                env,
+                algorithm,
+                obs,
+                explore=bool(exploratory_capture),
+                random_opening=bool(random_opening),
+            )
             obs, _reward, done, _info = env.step(action)
             step_index += 1
+            episode_step_index += 1
             capture_if_due()
             if done:
                 reset_eval_policy_state(algorithm)
                 obs = env.reset()
+                episode_step_index = 0
                 _draw_current_frame(env)
 
         _save_gif(frames, output_path, capture_fps)
@@ -182,6 +277,10 @@ def main() -> None:
                 "Native FPS": int(native_fps),
                 "Capture FPS": int(capture_fps),
                 "Duration Seconds": int(CAPTURE_DURATION_SECONDS),
+                "Explore": bool(exploratory_capture),
+                "Random Opening Plies": (
+                    int(CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES) if bool(exploratory_capture) else 0
+                ),
                 "Model": model_path,
                 "Output": output_path,
             },

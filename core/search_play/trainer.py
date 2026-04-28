@@ -10,21 +10,22 @@ import numpy as np
 
 from core.algorithms.base import Algorithm
 from core.io.runs import RunPaths, write_metrics
-from core.logging_utils import format_reward_components, log_save_line, log_search_play_game_line
+from core.logging_utils import format_reward_components, log_arena_line, log_save_line, log_search_play_game_line
 from core.runners.env_access import extract_action_mask
 from core.search_play.interfaces import SearchPlayTrainConfig
-from games.osero.rules import (
-    STONE_BLACK,
-    STONE_EMPTY,
-    STONE_WHITE,
-    OseroState,
+from games.four.rules import (
+    PLAYER_NONE,
+    PLAYER_ONE,
+    PLAYER_TWO,
+    FourState,
     apply_action,
     build_action_mask,
     initial_state,
+    is_winning_action,
     is_terminal_state,
+    legal_actions,
     observation_from_state,
     outcome_for_player,
-    stone_counts,
     winner,
 )
 
@@ -43,53 +44,61 @@ def _winner_label(winner_value: object) -> str:
     try:
         winner_int = int(winner_value)
     except (TypeError, ValueError):
-        return "unknown"
-    if winner_int == STONE_BLACK:
-        return "black"
-    if winner_int == STONE_WHITE:
-        return "white"
-    if winner_int == STONE_EMPTY:
-        return "draw"
+        return "Unknown"
+    if winner_int == PLAYER_ONE:
+        return "P1"
+    if winner_int == PLAYER_TWO:
+        return "P2"
+    if winner_int == PLAYER_NONE:
+        return "Draw"
     return str(winner_int)
 
 
-def _opponent_action_random(state: OseroState) -> int:
+def _opponent_action_random(state: FourState) -> int:
     mask = build_action_mask(state.board, int(state.current_player))
-    legal_actions = np.flatnonzero(mask)
-    if int(legal_actions.size) <= 0:
-        return int(mask.size - 1)
-    return int(np.random.choice(legal_actions))
+    mask_actions = np.flatnonzero(mask)
+    if int(mask_actions.size) <= 0:
+        return 0
+    return int(np.random.choice(mask_actions))
 
 
-def _opponent_action_greedy(state: OseroState) -> int:
-    mask = build_action_mask(state.board, int(state.current_player))
-    legal_actions = np.flatnonzero(mask)
-    if int(legal_actions.size) <= 0:
-        return int(mask.size - 1)
-    best_action = int(legal_actions[0])
-    best_score = float("-inf")
-    for action in legal_actions:
-        try:
-            next_state = apply_action(state, int(action))
-        except ValueError:
-            continue
-        black_count, white_count = stone_counts(next_state.board)
-        score = (black_count - white_count) * int(state.current_player)
-        if float(score) > float(best_score):
-            best_score = float(score)
-            best_action = int(action)
-    return int(best_action)
+def _opponent_action_greedy(state: FourState) -> int:
+    actions = legal_actions(state.board)
+    if not actions:
+        return 0
+    for action in actions:
+        if is_winning_action(state, int(action)):
+            return int(action)
+
+    opponent_state = FourState(
+        board=state.board,
+        current_player=-int(state.current_player),
+        move_count=int(state.move_count),
+    )
+    for action in actions:
+        if is_winning_action(opponent_state, int(action)):
+            return int(action)
+
+    center = (len(build_action_mask(state.board, int(state.current_player))) - 1) / 2.0
+    return int(min(actions, key=lambda action: abs(float(action) - center)))
 
 
-def _arena_opponent_action(state: OseroState, opponent: str) -> int:
+def _arena_opponent_action(state: FourState, opponent: str) -> int:
     opponent_key = str(opponent).strip().lower()
     if opponent_key == "greedy":
         return _opponent_action_greedy(state)
     return _opponent_action_random(state)
 
 
-def _play_arena_game(algorithm: Algorithm, *, board_size: int, agent_player: int, opponent: str) -> float:
-    state = initial_state(int(board_size))
+def _play_arena_game(
+    algorithm: Algorithm,
+    *,
+    board_rows: int,
+    board_cols: int,
+    agent_player: int,
+    opponent: str,
+) -> float:
+    state = initial_state(int(board_rows), int(board_cols))
     algorithm.reset_policy_state()
     while not is_terminal_state(state):
         if int(state.current_player) == int(agent_player):
@@ -115,17 +124,19 @@ def _play_arena_game(algorithm: Algorithm, *, board_size: int, agent_player: int
 
 def _evaluate_arena(algorithm: Algorithm, *, games_per_opponent: int) -> dict[str, float]:
     config = getattr(algorithm, "config", None)
-    board_size = int(getattr(config, "board_size", 6))
+    board_rows = int(getattr(config, "board_rows", 6))
+    board_cols = int(getattr(config, "board_cols", 7))
     games_each = max(1, int(games_per_opponent))
     scores: list[float] = []
     by_opponent: dict[str, float] = {}
     for opponent in ("random", "greedy"):
         opponent_scores: list[float] = []
         for game_idx in range(games_each):
-            agent_player = STONE_BLACK if game_idx % 2 == 0 else STONE_WHITE
+            agent_player = PLAYER_ONE if game_idx % 2 == 0 else PLAYER_TWO
             score = _play_arena_game(
                 algorithm,
-                board_size=int(board_size),
+                board_rows=int(board_rows),
+                board_cols=int(board_cols),
                 agent_player=int(agent_player),
                 opponent=str(opponent),
             )
@@ -145,7 +156,7 @@ def run_search_play_training(
     total_steps = 0
     loss_window: deque[float] = deque(maxlen=20)
     length_window: deque[int] = deque(maxlen=20)
-    black_results_window: deque[int] = deque(maxlen=50)
+    first_player_results_window: deque[int] = deque(maxlen=50)
     draw_results_window: deque[int] = deque(maxlen=50)
     best_loss = float("inf")
     best_arena_score = float("-inf")
@@ -193,9 +204,9 @@ def run_search_play_training(
             last_metrics = dict(aggregated_metrics)
 
         length_window.append(int(episode_steps))
-        winner_value = last_info.get("winner", STONE_EMPTY)
-        black_results_window.append(1 if int(winner_value) == STONE_BLACK else 0)
-        draw_results_window.append(1 if int(winner_value) == STONE_EMPTY else 0)
+        winner_value = last_info.get("winner", PLAYER_NONE)
+        first_player_results_window.append(1 if int(winner_value) == PLAYER_ONE else 0)
+        draw_results_window.append(1 if int(winner_value) == PLAYER_NONE else 0)
 
         rolling_loss = float(mean(loss_window)) if loss_window else None
         if rolling_loss is not None:
@@ -209,6 +220,7 @@ def run_search_play_training(
                 games_per_opponent=int(config.arena_games_per_opponent),
             )
             arena_score = float(last_arena_metrics.get("arena_score", 0.0))
+            log_arena_line(score=float(arena_score), metrics=last_arena_metrics)
         if arena_score is not None and float(arena_score) > float(best_arena_score):
             best_arena_score = float(arena_score)
             best_path = run_paths.model_path(level=1, kind="best")
@@ -224,7 +236,9 @@ def run_search_play_training(
             game=int(game_index),
             moves=int(episode_steps),
             winner=_winner_label(winner_value),
-            black_win_rate=float(mean(black_results_window)) if black_results_window else None,
+            first_player_win_rate=(
+                float(mean(first_player_results_window)) if first_player_results_window else None
+            ),
             draw_rate=float(mean(draw_results_window)) if draw_results_window else None,
             avg_length=float(mean(length_window)) if length_window else None,
             loss=None if rolling_loss is None else float(rolling_loss),
@@ -238,7 +252,6 @@ def run_search_play_training(
                 if "value_loss" in aggregated_metrics
                 else None
             ),
-            arena_score=arena_score,
             reward_components=format_reward_components(last_info.get("reward_components")),
         )
 
@@ -256,7 +269,7 @@ def run_search_play_training(
         "best_loss": 0.0 if best_loss == float("inf") else float(best_loss),
         "best_arena_score": 0.0 if best_arena_score == float("-inf") else float(best_arena_score),
         "avg_length": float(mean(length_window)) if length_window else 0.0,
-        "black_win_rate": float(mean(black_results_window)) if black_results_window else 0.0,
+        "first_player_win_rate": float(mean(first_player_results_window)) if first_player_results_window else 0.0,
         "draw_rate": float(mean(draw_results_window)) if draw_results_window else 0.0,
         "last_metrics": {str(key): float(value) for key, value in last_metrics.items()},
         "last_arena_metrics": {str(key): float(value) for key, value in last_arena_metrics.items()},

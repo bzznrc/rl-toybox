@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from core.utils import PROJECT_ROOT
 
 TRAIN_PROGRESS_LOG_INTERVAL_SECONDS = 0.5
+PERIODIC_EVENT_PREFIX = ">>>"
 _TRAIN_PROGRESS_LOG_LAST_TS: dict[str, float] = {}
 _TRAIN_PROGRESS_LOG_LOCK = Lock()
 
@@ -65,19 +66,74 @@ def format_display_path(path_value: str | Path) -> str:
     return str(path_obj)
 
 
+def _looks_like_display_path(text: str) -> bool:
+    return (
+        "/" in text
+        or "\\" in text
+        or text.startswith(".")
+        or bool(Path(text).suffix)
+        or bool(re.match(r"^[A-Za-z]:", text))
+    )
+
+
+def _format_log_word(word: str) -> str:
+    lower = word.lower()
+    acronyms = {"a2c", "ai", "ctde", "dqn", "kl", "mappo", "ppo", "sac"}
+    if lower in acronyms:
+        return lower.upper()
+    if re.fullmatch(r"[A-Za-z]+\d+", word):
+        return word.upper()
+    return word[:1].upper() + word[1:].lower()
+
+
+def format_log_indicator(value: object) -> str:
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.upper() == "N/A":
+        return "N/A"
+    if re.fullmatch(r"[A-Za-z]+\d+", text):
+        return text.upper()
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]*", text):
+        tokens = [token for token in re.split(r"[\s_-]+", text) if token]
+        return " ".join(_format_log_word(token) for token in tokens)
+    return text
+
+
+def _format_log_label(label: object) -> str:
+    text = str(label).strip()
+    if not text:
+        return ""
+    if text.replace("_", "").isalnum() and "_" in text:
+        return format_log_indicator(text)
+    return text
+
+
 def _format_context_value(value: Any) -> str:
+    if value is None:
+        return "N/A"
     if isinstance(value, bool):
-        return "on" if value else "off"
+        return "On" if value else "Off"
     if isinstance(value, float):
         return f"{value:.3f}"
+    if isinstance(value, Mapping):
+        parts = [
+            f"{_format_log_label(key)}: {_format_context_value(nested_value)}"
+            for key, nested_value in value.items()
+        ]
+        return "{" + ", ".join(parts) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_format_context_value(item) for item in value) + "]"
     if isinstance(value, (str, Path)):
         text = str(value)
         if text.startswith("missing:"):
-            return f"missing:{format_display_path(text[len('missing:'):])}"
-        try:
-            return format_display_path(text)
-        except (TypeError, ValueError):
-            return text
+            return f"Missing:{format_display_path(text[len('missing:'):])}"
+        if isinstance(value, Path) or _looks_like_display_path(text):
+            try:
+                return format_display_path(text)
+            except (TypeError, ValueError):
+                return text
+        return format_log_indicator(text)
     return str(value)
 
 
@@ -87,6 +143,27 @@ def _format_mode_label(mode: str) -> str:
     for word in words:
         formatted.append("AI" if word.lower() == "ai" else word.title())
     return " ".join(formatted)
+
+
+def _format_metric_value(value: float | None, precision: int = 3) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.{int(precision)}f}"
+
+
+def _format_log_field(label: str, value: object, *, width: int | None = None) -> str:
+    label_text = _format_log_label(label)
+    text = str(value)
+    if width is not None:
+        text = f"{text:>{int(width)}}"
+    return f"{label_text}: {text}"
+
+
+def _join_progress_segments(segments: list[str], reward_components: str | None = None) -> str:
+    line = "\t".join(segments)
+    if reward_components:
+        line += "\t" + str(reward_components)
+    return line
 
 
 def log_key_values(
@@ -99,15 +176,30 @@ def log_key_values(
     ordered = OrderedDict((key, value) for key, value in values.items() if value is not None)
     segments: list[str] = []
     if prefix:
-        segments.append(str(prefix))
+        segments.append(format_log_indicator(prefix))
 
     for key, value in ordered.items():
         value_text = _format_context_value(value)
+        key_text = _format_log_label(key)
         if key_value_separator == ":":
-            segments.append(f"{key}: {value_text}")
+            segments.append(_format_log_field(key_text, value_text))
         else:
-            segments.append(f"{key}{key_value_separator}{value_text}")
+            segments.append(f"{key_text}{key_value_separator}{value_text}")
 
+    logging.getLogger(logger_name).info("\t".join(segments))
+
+
+def log_periodic_event_line(
+    logger_name: str,
+    event: str,
+    values: Mapping[str, object] | None = None,
+) -> None:
+    segments = [f"{PERIODIC_EVENT_PREFIX} {format_log_indicator(str(event).strip().rstrip(':'))}:"]
+    if isinstance(values, Mapping):
+        for key, value in values.items():
+            if value is None:
+                continue
+            segments.append(_format_log_field(_format_log_label(key), _format_context_value(value)))
     logging.getLogger(logger_name).info("\t".join(segments))
 
 
@@ -188,26 +280,23 @@ def log_episode_line(
     best_avg_label: str = "BR",
     reward_components: str | None = None,
 ) -> None:
-    avg_reward_text = "n/a" if avg_reward is None else f"{float(avg_reward):.2f}"
-    best_reward_text = "n/a" if best_avg is None else f"{float(best_avg):.2f}"
-    avg_success_text = "n/a" if avg_success is None else f"{float(avg_success):.2f}"
-    epsilon_text = "n/a" if epsilon is None else f"{float(epsilon):.3f}"
+    avg_reward_text = _format_metric_value(avg_reward, 2)
+    best_reward_text = _format_metric_value(best_avg, 2)
+    avg_success_text = _format_metric_value(avg_success, 2)
+    epsilon_text = _format_metric_value(epsilon, 3)
     success_value = 1 if int(success) > 0 else 0
     segments = [
-        f"Ep:{int(episode):>5}",
-        f"Lv:{int(level):>1}",
-        f"Len:{int(ep_len):>5}",
-        f"R:{float(reward):>8.2f}",
-        f"AR:{avg_reward_text:>8}",
-        f"{str(best_avg_label)}:{best_reward_text:>8}",
-        f"E:{epsilon_text:>5}",
-        f"S:{success_value:>1}",
-        f"AS:{avg_success_text:>5}",
+        _format_log_field("Ep", int(episode), width=5),
+        _format_log_field("Lv", int(level), width=1),
+        _format_log_field("Len", int(ep_len), width=5),
+        _format_log_field("R", f"{float(reward):.2f}", width=8),
+        _format_log_field("AR", avg_reward_text, width=8),
+        _format_log_field(str(best_avg_label), best_reward_text, width=8),
+        _format_log_field("E", epsilon_text, width=5),
+        _format_log_field("S", success_value, width=1),
+        _format_log_field("AS", avg_success_text, width=5),
     ]
-    line = "\t".join(segments) + "\t"
-    if reward_components:
-        line += str(reward_components)
-    logging.getLogger("rl_toybox.train").info(line)
+    logging.getLogger("rl_toybox.train").info(_join_progress_segments(segments, reward_components))
 
 
 def log_on_policy_episode_line(
@@ -228,40 +317,37 @@ def log_on_policy_episode_line(
     clip_frac: float | None = None,
     reward_components: str | None = None,
 ) -> None:
-    avg_reward_text = "n/a" if avg_reward is None else f"{float(avg_reward):.2f}"
-    best_reward_text = "n/a" if best_avg is None else f"{float(best_avg):.2f}"
-    avg_success_text = "n/a" if avg_success is None else f"{float(avg_success):.2f}"
+    avg_reward_text = _format_metric_value(avg_reward, 2)
+    best_reward_text = _format_metric_value(best_avg, 2)
+    avg_success_text = _format_metric_value(avg_success, 2)
     success_value = 1 if int(success) > 0 else 0
     segments = [
-        f"Ep:{int(episode):>5}",
-        f"Lv:{int(level):>1}",
-        f"Len:{int(ep_len):>5}",
-        f"R:{float(reward):>8.2f}",
-        f"AR:{avg_reward_text:>8}",
-        f"{str(best_avg_label)}:{best_reward_text:>8}",
-        f"S:{success_value:>1}",
-        f"AS:{avg_success_text:>5}",
+        _format_log_field("Ep", int(episode), width=5),
+        _format_log_field("Lv", int(level), width=1),
+        _format_log_field("Len", int(ep_len), width=5),
+        _format_log_field("R", f"{float(reward):.2f}", width=8),
+        _format_log_field("AR", avg_reward_text, width=8),
+        _format_log_field(str(best_avg_label), best_reward_text, width=8),
+        _format_log_field("S", success_value, width=1),
+        _format_log_field("AS", avg_success_text, width=5),
     ]
     if policy_loss is not None:
-        segments.append(f"PL:{float(policy_loss):>7.3f}")
+        segments.append(_format_log_field("Policy L.", _format_metric_value(policy_loss, 3), width=7))
     if value_loss is not None:
-        segments.append(f"VL:{float(value_loss):>7.3f}")
+        segments.append(_format_log_field("Value L.", _format_metric_value(value_loss, 3), width=7))
     if entropy is not None:
-        segments.append(f"Ent:{float(entropy):>7.3f}")
+        segments.append(_format_log_field("Ent", _format_metric_value(entropy, 3), width=7))
     if approx_kl is not None:
-        segments.append(f"KL:{float(approx_kl):>7.3f}")
+        segments.append(_format_log_field("KL", _format_metric_value(approx_kl, 3), width=7))
     if clip_frac is not None:
-        segments.append(f"CF:{float(clip_frac):>7.3f}")
+        segments.append(_format_log_field("Clip F.", _format_metric_value(clip_frac, 3), width=7))
 
-    line = "\t".join(segments) + "\t"
-    if reward_components:
-        line += str(reward_components)
-    logging.getLogger("rl_toybox.train").info(line)
+    logging.getLogger("rl_toybox.train").info(_join_progress_segments(segments, reward_components))
 
 
 def _format_ppo_metric(value: float | None) -> str:
     if value is None:
-        return "n/a"
+        return "N/A"
     return f"{float(value):.3f}"
 
 
@@ -275,12 +361,12 @@ def log_ppo_metrics_line(
 ) -> None:
     line = "\t".join(
         [
-            "> PPO",
-            f"PolicyLoss: {_format_ppo_metric(policy_loss)}",
-            f"ValueLoss: {_format_ppo_metric(value_loss)}",
-            f"Entropy: {_format_ppo_metric(entropy)}",
-            f"ApproxKl: {_format_ppo_metric(approx_kl)}",
-            f"ClipFrac: {_format_ppo_metric(clip_frac)}",
+            ">>> PPO:",
+            _format_log_field("Policy L.", _format_ppo_metric(policy_loss), width=7),
+            _format_log_field("Value L.", _format_ppo_metric(value_loss), width=7),
+            _format_log_field("Ent", _format_ppo_metric(entropy), width=7),
+            _format_log_field("KL", _format_ppo_metric(approx_kl), width=7),
+            _format_log_field("Clip F.", _format_ppo_metric(clip_frac), width=7),
         ]
     )
     logging.getLogger("rl_toybox.train").info(line)
@@ -311,34 +397,43 @@ def log_search_play_game_line(
     game: int,
     moves: int,
     winner: str,
-    black_win_rate: float | None,
+    first_player_win_rate: float | None,
     draw_rate: float | None,
     avg_length: float | None,
     loss: float | None,
     policy_loss: float | None = None,
     value_loss: float | None = None,
-    arena_score: float | None = None,
     reward_components: str | None = None,
 ) -> None:
     segments = [
-        f"Game:{int(game):>5}",
-        f"Len:{int(moves):>5}",
-        f"Win:{str(winner):>5}",
-        f"BlackWin:{'n/a' if black_win_rate is None else f'{float(black_win_rate):.2f}':>5}",
-        f"Draw:{'n/a' if draw_rate is None else f'{float(draw_rate):.2f}':>5}",
-        f"AvgLen:{'n/a' if avg_length is None else f'{float(avg_length):.1f}':>6}",
-        f"Loss:{'n/a' if loss is None else f'{float(loss):.3f}':>7}",
+        _format_log_field("Game", int(game), width=5),
+        _format_log_field("Len", int(moves), width=5),
+        _format_log_field("Win", format_log_indicator(winner), width=5),
+        _format_log_field("P1 Win", _format_metric_value(first_player_win_rate, 2), width=5),
+        _format_log_field("Draw", _format_metric_value(draw_rate, 2), width=5),
+        _format_log_field("Avg. Len", _format_metric_value(avg_length, 1), width=6),
+        _format_log_field("Loss", _format_metric_value(loss, 3), width=7),
     ]
-    if arena_score is not None:
-        segments.append(f"Arena:{float(arena_score):>5.2f}")
     if policy_loss is not None:
-        segments.append(f"PolicyLoss:{float(policy_loss):>7.3f}")
+        segments.append(_format_log_field("Policy L.", _format_metric_value(policy_loss, 3), width=7))
     if value_loss is not None:
-        segments.append(f"ValueLoss:{float(value_loss):>7.3f}")
-    line = "\t".join(segments)
-    if reward_components:
-        line += "\t" + str(reward_components)
-    logging.getLogger("rl_toybox.train").info(line)
+        segments.append(_format_log_field("Value L.", _format_metric_value(value_loss, 3), width=7))
+    logging.getLogger("rl_toybox.train").info(_join_progress_segments(segments, reward_components))
+
+
+def log_arena_line(
+    *,
+    score: float,
+    metrics: Mapping[str, object] | None = None,
+) -> None:
+    values: OrderedDict[str, object] = OrderedDict()
+    values["Score"] = f"{float(score):.2f}"
+    if isinstance(metrics, Mapping):
+        if "random_score" in metrics:
+            values["Random"] = f"{float(metrics['random_score']):.2f}"
+        if "greedy_score" in metrics:
+            values["Greedy"] = f"{float(metrics['greedy_score']):.2f}"
+    log_periodic_event_line("rl_toybox.train", "Arena", values)
 
 
 def log_save_line(
@@ -356,6 +451,6 @@ def log_save_line(
     _ = (level, at, avg_reward)
     kind_label = {"best": "Best", "check": "Check"}.get(kind_value, kind_value.title())
     logging.getLogger("rl_toybox.train").info(
-        f">>> Save: {kind_label}\tPath: {format_display_path(path)}"
+        f"{PERIODIC_EVENT_PREFIX} Save: {kind_label}\tPath: {format_display_path(path)}"
     )
 

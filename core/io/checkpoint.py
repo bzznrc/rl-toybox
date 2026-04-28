@@ -10,6 +10,8 @@ from typing import Any
 
 import torch
 
+from core.logging_utils import format_display_path, PERIODIC_EVENT_PREFIX
+
 _CHECKPOINT_LOGGER = logging.getLogger("rl_toybox.train")
 
 
@@ -47,9 +49,10 @@ def save_torch_checkpoint(
                 time.sleep(max(0.0, delay))
 
     _CHECKPOINT_LOGGER.warning(
-        "Warn\tSave skipped after %s attempts\tPath: %s\tReason: %s",
+        "%s Warn:\tSave: Skipped After %s Attempts\tPath: %s\tReason: %s",
+        PERIODIC_EVENT_PREFIX,
         max_attempts,
-        destination,
+        format_display_path(destination),
         last_error,
     )
     return False

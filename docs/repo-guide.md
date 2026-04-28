@@ -22,7 +22,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 - Separate reusable RL systems from game-specific environment logic.
 - Present a coherent progression across RL families and tradeoffs.
 - Prefer compact, complete games over oversized systems.
-- Standardize curriculum-based games on a shared 5-level ladder, with `osero` as the temporary board-size exception.
+- Standardize curriculum-based games on a shared 5-level ladder, with `four` as the fixed-mode board game.
 - Keep shared runtime and window defaults centralized in `core/shared_config.py`.
 - Keep a coherent visual system built from the shared square-block language and shared palette.
 
@@ -34,7 +34,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 | `bang` | Flagship discrete-control arena game | value-based | active |
 | `jump` | Traversal platformer | actor-critic | active |
 | `vroom` | Continuous-control racing game | actor-critic | active |
-| `osero` | Planning + self-play capstone | search + self-play | active |
+| `four` | Planning + self-play capstone | search + self-play | active |
 | `kick` | Multi-agent football / CTDE showcase | actor-critic / CTDE | active |
 
 ## 3) Repository Layout and Shared Responsibilities
@@ -60,7 +60,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 - shared PPO/A2C/recurrent PPO/SAC infrastructure
 - target home for shared rollout, policy, critic, centralized-critic, and continuous-control helpers
 - `core/search_play/`
-- compact MCTS, self-play training, and policy/value helpers for `osero`
+- compact MCTS, self-play training, and policy/value helpers for `four`
 - `core/io/`, `core/runners/`, and `core/logging_utils.py`
 - shared run IO, training loops, and logging behavior
 - `core/runners/env_access.py`
@@ -92,8 +92,16 @@ Per-game snapshots live in `games/<game>/README.md`.
 ## 4) Logging Framework
 
 - Train-progress logs are throttled centrally in `core/logging_utils.py`.
-- Training emits a shared run-context header and stable episode/save lines.
-- PPO-style runs keep the extra optimizer metrics line.
+- Training emits a shared run-context header and stable single-line progress logs.
+- Bang's compact episode line is the baseline format: short labels, padded values, tab-separated fields, and reward components at the end.
+- Per-step / per-episode labels should stay compact. Prefer abbreviations such as `Len`, `Avg. Len`, `Policy L.`, and `Value L.` over long labels or collated words like `PolicyLoss`.
+- Primary progress fields may pad after the colon to keep columns stable, for example `Game:  1879`, `Len:    13`, and `Win:    P1`.
+- Letter-and-number indicators and categorical words are normalized in logs, for example `P1`, `P2`, and `Draw`.
+- Path-like values are preserved as paths; other categorical values should avoid lowercase words such as `draw`, `scratch`, `on`, and `off`.
+- Multi-word labels keep spaces for readability, for example `P1 Win` instead of `P1Win`.
+- Reward components are appended at the end of the line as one- or two-letter codes separated by spaces, for example `W:10 D:0 L:0`.
+- Periodic or occasional events use the `>>>` prefix, for example `>>> Save:`, `>>> Arena:`, `>>> Explore:`, and `>>> Warn:`.
+- PPO-style runs may include compact optimizer metrics on the main line when enabled.
 - Artifact output remains under `runs/<game>/...`.
 
 ## 5) Model Saving and Run Naming
@@ -117,7 +125,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 ### `core/search_play/`
 
-- Used by: `osero`
+- Used by: `four`
 - Contains: compact MCTS, search-play training, and small policy/value helpers
 
 ### Default algorithm matrix
@@ -128,7 +136,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 | `bang` | `dqn` | `qlearn`, `ppo`, `a2c` |
 | `jump` | `ppo` | `a2c`, `dqn` |
 | `vroom` | `sac` | `ppo`, `a2c` |
-| `osero` | `search_play` | none; requires self-play/search support |
+| `four` | `search_play` | none; requires self-play/search support |
 | `kick` | `ppo` | `mappo`, `a2c`; requires centralized critic and multi-agent support |
 
 ## 7) Special Areas
@@ -144,6 +152,6 @@ Before merging:
 
 - [ ] Active lineup references still use the canonical order from section 2.
 - [ ] Shared RL code is placed under the right `core/<family>/` area.
-- [ ] Curriculum-based games still follow the shared `L1` to `L5` convention, unless they are the temporary `osero` exception.
+- [ ] Curriculum-based games still follow the shared `L1` to `L5` convention, and fixed-mode board games clearly document their fixed `L1` slot.
 - [ ] Game-specific behavior changes are reflected in that game's README.
 - [ ] `python -m scripts.validate_docs` passes after README/doc edits.

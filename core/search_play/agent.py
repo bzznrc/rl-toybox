@@ -17,13 +17,19 @@ from core.io.checkpoint import load_torch_checkpoint, save_torch_checkpoint
 from core.search_play.interfaces import MCTSConfig, ReplaySample
 from core.search_play.mcts import run_mcts
 from core.search_play.networks import build_policy_value_network
-from games.osero.rules import action_mask_from_observation, canonical_board_from_observation
+from games.four.rules import (
+    action_mask_from_observation,
+    canonical_board_from_observation,
+    symmetry_observation_policy_pairs,
+)
 
 
 @dataclass
 class SearchPlayConfig:
-    board_size: int
     hidden_sizes: list[int]
+    board_rows: int
+    board_cols: int
+    action_dim: int
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 128
@@ -45,8 +51,8 @@ class SearchPlayAlgorithm(Algorithm):
     def __init__(self, config: SearchPlayConfig) -> None:
         self.config = config
         self.device = torch.device("cuda" if config.use_gpu and torch.cuda.is_available() else "cpu")
-        self.obs_dim = int(config.board_size) * int(config.board_size)
-        self.action_dim = int(self.obs_dim + 1)
+        self.obs_dim = int(config.board_rows) * int(config.board_cols)
+        self.action_dim = int(config.action_dim)
         self.model = build_policy_value_network(
             input_size=int(self.obs_dim),
             hidden_sizes=list(config.hidden_sizes),
@@ -73,14 +79,22 @@ class SearchPlayAlgorithm(Algorithm):
 
     def _normalize_action_mask(self, action_mask: object | None, obs: np.ndarray) -> np.ndarray:
         if action_mask is None:
-            return action_mask_from_observation(np.asarray(obs, dtype=np.float32), int(self.config.board_size))
+            return action_mask_from_observation(
+                np.asarray(obs, dtype=np.float32),
+                int(self.config.board_rows),
+                int(self.config.board_cols),
+            )
         mask = np.asarray(action_mask, dtype=np.bool_).reshape(-1)
         if int(mask.size) != int(self.action_dim):
             raise ValueError(
                 f"Search-play action mask expected {self.action_dim} values, got {int(mask.size)}."
             )
         if int(mask.sum()) <= 0:
-            return action_mask_from_observation(np.asarray(obs, dtype=np.float32), int(self.config.board_size))
+            return action_mask_from_observation(
+                np.asarray(obs, dtype=np.float32),
+                int(self.config.board_rows),
+                int(self.config.board_cols),
+            )
         return mask.astype(np.bool_, copy=False)
 
     def _policy_value(self, observation: np.ndarray) -> tuple[np.ndarray, float]:
@@ -115,42 +129,19 @@ class SearchPlayAlgorithm(Algorithm):
         policy_target: np.ndarray,
         value_target: float,
     ) -> list[ReplaySample]:
-        size = int(self.config.board_size)
-        board = np.asarray(observation, dtype=np.float32).reshape(size, size)
-        policy = np.asarray(policy_target, dtype=np.float32).reshape(-1)
-        pass_value = float(policy[-1]) if int(policy.size) == int(size * size + 1) else 0.0
-        policy_board = np.zeros((size, size), dtype=np.float32)
-        copy_count = min(int(size * size), int(policy.size))
-        if copy_count > 0:
-            policy_board.reshape(-1)[:copy_count] = policy[:copy_count]
-
         samples: list[ReplaySample] = []
         seen: set[tuple[bytes, bytes]] = set()
-        transforms = (
-            lambda value: value,
-            lambda value: np.rot90(value, 1),
-            lambda value: np.rot90(value, 2),
-            lambda value: np.rot90(value, 3),
-            lambda value: np.fliplr(value),
-            lambda value: np.flipud(value),
-            lambda value: np.transpose(value),
-            lambda value: np.fliplr(np.rot90(value, 1)),
-        )
-        for transform in transforms:
-            obs_board = np.asarray(transform(board), dtype=np.float32)
-            tgt_board = np.asarray(transform(policy_board), dtype=np.float32)
-            transformed_policy = np.concatenate(
-                (tgt_board.reshape(-1), np.asarray([pass_value], dtype=np.float32)),
-                axis=0,
-            ).astype(np.float32, copy=False)
-            key = (obs_board.tobytes(), transformed_policy.tobytes())
+        for obs_sample, policy_sample in symmetry_observation_policy_pairs(observation, policy_target):
+            obs_array = np.asarray(obs_sample, dtype=np.float32).reshape(-1)
+            policy_array = np.asarray(policy_sample, dtype=np.float32).reshape(-1)
+            key = (obs_array.tobytes(), policy_array.tobytes())
             if key in seen:
                 continue
             seen.add(key)
             samples.append(
                 ReplaySample(
-                    observation=obs_board.reshape(-1).astype(np.float32, copy=False),
-                    policy_target=transformed_policy,
+                    observation=obs_array.astype(np.float32, copy=False),
+                    policy_target=policy_array.astype(np.float32, copy=False),
                     value_target=float(value_target),
                 )
             )
@@ -161,7 +152,11 @@ class SearchPlayAlgorithm(Algorithm):
         if int(observation.size) != int(self.obs_dim):
             raise ValueError(f"Search-play observation expected {self.obs_dim} values, got {int(observation.size)}.")
         valid_mask = self._normalize_action_mask(action_mask, observation)
-        canonical_board = canonical_board_from_observation(observation, int(self.config.board_size))
+        canonical_board = canonical_board_from_observation(
+            observation,
+            int(self.config.board_rows),
+            int(self.config.board_cols),
+        )
         visit_policy, _root_value = run_mcts(
             canonical_board=canonical_board,
             root_action_mask=valid_mask,
@@ -196,7 +191,12 @@ class SearchPlayAlgorithm(Algorithm):
         if not bool(transition.get("done", False)):
             return
 
-        outcome = float(transition.get("reward", 0.0))
+        info = transition.get("info", {})
+        search_value = dict(info).get("search_value") if isinstance(info, dict) else None
+        if search_value is None:
+            reward_value = float(transition.get("reward", 0.0))
+            search_value = 1.0 if reward_value > 0.0 else -1.0 if reward_value < 0.0 else 0.0
+        outcome = float(search_value)
         for sample in reversed(self._episode_history):
             augmented_samples = self._symmetry_samples(
                 np.asarray(sample["observation"], dtype=np.float32),

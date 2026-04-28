@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ACTIVE_GAME_ORDER = ("snake", "bang", "jump", "vroom", "osero", "kick")
+ACTIVE_GAME_ORDER = ("snake", "bang", "jump", "vroom", "four", "kick")
 STRICT_LEVEL_MIRROR_GAMES = {"jump", "kick"}
 REQUIRED_GAME_HEADINGS = (
     "Clip",
@@ -119,7 +119,7 @@ def validate() -> list[str]:
             )
         required_snippets = (
             "shared `L1` to `L5` ladder",
-            "OSERO_BOARD_SIZE",
+            "`four` resolves to fixed `L1`",
         )
         for snippet in required_snippets:
             if snippet not in root_text:
@@ -136,21 +136,21 @@ def validate() -> list[str]:
                 "docs/repo-guide.md active lineup order does not match ACTIVE_GAME_ORDER: "
                 f"expected {list(ACTIVE_GAME_ORDER)}, got {repo_order}"
             )
-        for snippet in ("shared 5-level ladder", "board-size exception"):
+        for snippet in ("shared 5-level ladder", "fixed-mode board game"):
             if snippet not in repo_text:
                 errors.append(f"docs/repo-guide.md is missing expected snippet: {snippet!r}")
 
     rl_guide = REPO_ROOT / "docs" / "rl-design-guide.md"
     if rl_guide.is_file():
         rl_text = _read_text(rl_guide)
-        for snippet in ("shared 5-level curriculum", "temporary exception"):
+        for snippet in ("shared 5-level curriculum", "fixed-mode board games"):
             if snippet not in rl_text:
                 errors.append(f"docs/rl-design-guide.md is missing expected snippet: {snippet!r}")
 
     vscode_readme = REPO_ROOT / ".vscode" / "README.md"
     if vscode_readme.is_file():
         vscode_text = _read_text(vscode_readme)
-        for snippet in ("curriculumTrainLevel", "curriculumPlayLevel", "oseroBoardSize"):
+        for snippet in ("activeGame", "trainLevel", "playLevel"):
             if snippet not in vscode_text:
                 errors.append(f".vscode/README.md is missing expected snippet: {snippet!r}")
 

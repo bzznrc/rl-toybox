@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
         "--level",
         type=int,
         default=None,
-        help="Difficulty selector (defaults to L5 for curriculum games and Osero 6x6)",
+        help="Difficulty selector (defaults to L5 for curriculum games; fixed-mode games use L1)",
     )
     parser.add_argument("--render", action="store_true", help="Show Arcade window")
     parser.add_argument("--headless", action="store_true", help="Force headless evaluation")

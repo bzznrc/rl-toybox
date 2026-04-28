@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
         "--level",
         type=int,
         default=None,
-        help="Shared difficulty selector (defaults to L1 for curriculum games and Osero 6x6)",
+        help="Shared difficulty selector (defaults to L1 for training; fixed-mode games use L1)",
     )
     parser.add_argument("--steps", type=int, default=None, help="Normalized training step budget")
     parser.add_argument("--episodes", type=int, default=None, help="Normalized episode/game budget")

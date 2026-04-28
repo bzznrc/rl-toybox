@@ -8,8 +8,8 @@ from typing import Callable
 import numpy as np
 
 from core.search_play.interfaces import MCTSConfig
-from games.osero.rules import (
-    STONE_BLACK,
+from games.four.rules import (
+    PLAYER_ONE,
     apply_canonical_action,
     build_action_mask,
     is_terminal_board,
@@ -141,7 +141,7 @@ def run_mcts(
         if bool(is_terminal_board(rollout_board)):
             leaf_value = float(terminal_outcome_from_canonical(rollout_board))
         else:
-            leaf_action_mask = build_action_mask(rollout_board, current_player=STONE_BLACK)
+            leaf_action_mask = build_action_mask(rollout_board, current_player=PLAYER_ONE)
             leaf_logits, leaf_value = policy_value_fn(rollout_board.reshape(-1))
             leaf_priors = _masked_softmax(leaf_logits, leaf_action_mask)
             _expand(node, leaf_priors, leaf_action_mask)

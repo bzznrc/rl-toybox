@@ -143,7 +143,7 @@ For board self-play, the action mask stays outside the observation.
 - `jump`: `self_*`, `sens_*`, `land_*`, `opp_*`, `flag_*`
 - `vroom`: `self_*`, `sens_*`, `flag_*`
 - `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`
-- `osero`: `board_r*_c*`
+- `four`: `board_r*_c*`
 
 ## 5) Action Space Conventions
 
@@ -165,7 +165,7 @@ For board self-play, the action mask stays outside the observation.
 - Prefer a smooth shared 5-level curriculum for curriculum-based games.
 - Use the previous anchor points as `L1 -> L1`, `L2 -> L3`, and `L3 -> L5`, then add bridge levels at `L2` and `L4`.
 - Preserve prior top-end difficulty at the new `L5`; the goal is smoother interpolation, not a broader or harder overall ladder.
-- `osero` is the temporary exception. It still uses `4x4`, `6x6`, and `8x8` board-size modes instead of curriculum levels.
+- fixed-mode board games such as `four` use a documented fixed `L1` slot instead of staged curriculum levels.
 - Promote using success metrics when dense shaping could distort reward totals.
 - Keep per-level knobs in clearly named config tables.
 
@@ -179,7 +179,7 @@ When docs enumerate the active lineup, use:
 2. `bang`
 3. `jump`
 4. `vroom`
-5. `osero`
+5. `four`
 6. `kick`
 
 ### Required top-level section order

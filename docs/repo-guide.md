@@ -85,7 +85,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 - Bang and most other games use that `1x` block directly; Vroom's car body also uses that same base block language.
 - Allowed scale variants should stay simple and explicit:
   - `2x` for larger composite cells or overlays, such as Jump's grid-style patch visuals.
-  - `0.5x` for finer raster detail, such as Vroom's block-derived track surface and lane markers.
+  - `0.5x` for small gameplay markers and compact UI accents.
 - New visuals should prefer these square components plus the shared palette in `core/arcade_style.py` instead of introducing separate visual systems.
 - Observation ghosts should use light-neutral 50% alpha overlays and the shared `X` toggle, so rays, SENS probes, and role/area guides behave consistently across games.
 

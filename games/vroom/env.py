@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 import random
 import time
@@ -59,7 +59,6 @@ from core.shared_config import (
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     TILE_SIZE,
-    TRAINING_FPS,
 )
 from core.utils import resolve_play_level
 from games.vroom.config import (
@@ -87,8 +86,13 @@ from games.vroom.config import (
     PROGRESS_SCALE,
     REWARD_WIN,
     STEER_SPEED_DECAY,
+    TRACK_COMPLEXITY_BY_LEVEL,
     TRACK_CORNER_RADIUS_PX,
+    TRACK_FOLD_GAP_PX,
     TRACK_FOOTPRINT_SCALE,
+    TRACK_GENERATION_MAX_ATTEMPTS,
+    TRACK_LEVEL_5_LONG_SIDE_TEMPLATE_CHOICES,
+    TRACK_LEVEL_5_SHORT_SIDE_TEMPLATE_CHOICES,
     TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX,
     TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX,
     TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO,
@@ -98,6 +102,7 @@ from games.vroom.config import (
     TRACK_LONG_SIDE_TEMPLATE_CHOICES,
     TRACK_PADDING_PX,
     TRACK_SAMPLE_SPACING_PX,
+    TRACK_SHORT_SIDE_TEMPLATE_CHOICES,
     TRACK_START_STRAIGHT_LEN_PX,
     TRACK_WIDTH_PX,
     TURN_THROTTLE_LOSS,
@@ -259,15 +264,19 @@ class VroomEnv(Env):
             sample_spacing_px=float(TRACK_SAMPLE_SPACING_PX),
             start_straight_len_px=float(TRACK_START_STRAIGHT_LEN_PX),
             long_side_template_choices=tuple(str(value) for value in TRACK_LONG_SIDE_TEMPLATE_CHOICES),
+            short_side_template_choices=tuple(str(value) for value in TRACK_SHORT_SIDE_TEMPLATE_CHOICES),
             bell_amplitude_min_px=float(TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX),
             bell_amplitude_max_px=float(TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX),
             s_amplitude_min_px=float(TRACK_LONG_SIDE_S_AMPLITUDE_MIN_PX),
             s_amplitude_max_px=float(TRACK_LONG_SIDE_S_AMPLITUDE_MAX_PX),
             inset_width_cap_ratio=float(TRACK_LONG_SIDE_INSET_WIDTH_CAP_RATIO),
             inset_length_cap_ratio=float(TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO),
+            fold_gap_px=float(TRACK_FOLD_GAP_PX),
+            generation_max_attempts=int(TRACK_GENERATION_MAX_ATTEMPTS),
         )
         self.track_width_px = float(self.track_config.track_width_px)
         self.track_half_width = self.track_width_px * 0.5
+        self.track_complexity_range = tuple(float(value) for value in TRACK_COMPLEXITY_BY_LEVEL[int(MIN_LEVEL)])
 
         self.track_geometry: TrackGeometry | None = None
         self.track_centerline: list[tuple[float, float]] = []
@@ -292,6 +301,7 @@ class VroomEnv(Env):
         self.start_side = "top"
         self.start_tangent = (1.0, 0.0)
         self.start_normal = (0.0, 1.0)
+        self.track_side_template_factors: dict[str, float] = {side: 1.0 for side in ("top", "right", "bottom", "left")}
 
         self.cars: list[RaceCar] = []
         self.player_color_pairs: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = [
@@ -358,7 +368,12 @@ class VroomEnv(Env):
     def _apply_level_settings(self, level: int) -> None:
         settings = LEVEL_SETTINGS.get(int(level), LEVEL_SETTINGS[int(MIN_LEVEL)])
         self.num_cars = max(1, min(int(settings["num_cars"]), len(self.player_color_pairs)))
-        self.opponent_speed_cap = self._clamp(float(settings["opponent_speed_cap"]), 0.0, 1.0)
+        self.opponent_speed_cap = self._clamp(float(settings.get("opponent_speed_cap", 1.0)), 0.0, 1.0)
+        complexity_range = TRACK_COMPLEXITY_BY_LEVEL.get(int(level), TRACK_COMPLEXITY_BY_LEVEL[int(MIN_LEVEL)])
+        self.track_complexity_range = (
+            self._clamp(float(complexity_range[0]), 0.0, 1.0),
+            self._clamp(float(complexity_range[1]), 0.0, 1.0),
+        )
         coast_error_choices = settings.get("opponent_coast_error_choices", [0.0])
         if not isinstance(coast_error_choices, (list, tuple)) or len(coast_error_choices) == 0:
             raise ValueError("Vroom LEVEL_SETTINGS entries must define non-empty opponent_coast_error_choices.")
@@ -392,11 +407,24 @@ class VroomEnv(Env):
         return self.track_geometry
 
     def _generate_track(self, seed: int) -> None:
+        complexity_min, complexity_max = self.track_complexity_range
+        track_config = replace(
+            self.track_config,
+            complexity_min=float(complexity_min),
+            complexity_max=float(complexity_max),
+        )
+        if int(self._current_level) == int(MAX_LEVEL):
+            track_config = replace(
+                track_config,
+                long_side_template_choices=tuple(str(value) for value in TRACK_LEVEL_5_LONG_SIDE_TEMPLATE_CHOICES),
+                short_side_template_choices=tuple(str(value) for value in TRACK_LEVEL_5_SHORT_SIDE_TEMPLATE_CHOICES),
+                use_complexity_filter=False,
+            )
         track = generate_track(
             seed=int(seed),
             width=int(SCREEN_WIDTH),
             height=int(self.track_bottom),
-            config=self.track_config,
+            config=track_config,
             build_texture=bool(self.show_game),
             track_color=COLOR_SLATE_GRAY,
         )
@@ -434,13 +462,21 @@ class VroomEnv(Env):
             (float(geometry.start_line[0][0]), float(geometry.start_line[0][1])),
             (float(geometry.start_line[1][0]), float(geometry.start_line[1][1])),
         )
+        self.track_side_template_factors = {
+            str(side): self._side_template_factor_from_name(str(template))
+            for side, template in geometry.side_templates
+        }
 
         self.max_track_index_step = max(4, int(self.max_speed / 6.0 * 2.2))
 
     def _is_on_track(self, x: float, y: float) -> bool:
-        track = self._require_track_geometry()
-        proj = project_point_to_track(track, (float(x), float(y)))
-        return abs(float(proj.lateral_offset)) <= float(track.half_width)
+        if self.collision_mask.size == 0:
+            return False
+        ix = int(round(float(x)))
+        iy = int(round(float(y)))
+        if iy < 0 or ix < 0 or iy >= int(self.collision_mask.shape[0]) or ix >= int(self.collision_mask.shape[1]):
+            return False
+        return bool(self.collision_mask[iy, ix] > 0)
 
     def _is_on_track_footprint(self, x: float, y: float) -> bool:
         for ox, oy in self.track_probe_offsets:
@@ -515,20 +551,28 @@ class VroomEnv(Env):
         dir_y: float,
         max_distance: float,
     ) -> float:
-        track = self._require_track_geometry()
         ux, uy = self._normalize(float(dir_x), float(dir_y))
         max_dist = max(1.0, float(max_distance))
-        # Match the raycast epsilon so edge contact reads as zero free space.
-        origin_epsilon = 1e-4
+        if not self._is_on_track(float(origin_x), float(origin_y)):
+            hit = raycast_track_edge(
+                self._require_track_geometry(),
+                origin=(float(origin_x), float(origin_y)),
+                direction=(float(ux), float(uy)),
+                max_dist=float(max_dist),
+            )
+            if hit is None:
+                return -1.0
+            return -float(clip_unit(float(max(0.0, hit)) / float(max_dist)))
+
         hit = raycast_track_edge(
-            track,
+            self._require_track_geometry(),
             origin=(float(origin_x), float(origin_y)),
             direction=(float(ux), float(uy)),
             max_dist=float(max_dist),
         )
         if hit is None:
             return 1.0
-        return float(clip_unit(float(max(0.0, hit - origin_epsilon)) / float(max_dist)))
+        return float(clip_unit(float(max(0.0, hit)) / float(max_dist)))
 
     def _nearest_track_sample(self, x: float, y: float) -> tuple[int, float, float, float]:
         if self.track_count <= 0:
@@ -853,14 +897,19 @@ class VroomEnv(Env):
         car.ai_lane_offset = self._clamp(float(car.ai_lane_offset), -lane_limit, lane_limit)
         return float(car.ai_lane_offset)
 
-    def _side_template_factor(self, track: TrackGeometry, side_name: str) -> float:
-        side_templates = dict(track.side_templates)
-        template_name = str(side_templates.get(str(side_name), "straight"))
+    @staticmethod
+    def _side_template_factor_from_name(template_name: str) -> float:
+        template_name = str(template_name)
         if template_name == "bell":
             return 0.80
         if template_name == "s_curve":
             return 0.72
+        if template_name == "fold":
+            return 0.62
         return 1.0
+
+    def _side_template_factor(self, side_name: str) -> float:
+        return float(self.track_side_template_factors.get(str(side_name), 1.0))
 
     def _opponent_drive_plan(
         self,
@@ -876,7 +925,7 @@ class VroomEnv(Env):
             return 1.0, 28.0, False
 
         current_side = str(side_before_corner[int(next_corner_key) % len(side_before_corner)])
-        side_speed_factor = self._side_template_factor(track, current_side)
+        side_speed_factor = self._side_template_factor(current_side)
 
         ideal_corner_distance = max(72.0, 2.75 * float(self.track_half_width) + 18.0)
         coast_error_percent = self._opponent_coast_error_percent(car, next_corner_key)
@@ -906,7 +955,9 @@ class VroomEnv(Env):
         track = self._require_track_geometry()
         proj = project_point_to_track(track, (float(car.x), float(car.y)))
         _, _, forward_speed, _ = self._project_to_car_frame(car)
-        max_forward_speed = max(1.0, float(self.max_speed) * float(self.opponent_speed_cap))
+        max_forward_speed = max(0.0, float(self.max_speed) * float(self.opponent_speed_cap))
+        if float(max_forward_speed) <= 1e-6:
+            return 0.0, 0.0, 1.0
         signed_lateral = float(proj.lateral_offset)
         speed_ratio = self._clamp(abs(float(forward_speed)) / max(1.0, max_forward_speed), 0.0, 1.0)
         lane_target = self._opponent_lane_target(car, signed_lateral)
@@ -989,7 +1040,7 @@ class VroomEnv(Env):
         for car in self.cars:
             self._update_off_track_state(car)
 
-        # Player and opponents share the same off-road/physics path; only base speed cap differs.
+        # Opponent top speed is curriculum-capped, then reduced by the shared off-road speed limit.
         for idx, car in enumerate(self.cars):
             speed_multiplier = self._off_track_speed_multiplier(car)
             if idx == self.player_index:
@@ -1149,7 +1200,8 @@ class VroomEnv(Env):
             return self._last_obs, 0.0, True, done_info
 
         self.window_controller.poll_events_or_raise()
-        self._update_visual_overlay_toggle()
+        if self.show_game:
+            self._update_visual_overlay_toggle()
         if self.mode == "human":
             action_array = self._resolve_human_action()
         else:
@@ -1222,8 +1274,9 @@ class VroomEnv(Env):
         if self.mode != "human":
             self._episode_reward_components.add_from_mapping(reward_breakdown, self.REWARD_COMPONENT_KEY_TO_CODE)
 
-        self.render()
-        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+        if self.show_game:
+            self.render()
+            self.frame_clock.tick(FPS)
 
         info = {
             "win": bool(self.last_race_winner == self.player_index) if race_finished else False,

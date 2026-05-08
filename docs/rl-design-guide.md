@@ -54,7 +54,7 @@ Current implementation snapshots are owned by each `games/<game>/README.md`.
 - Scale from that base deliberately:
   - `1x` is the default and should be the starting point for most gameplay-facing objects.
   - `2x` is acceptable for larger composite cells or overlays such as Jump's grid-style patches.
-  - `0.5x` is acceptable for finer block-derived detail such as Vroom's rasterized track surface and lane markings.
+  - `0.5x` is acceptable for small gameplay markers and compact UI accents.
 - Prefer composing visuals from these square units instead of introducing unrelated bespoke shapes or gradients.
 - Prefer the shared palette from `core/arcade_style.py`; new visuals should read as arrangements of standard blocks plus palette colors, not as independent art systems.
 - When outlines are used, keep their thickness intentional relative to the standard block and avoid decorative inner grid noise unless it carries gameplay meaning.

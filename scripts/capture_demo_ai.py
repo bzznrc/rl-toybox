@@ -10,6 +10,7 @@ import arcade
 import numpy as np
 from PIL import Image
 
+from core import arcade_style
 from core.shared_config import FPS as SHOW_GAME_FPS
 from core.game import (
     apply_generic_launch_level,
@@ -30,6 +31,38 @@ from core.utils import PROJECT_ROOT
 CAPTURE_DURATION_SECONDS = 15
 CAPTURE_FPS = 30
 CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES = 2
+CAPTURE_GIF_COLORS = 32
+CAPTURE_GIF_OPTIMIZE = True
+
+
+def _unique_rgb_colors(
+    colors: list[tuple[int, int, int]] | tuple[tuple[int, int, int], ...],
+) -> tuple[tuple[int, int, int], ...]:
+    unique: list[tuple[int, int, int]] = []
+    seen: set[tuple[int, int, int]] = set()
+    for color in colors:
+        rgb = tuple(max(0, min(255, int(channel))) for channel in color[:3])
+        if rgb in seen:
+            continue
+        seen.add(rgb)
+        unique.append(rgb)
+    return tuple(unique)
+
+
+def _shared_arcade_palette_colors() -> tuple[tuple[int, int, int], ...]:
+    """Return every shared arcade COLOR_* value so demo GIFs preserve app colors."""
+
+    colors: list[tuple[int, int, int]] = []
+    for name in sorted(dir(arcade_style)):
+        if not name.startswith("COLOR_"):
+            continue
+        value = getattr(arcade_style, name)
+        if isinstance(value, tuple) and len(value) >= 3:
+            colors.append((int(value[0]), int(value[1]), int(value[2])))
+    return _unique_rgb_colors(tuple(colors))
+
+
+SHARED_ARCADE_PALETTE_COLORS = _shared_arcade_palette_colors()
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,10 +97,49 @@ def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
     if args.checkpoint:
         set_nested_override(overrides, "common.checkpoint_path", str(Path(args.checkpoint)))
     return overrides
+
+
 def _draw_current_frame(env: object) -> None:
     draw_frame = getattr(env, "draw_frame", None)
     if callable(draw_frame):
         draw_frame()
+
+
+def _adaptive_palette_colors(image: Image.Image, color_count: int) -> tuple[tuple[int, int, int], ...]:
+    count = max(0, min(256, int(color_count)))
+    if count <= 0:
+        return ()
+    quantized = image.convert("RGB").quantize(colors=count, method=Image.Quantize.MEDIANCUT)
+    palette = quantized.getpalette() or []
+    colors: list[tuple[int, int, int]] = []
+    for idx in range(min(count, len(palette) // 3)):
+        offset = idx * 3
+        colors.append((int(palette[offset]), int(palette[offset + 1]), int(palette[offset + 2])))
+    return _unique_rgb_colors(tuple(colors))
+
+
+def _palette_image(colors: tuple[tuple[int, int, int], ...]) -> Image.Image:
+    palette_values: list[int] = []
+    for rgb in colors[:256]:
+        palette_values.extend([int(rgb[0]), int(rgb[1]), int(rgb[2])])
+    palette_values.extend([0] * max(0, 768 - len(palette_values)))
+    image = Image.new("P", (1, 1))
+    image.putpalette(palette_values[:768])
+    return image
+
+
+def _quantize_capture_frame(image: Image.Image) -> Image.Image:
+    rgb = image.convert("RGB")
+    color_limit = max(2, min(256, int(CAPTURE_GIF_COLORS)))
+    protected_colors = SHARED_ARCADE_PALETTE_COLORS[:color_limit]
+    adaptive_count = max(0, color_limit - len(protected_colors))
+    palette_colors = _unique_rgb_colors(
+        tuple(protected_colors) + _adaptive_palette_colors(rgb, adaptive_count)
+    )
+    return rgb.quantize(
+        palette=_palette_image(palette_colors),
+        dither=Image.Dither.NONE,
+    )
 
 
 def _capture_current_frame(env: object) -> Image.Image:
@@ -75,13 +147,15 @@ def _capture_current_frame(env: object) -> Image.Image:
     window = get_render_window() if callable(get_render_window) else None
     if window is None:
         raise RuntimeError("Rendered demo capture requires an active Arcade window.")
-    return arcade.get_image(
-        x=0,
-        y=0,
-        width=int(window.width),
-        height=int(window.height),
-        components=3,
-    ).convert("P", palette=Image.ADAPTIVE, colors=255)
+    return _quantize_capture_frame(
+        arcade.get_image(
+            x=0,
+            y=0,
+            width=int(window.width),
+            height=int(window.height),
+            components=3,
+        )
+    )
 
 
 def _capture_pre_action_delay_seconds(env: object) -> float:
@@ -126,7 +200,7 @@ def _save_gif(frames: list[Image.Image], output_path: Path, capture_fps: int) ->
         append_images=frames[1:],
         duration=frame_duration_ms,
         loop=0,
-        optimize=False,
+        optimize=bool(CAPTURE_GIF_OPTIMIZE),
         disposal=2,
     )
 

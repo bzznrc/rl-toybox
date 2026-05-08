@@ -53,21 +53,27 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 
 ### Track Generation
 
-- Tracks stay in the same rounded-rectangle family across runs.
-- The short sides are straight.
+- Tracks use one geometry-first deformed-loop generator.
+- The lowest-complexity track is still the plain rounded rectangle.
+- Higher complexity progressively deforms the top and bottom long sides inward, up to playmat/intestine-like folds.
+- Track width is `75 px`.
 - Each long side independently samples one of:
   - `straight`
   - `bell`
   - `s_curve`
+  - `fold`
+- At level 5, the long-side templates are sampled independently and evenly at `25%` each.
+- The left and right sides can also sample `straight` or `bell`; at level 5 their mix is `50% / 50%`.
+- Folds are validated with centerline clearance (`track_width + fold_gap`) so road ribbons do not overlap.
 - Rounded corners and the start strip are built through the geometry-first pipeline in `games/vroom/track_geometry.py` and `games/vroom/trackgen.py`.
-- Gameplay still follows the smooth analytical track geometry, but the rendered road is rasterized into half-size square blocks derived from that geometry.
-- The car keeps the repo's standard Bang-sized `1x` block language, while the road rendering uses `0.5x` block detail.
-- The start checker uses the same half-size cell, and the road surface texture is baked once per generated track with irregular mini-square accents split between dark-neutral and outline-gray palette tones.
+- Gameplay and rendering both follow the smooth analytical track geometry.
+- The rendered road uses a supersampled smooth polygon with consistent smooth edge margins.
+- The start mark is a single margin-colored line centered on the chosen side.
 
 ### Scripted Opponents
 
 - Opponents use a compact lane-keeping controller rather than a learned policy.
-- Speed targets are scaled by `opponent_speed_cap`.
+- Scripted opponents use a curriculum max-speed cap from `0%` at level 1 to `100%` at level 5, then slow down through the bend/corner planner.
 - Each opponent samples a per-corner coasting timing error from `LEVEL_SETTINGS[*]["opponent_coast_error_choices"]`.
 - After contact or off-line disturbances, opponents blend back toward their assigned lane instead of snapping instantly.
 

@@ -22,19 +22,32 @@ OFF_TRACK_MAX_SPEED_FACTOR = 0.25
 OFF_TRACK_SPEED_TRANSITION_SECONDS = 0.5
 
 # TRACK GENERATION
-TRACK_WIDTH_PX = 90.0
+TRACK_WIDTH_PX = 75.0
 TRACK_PADDING_PX = 8.0
 TRACK_FOOTPRINT_SCALE = 1.0
 TRACK_CORNER_RADIUS_PX = 120.0
 TRACK_SAMPLE_SPACING_PX = 6.0
 TRACK_START_STRAIGHT_LEN_PX = 180.0
-TRACK_LONG_SIDE_TEMPLATE_CHOICES = ("straight", "bell", "s_curve")
+TRACK_LONG_SIDE_TEMPLATE_CHOICES = ("straight", "bell", "s_curve", "fold")
+TRACK_SHORT_SIDE_TEMPLATE_CHOICES = ("straight", "bell")
+TRACK_LEVEL_5_LONG_SIDE_TEMPLATE_CHOICES = ("straight", "bell", "s_curve", "fold")
+TRACK_LEVEL_5_SHORT_SIDE_TEMPLATE_CHOICES = ("straight", "bell")
 TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX = 50.0
 TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX = 64.0
 TRACK_LONG_SIDE_S_AMPLITUDE_MIN_PX = 40.0
 TRACK_LONG_SIDE_S_AMPLITUDE_MAX_PX = 60.0
 TRACK_LONG_SIDE_INSET_WIDTH_CAP_RATIO = 1.35
 TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO = 0.24
+TRACK_FOLD_GAP_PX = 16.0
+TRACK_GENERATION_MAX_ATTEMPTS = 50
+# Complexity gates long-side templates from rounded rectangle to folded loop.
+TRACK_COMPLEXITY_BY_LEVEL = {
+    1: (0.00, 0.15),
+    2: (0.10, 0.35),
+    3: (0.25, 0.55),
+    4: (0.45, 0.75),
+    5: (0.65, 0.90),
+}
 
 
 # IO
@@ -116,7 +129,7 @@ LEVEL_SETTINGS = {
     },
     3: {
         "num_cars": 2,
-        "opponent_speed_cap": 0.5,
+        "opponent_speed_cap": 0.50,
         "opponent_coast_error_choices": [-30.0, 0.0, 30.0],
     },
     4: {

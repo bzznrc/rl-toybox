@@ -35,7 +35,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 | `jump` | Traversal platformer | actor-critic | active |
 | `vroom` | Continuous-control racing game | actor-critic | active |
 | `four` | Planning + self-play capstone | search + self-play | active |
-| `kick` | Multi-agent football / CTDE showcase | actor-critic / CTDE | active |
+| `kick` | Scalable 3v3 / 5v5 / 7v7 football with one kick action | actor-critic / CTDE | active |
 
 ## 3) Repository Layout and Shared Responsibilities
 
@@ -91,7 +91,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 ## 4) Logging Framework
 
-- Train-progress logs are throttled centrally in `core/logging_utils.py`.
+- Episode progress logs are throttled centrally in `core/logging_utils.py`.
 - Training emits a shared run-context header and stable single-line progress logs.
 - Bang's compact episode line is the baseline format: short labels, padded values, tab-separated fields, and reward components at the end.
 - Per-step / per-episode labels should stay compact. Prefer abbreviations such as `Len`, `Avg. Len`, `Policy L.`, and `Value L.` over long labels or collated words like `PolicyLoss`.
@@ -101,13 +101,19 @@ Per-game snapshots live in `games/<game>/README.md`.
 - Multi-word labels keep spaces for readability, for example `P1 Win` instead of `P1Win`.
 - Reward components are appended at the end of the line as one- or two-letter codes separated by spaces, for example `W:10 D:0 L:0`.
 - Periodic or occasional events use the `>>>` prefix, for example `>>> Save:`, `>>> Arena:`, `>>> Explore:`, and `>>> Warn:`.
-- PPO-style runs may include compact optimizer metrics on the main line when enabled.
+- `Ep:` lines show environment performance: episode length, reward, rolling averages, success, and optional reward components.
+- `Up:` lines show optimizer health for actor-critic methods and appear once per optimizer update, not once per episode.
+- PPO-style `Up:` fields are `Up`, `Lv`, `Steps`, `Pi`, `V`, `EV`, `Ent`, and `KL`.
+- SAC-style `Up:` fields are `Up`, `Lv`, `Steps`, `Pi`, `Q`, `Ent`, and `Alpha`.
+- `Pi` is actor / policy loss, `V` is value loss, `Q` is critic / Q loss, `Ent` is policy entropy, and `KL` is approximate KL when available.
+- `EV` is critic explained variance, computed as `1 - Var(returns - values) / Var(returns)`: near `1.0` is excellent, around `0.0` means weak or no baseline improvement, and negative means worse than predicting the mean.
 - Artifact output remains under `runs/<game>/...`.
 
 ## 5) Model Saving and Run Naming
 
 - Save artifacts under `runs/<game>/`.
 - Filenames keep the existing `<algo>_<net>_L<level>_<kind>.pth` convention.
+- Trained checkpoints and run metrics are ignored by git; each run subfolder is kept with a zero-byte `.gitkeep`.
 - Existing kept games preserve their run tags where practical so older runs stay discoverable.
 - Run tags should stay compact and reflect the active model shape.
 
@@ -121,7 +127,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 ### `core/actor_critic/`
 
 - Used by: `jump`, `vroom`, `kick`
-- Contains: PPO, A2C-style unclipped actor-critic updates, recurrent PPO support, SAC, shared actor-critic rollout machinery, role-conditioned policy heads, and centralized-critic support
+- Contains: PPO, A2C-style unclipped actor-critic updates, recurrent PPO support, SAC, shared actor-critic rollout machinery, and centralized-critic support
 
 ### `core/search_play/`
 
@@ -141,7 +147,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 ## 7) Special Areas
 
-- `kick` stays in-tree and runnable as the repo's CTDE and centralized-critic game.
+- `kick` stays in-tree and runnable as the repo's single CTDE football game, with `3v3`, `5v5`, and `7v7` team-size modes.
 - `jump` sits on the shared actor-critic path as the repo's compact single-agent traversal showcase.
 - Its centralized-critic support lives on the shared actor-critic path plus game-provided central observation metadata.
 - `vroom` sits on the actor-critic and continuous-control branch with SAC-oriented defaults.
@@ -154,4 +160,3 @@ Before merging:
 - [ ] Shared RL code is placed under the right `core/<family>/` area.
 - [ ] Curriculum-based games still follow the shared `L1` to `L5` convention, and fixed-mode board games clearly document their fixed `L1` slot.
 - [ ] Game-specific behavior changes are reflected in that game's README.
-- [ ] `python -m scripts.validate_docs` passes after README/doc edits.

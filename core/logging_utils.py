@@ -351,6 +351,52 @@ def _format_ppo_metric(value: float | None) -> str:
     return f"{float(value):.3f}"
 
 
+def log_ppo_update_line(
+    *,
+    update: int,
+    level: int,
+    steps: int,
+    policy_loss: float | None,
+    value_loss: float | None,
+    explained_variance: float | None,
+    entropy: float | None,
+    approx_kl: float | None,
+) -> None:
+    segments = [
+        _format_log_field("Up", int(update), width=5),
+        _format_log_field("Lv", int(level), width=1),
+        _format_log_field("Steps", int(steps), width=6),
+        _format_log_field("Pi", _format_metric_value(policy_loss, 3), width=7),
+        _format_log_field("V", _format_metric_value(value_loss, 3), width=7),
+        _format_log_field("EV", _format_metric_value(explained_variance, 2), width=5),
+        _format_log_field("Ent", _format_metric_value(entropy, 2), width=5),
+        _format_log_field("KL", _format_metric_value(approx_kl, 3), width=6),
+    ]
+    logging.getLogger("rl_toybox.train").info(_join_progress_segments(segments))
+
+
+def log_sac_update_line(
+    *,
+    update: int,
+    level: int,
+    steps: int,
+    actor_loss: float | None,
+    critic_loss: float | None,
+    entropy: float | None,
+    alpha: float | None,
+) -> None:
+    segments = [
+        _format_log_field("Up", int(update), width=5),
+        _format_log_field("Lv", int(level), width=1),
+        _format_log_field("Steps", int(steps), width=6),
+        _format_log_field("Pi", _format_metric_value(actor_loss, 3), width=7),
+        _format_log_field("Q", _format_metric_value(critic_loss, 3), width=7),
+        _format_log_field("Ent", _format_metric_value(entropy, 2), width=5),
+        _format_log_field("Alpha", _format_metric_value(alpha, 2), width=5),
+    ]
+    logging.getLogger("rl_toybox.train").info(_join_progress_segments(segments))
+
+
 def log_ppo_metrics_line(
     *,
     policy_loss: float | None,

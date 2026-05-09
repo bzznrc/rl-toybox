@@ -5,3 +5,6 @@ tmp_pycache*/
 .ruff_cache/
 .mypy_cache/
 .venv/
+runs/**/*.pth
+runs/**/*_metrics.json
+!runs/**/.gitkeep

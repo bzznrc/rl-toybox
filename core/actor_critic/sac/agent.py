@@ -194,6 +194,7 @@ class SACAlgorithm(Algorithm):
         q2_pi = self.critic_2(obs, policy_actions)
         q_pi = torch.min(q1_pi, q2_pi)
         actor_loss = (self.log_alpha.exp().detach() * log_prob - q_pi).mean()
+        policy_entropy = float((-log_prob.detach()).mean().item())
 
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
@@ -212,6 +213,7 @@ class SACAlgorithm(Algorithm):
             "loss": float(critic_loss.item()),
             "critic_loss": float(critic_loss.item()),
             "actor_loss": float(actor_loss.item()),
+            "entropy": float(policy_entropy),
             "alpha_loss": float(alpha_loss.item()),
             "alpha": float(self.alpha),
         }

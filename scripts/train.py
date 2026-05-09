@@ -13,6 +13,7 @@ from core.game import (
     build_algo_from_config,
     build_env_from_config,
     build_runner_from_config,
+    normalize_kick_team_size,
     parse_override_assignments,
     prepare_run,
     resolve_best_resume_level,
@@ -35,6 +36,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=None, help="Normalized training step budget")
     parser.add_argument("--episodes", type=int, default=None, help="Normalized episode/game budget")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
+    parser.add_argument(
+        "--team-size",
+        type=normalize_kick_team_size,
+        choices=[3, 5, 7],
+        default=None,
+        help="Kick team size mode: 3 vs. 3, 5 vs. 5, or 7 vs. 7",
+    )
     parser.add_argument("--render", action="store_true", help="Show Arcade window during training")
     parser.add_argument("--headless", action="store_true", help="Force headless training mode")
     parser.add_argument("--checkpoint", default=None, help="Explicit checkpoint path to load before training")
@@ -80,6 +88,8 @@ def _build_train_overrides(args: argparse.Namespace) -> dict[str, object]:
         set_nested_override(overrides, "common.episodes", int(args.episodes))
     if args.seed is not None:
         set_nested_override(overrides, "common.seed", int(args.seed))
+    if args.team_size is not None:
+        set_nested_override(overrides, "common.team_size", int(args.team_size))
     if args.save_every is not None:
         set_nested_override(overrides, "common.save_every", int(args.save_every))
     if args.checkpoint:
@@ -173,20 +183,20 @@ def main() -> None:
                         key_value_separator=":",
                     )
 
-        log_run_context(
-            "train",
-            {
-                "game": game_id,
-                "algo": algo_id,
-                "net": dict(dict(composed_config.get("algo", {})).get("config", {})).get("hidden_sizes"),
-                "critic_net": dict(dict(composed_config.get("algo", {})).get("config", {})).get("critic_hidden_sizes"),
-                "budget": dict(dict(composed_config.get("run", {})).get("train", {})).get("budget"),
-                "run": run_paths.run_dir,
-                "level": int(current_level),
-                "resume": resume_path if resume_path is not None else "scratch",
-                "render": bool(dict(composed_config.get("common", {})).get("render", False)),
-            },
-        )
+        run_context = {
+            "game": game_id,
+            "algo": algo_id,
+            "net": dict(dict(composed_config.get("algo", {})).get("config", {})).get("hidden_sizes"),
+            "critic_net": dict(dict(composed_config.get("algo", {})).get("config", {})).get("critic_hidden_sizes"),
+            "budget": dict(dict(composed_config.get("run", {})).get("train", {})).get("budget"),
+            "run": run_paths.run_dir,
+            "level": int(current_level),
+            "resume": resume_path if resume_path is not None else "scratch",
+            "render": bool(dict(composed_config.get("common", {})).get("render", False)),
+        }
+        if game_id == "kick":
+            run_context["team_size"] = dict(composed_config.get("common", {})).get("team_size")
+        log_run_context("train", run_context)
 
         metrics = runner(env, algorithm, run_paths)
         log_key_values("rl_toybox.train", metrics, prefix="Train Summary")

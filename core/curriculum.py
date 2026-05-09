@@ -151,7 +151,7 @@ def validate_curriculum_level_settings(
     extra_levels = sorted(configured_levels - expected_levels)
     if missing_levels or extra_levels:
         raise ValueError(
-            "LEVEL_SETTINGS must cover exactly MIN_LEVEL..MAX_LEVEL. "
+            "Level settings must cover exactly MIN_LEVEL..MAX_LEVEL. "
             f"missing={missing_levels}, extra={extra_levels}"
         )
 

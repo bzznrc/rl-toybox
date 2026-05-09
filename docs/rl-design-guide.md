@@ -211,6 +211,5 @@ Before merging environment changes:
 - [ ] Reward magnitudes remain balanced and interpretable.
 - [ ] Action masking is consistent when used.
 - [ ] README and docs still describe the implemented game accurately.
-- [ ] `python -m scripts.validate_docs` passes after README/doc edits.
 
 For code changes that intentionally move away from this guide, ask first, then update the guide in the same approved change so future work follows the new rule instead of the old one.

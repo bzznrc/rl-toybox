@@ -1,6 +1,6 @@
 # Kick
 
-Top-down football environment with a shared LEFT-team policy and a centralized critic during training. `kick` uses a true `7v7` max setup on both sides and is the repo's active multi-agent / CTDE showcase.
+`kick` is the repo's single football environment. It supports `3v3`, `5v5`, and `7v7` modes under one public game id, with the same simplified design in every mode: no roles, no goalkeeper slots, no stamina, no map anchors, no shot-quality flag, and one semantic `kick` action. There is no separate 7v7 football game id.
 
 ## Clip
 
@@ -9,168 +9,205 @@ Top-down football environment with a shared LEFT-team policy and a centralized c
 ## Algorithm / Network
 
 - Default algorithm: `ppo`
-- Teams: true `7v7` max on both sides
-- Roles: `GK LB RB LM CM RM CS`
-- Per-player IO: `obs=63`, `act=11`
-- Shared actor trunk: `63 -> 64 -> 64` with 4 role heads (`GK`, `DEF`, `MID`, `ATK`) ending in `-> 11`
-- Centralized critic: `454 -> 128 -> 128 -> 1`
-- Critic input: padded team state plus local agent context
+- Modes: `3v3`, `5v5`, `7v7`
+- Per-player actor IO: `obs=36`, `act=10`
+- Shared actor: `36 -> 64 -> 64 -> 10`
+- Training-only coach critic: `128 -> 128 -> 128 -> 1`
+- Shared run tag: `a64_64_c128_128`
+- All active LEFT players share one policy.
 
 ## Controls (Human)
 
 - Move: `W/A/S/D`
-- Pass: `Space`
-- Shoot: `Enter`
-- Human mode keeps automatic player switching behavior
-- Rendered overlays: `X` toggles translucent grey formation ghosts and role-zone overlays during `play-user` and `play-ai`
+- Kick: `Space` or `Enter`
+- Human mode keeps automatic player switching behavior: LEFT ball owner first, otherwise closest LEFT player to the ball.
+- Idle LEFT teammates use the same dynamic scripted logic as RIGHT opponents.
 
 ## Observation / Actions
 
-- Observation family: arcade / egocentric `SELF -> TGT -> LAND -> ALLY -> OPP -> MAP -> FLAG`, emitted once per LEFT player
-- Observation:
-  - RL mode (`train` / `eval`): `(N_left, 63)` where each row is one LEFT-player feature vector
-  - Human mode: single `(63,)` vector for the currently controlled player
-- Feature blocks in exact order:
-  - `SELF` (19): `self_x_norm self_y_norm self_vx self_vy self_theta_cos self_theta_sin self_has_ball self_stamina self_stamina_delta self_last_move_x self_last_move_y self_action_changed self_role_gk self_role_lb self_role_rb self_role_lm self_role_lcm self_role_rm self_role_lcs`
-  - `TGT` (6): `tgt_dx tgt_dy tgt_dist_norm tgt_rel_ang_sin tgt_rel_ang_cos tgt_dvx`
-  - `LAND` (11): `land_opp_goal_dx land_opp_goal_dy land_own_goal_dx land_own_goal_dy land_own_gk_dx land_own_gk_dy land_shot_line_dy land_shot_tti land_gk_dx land_gk_dy land_gk_dvy`
-  - `ALLY` (12): `ally1_dx ally1_dy ally1_dvx ally1_dvy ally2_dx ally2_dy ally2_dvx ally2_dvy ally3_dx ally3_dy ally3_dvx ally3_dvy`
-  - `OPP` (12): `opp1_dx opp1_dy opp1_dvx opp1_dvy opp2_dx opp2_dy opp2_dvx opp2_dvy opp3_dx opp3_dy opp3_dvx opp3_dvy`
-  - `MAP` (2): `map_anchor_dx map_anchor_dy`
-  - `FLAG` (1): `flag_shot_quality`
-- Role one-hot features keep the compact names `self_role_lcm` / `self_role_lcs`, which correspond to the gameplay roles `CM` / `CS`.
-- Nearest teammate/opponent selection is deterministic: sort by `(distance, player.slot_index)`
-- `ALLY` and `OPP` each encode exactly 3 nearest outfield players and always exclude the goalkeeper.
-- Reduced-opponent curriculum levels keep those 3 slots by zero-padding any missing outfield opponents.
-- Goalkeeper context stays in `LAND`; opponent-goalkeeper geometry supports shooting, while own-goalkeeper and incoming-shot features help the goalkeeper learn coverage.
-- PPO uses role-conditioned policy heads: `GK`, `DEF` (`LB/RB`), `MID` (`LM/CM/RM`), and `ATK` (`CS`).
-- Actions: `Discrete(11)` (`ACTION_NAMES`, ordered)
-  - `0 stay`
-  - `1 move_n`
-  - `2 move_ne`
-  - `3 move_e`
-  - `4 move_se`
-  - `5 move_s`
-  - `6 move_sw`
-  - `7 move_w`
-  - `8 move_nw`
-  - `9 pass`
-  - `10 shoot`
+- Observation family: `SELF -> TGT -> LAND -> ALLY -> OPP`
+- `TGT` means the ball.
+- RL mode returns one row per active LEFT player: `(3, 36)`, `(5, 36)`, or `(7, 36)`.
+- Human mode returns one `(36,)` vector for the currently controlled LEFT player.
+- `ally1` / `ally2` are the nearest two active LEFT teammates, sorted by `(distance_to_observer, slot_index)`.
+- `opp1` / `opp2` / `opp3` are the nearest three active RIGHT opponents, sorted by `(distance_to_observer, slot_index)`.
+- Missing nearest slots are zero-padded.
 
-In RL mode the environment expects one action per LEFT player each decision. Each decision is held for `12` physics frames, so the policy acts five times per rendered second at the standard `60 FPS`.
+Feature order:
+
+1. `self_x_norm`
+2. `self_y_norm`
+3. `self_vx`
+4. `self_vy`
+5. `self_theta_cos`
+6. `self_theta_sin`
+7. `self_has_ball`
+8. `tgt_dx`
+9. `tgt_dy`
+10. `tgt_dist_norm`
+11. `tgt_rel_ang_sin`
+12. `tgt_rel_ang_cos`
+13. `tgt_dvx`
+14. `tgt_dvy`
+15. `tgt_owner_left`
+16. `tgt_owner_right`
+17. `land_opp_goal_dx`
+18. `land_opp_goal_dy`
+19. `land_own_goal_dx`
+20. `land_own_goal_dy`
+21. `ally1_dx`
+22. `ally1_dy`
+23. `ally2_dx`
+24. `ally2_dy`
+25. `opp1_dx`
+26. `opp1_dy`
+27. `opp1_dvx`
+28. `opp1_dvy`
+29. `opp2_dx`
+30. `opp2_dy`
+31. `opp2_dvx`
+32. `opp2_dvy`
+33. `opp3_dx`
+34. `opp3_dy`
+35. `opp3_dvx`
+36. `opp3_dvy`
+
+`tgt_owner_left` is `1.0` while LEFT has the ball, and `tgt_owner_right` is `1.0` while RIGHT has the ball. A free ball sets both owner flags to `0.0`; `self_has_ball` is `1.0` only for the actual carrier.
+
+Actions: `Discrete(10)` (`ACTION_NAMES`, ordered)
+
+- `0 stay`
+- `1 move_n`
+- `2 move_ne`
+- `3 move_e`
+- `4 move_se`
+- `5 move_s`
+- `6 move_sw`
+- `7 move_w`
+- `8 move_nw`
+- `9 kick`
+
+`kick` is valid only for the current ball owner. Action masking is applied in training and evaluation, with mask shape `(active_left_players, 10)`.
 
 ## Environment Notes
 
-### Possession and Credit Assignment
+### Team Sizes
 
-- Physical owner comes from `ball_owner`.
-- Effective possession uses the current owner when owned and `last_touch_team` when the ball is free.
-- Formation and anchor behavior use that same effective-possession interpretation so the team shape does not snap while the ball is airborne.
-- Controlled progress pays only stable LEFT physical possession:
-  - the same LEFT owner must hold the ball for `3` consecutive physics frames
-  - only positive forward ball-depth gains are rewarded
-  - the progress frontier resets on any owner or team change
+- `TEAM_SIZE_CHOICES = (3, 5, 7)`
+- Default team size is `3`.
+- Active LEFT players equal the selected team size.
+- Active RIGHT players equal the selected team size at full curriculum level; earlier levels can use fewer active RIGHT players.
+- Inactive slots exist only in the coach critic representation and have `active=0.0`.
 
-### Ghost / Ideal Position
+### Starts
 
-- Each LEFT player keeps a defensive base at its role `home_x` / `home_y`.
-- When LEFT is effectively attacking, the ideal anchor shifts forward on `x` by a small role-specific amount; when LEFT is defending, the ideal `x` returns to `home_x`.
-- `y` shifts only modestly with normalized ball lane so the whole shape can slide up or down without becoming twitchy.
-- The goalkeeper is the exception: its ghost/role-zone anchor stays fixed just outside the goal itself, with the goalkeeper zone grazing the goal edge.
-- The displayed grey ghost and player-to-ghost line use the same smoothed anchor that also feeds `map_anchor_*` and the role-zone penalty.
-- Role zone uses one shared outfield anchor ellipse plus a dedicated goalkeeper ellipse: no penalty inside the tolerance zone, then a small progressive penalty outside it with more freedom on `x` than `y`.
+Fixed positions are used only at reset / kickoff. The spawn layouts are simple symmetric templates for 3, 5, and 7 players, named only by `slot_index`. After kickoff, players choose dynamic targets from the ball, owner, teammates, opponents, and goals.
 
-### Pass / Shoot
+### Scripted Players
 
-- `flag_shot_quality` is a continuous `0..1` cue for the ball carrier: it rises when the carrier is closer to the opponent goal and broadly facing it. For LEFT, the viable facing band is the goal-facing diagonal/straight set (`NE`, `E`, `SE`); the mirrored band applies for RIGHT.
-- `pass` chooses a safe teammate broadly aligned with the carrier's current facing, otherwise it kicks along the current facing direction. The pass assist can bend toward a teammate, but it no longer forces every pass forward.
-- `shoot` is a single semantic action. The environment bends strongly toward an open goal-mouth lane using opponent-goalkeeper geometry whenever `flag_shot_quality` is non-zero, with higher quality tightening the angle and spread so diagonal goal-facing shots can still be angled into the net.
-- The ball carrier shows a small shot-quality bar above the player: it spans the same width as the player and fills from `0..1` using the player's fill color at 50% transparency.
+The same dynamic scripted-team logic drives RIGHT opponents and idle LEFT teammates in human mode. The human-controlled LEFT player is never overridden.
 
-### Scripted Team
+Temporary jobs are recomputed from live state whenever the level reaction cadence allows it:
 
-- Scripted outfield players use a compact rule set: advance in possession, pass when pressured, and shoot once shot quality clears a slightly randomized per-possession threshold.
-- When pressured with a pass available, the scripted carrier passes most of the time and occasionally commits to a short diagonal dribble burst to break deadlocks.
-- Off-ball teammates keep moving: in possession they spread into simple support lanes, and out of possession one hunter presses while the rest drop into compact defensive positions between the ball and their goal.
-- Goalkeepers defend on a shallow semicircle in front of the goal: they step out most near the center line, move back toward the line near the posts, and track the expected shot lane with smoothing.
-- If a goalkeeper is already in a good covering position between the ball and goal, it holds that position until the target moves outside a small hysteresis band.
+- `carrier`: current team player with the ball
+- `support_a`: forward / diagonal support option
+- `support_b`: level or safer support option
+- `stopper`: closest scripted defender pressing the opponent carrier
+- `cover_a`: lane cover between ball / carrier and own goal
+- `cover_b`: dangerous-opponent mark or nearby passing-space cover
+
+These are temporary jobs, not roles. The planner uses target points, teammate separation, mild opponent avoidance, and small possession-style variation (`direct`, `wide_upper`, `wide_lower`, `patient`).
+
+### Kick
+
+- `kick` is one semantic action. It can behave like a pass, shot, or clearance depending on facing and context.
+- If a safe teammate is broadly aligned with the carrier's facing direction, the kick is biased toward that teammate.
+- Otherwise, if the carrier is facing broadly toward the opponent goal, the kick is biased toward the opponent goal center.
+- Otherwise, the ball is kicked along the carrier's current facing direction.
+
+### Scoring
+
+- A goal is scored when the ball crosses the opponent goal line inside the goal mouth.
+- `kick` is useful but not required.
+- Dribble goals are allowed.
+- Kicks, deflections, loose balls, and dribbles can all score if the crossing is inside the goal mouth.
 
 ### Centralized Critic State
 
-- The centralized state is fixed-size and robust to team-size changes.
-- It pads observations up to `MAX_LEFT_PLAYERS=7`.
-- `central_mask` distinguishes present players from padded slots.
-- `CENTRAL_OBS_DIM = (7 * 63) + 7 + 6 = 454`.
+- The centralized critic receives a training-only `128` input coach view.
+- The coach view is a compact global football snapshot, not a concatenation of actor observations.
+- The actor still runs independently for each active LEFT player using only that player's local `36` input observation.
+- LEFT is encoded as `7 x 8`.
+- RIGHT is encoded as `7 x 8`.
+- Each player slot uses: `x_norm`, `y_norm`, `vx`, `vy`, `theta_cos`, `theta_sin`, `has_ball`, `active`.
+- Ball state contributes absolute normalized position, velocity, LEFT / RIGHT / free ownership flags, and ball-to-goal landmarks.
+- Match state contributes normalized time, score, level, and team size.
+- `CENTRAL_OBS_DIM = 128`.
+- `state_team_size_norm = active_left_players / 7.0`.
 
-### Action Masking
+Coach feature order:
 
-- If `self_has_ball == 0`, `pass` and `shoot` are invalid.
-- Masking is applied in both training and evaluation.
-- Eval uses masked action selection, so invalid kicks are not chosen.
+- `left1..left7`: each slot in player-feature order above
+- `right1..right7`: each slot in player-feature order above
+- `tgt`: `x_norm`, `y_norm`, `vx`, `vy`, `owner_left`, `owner_right`, `owner_free`
+- `land`: `ball_to_opp_goal_dx`, `ball_to_opp_goal_dy`, `ball_to_own_goal_dx`, `ball_to_own_goal_dy`
+- `state`: `time_norm`, `left_score_norm`, `right_score_norm`, `level_norm`, `team_size_norm`
 
 ### Step Contract
 
 - `env.step(...)` returns a scalar team reward.
-- Per-player rewards are always exposed in `info["reward_vec"]`.
+- Per-player rewards are exposed in `info["reward_vec"]` with shape `(active_left_players,)`.
 - Realized step contributions are exposed in `info["reward_breakdown"]`.
+- Episode totals are exposed at terminal steps in `info["reward_components"]` as `G`, `C`, `P`, `B`, and `TS` for the training log.
 
 ### Diagnostics
 
-- Training prints PPO diagnostics after episodes without per-reward-term suffixes.
-- `KICK_DEBUG_SANITY=1` enables runtime checks for observation shape, masked invalid kicks, and reward-vector consistency.
+- `KICK_DEBUG_SANITY=1` enables runtime checks for observation shape, masked invalid kicks, centralized state shape, and reward-vector consistency.
 
 ## Rewards (Training)
 
-Reward terms are intentionally kept internal to the environment and are not rendered in the bottom bar or appended to training logs:
+Reward terms:
 
-- `G`: team score bonus, total `+10.0`, normalized across LEFT players
-- `C`: team concede penalty, total `-5.0`, normalized across LEFT players
+- `G`: score bonus, total `+10.0`, normalized across active LEFT players
+- `C`: concede penalty, total `-5.0`, normalized across active LEFT players
 - `P`: controlled forward ball progress for the current LEFT owner after stable physical possession
-  - requires the same LEFT owner for `3` consecutive physics frames
-  - only pays positive forward gains and resets its frontier on any owner/team change
-  - `P = 1.0 * clip(max(0, ball_depth - frontier), 0.0, 0.01)`
-- `B`: bounded ball-support shaping for one active LEFT outfielder near the ball / active play
-  - picks the nearest LEFT outfielder to the ball; if LEFT owns the ball, the carrier is excluded so the reward goes to a support runner
-  - target support distance is `2.5 * TILE_SIZE`, so collapsing directly onto the ball is not rewarded
-  - `B = 0.01 * clip(prev_error - curr_error, -0.25, 0.25)` where `error = abs(dist_to_ball - target_dist)`
-- `TS`: team-shape anti-clumping penalty for LEFT outfield players
-  - uses each outfielder's nearest-teammate spacing shortfall against `TEAM_SHAPE_MIN_DIST_NORM = 0.065`
-  - `TS_i = -clip(0.001 * s + 0.01 * s^2, 0.0, 0.00006)` where `s = max(0, min_dist_norm - nearest_teammate_dist_norm)`
-- `RZ`: soft role-zone penalty based on distance from the role anchor
-  - disabled for the LEFT ball carrier and the active closest LEFT outfield challenger when LEFT is out of possession
-  - `d = sqrt((dx / tol_x)^2 + (dy / tol_y)^2)` using `map_anchor_*`-equivalent offsets
-  - inside zone (`d <= 1.0`): `0.0`
-  - outside zone: `-(0.000015 * e + 0.000015 * e^2)` where `e = d - 1.0`
+- `B`: bounded ball-support shaping for one useful non-carrier support runner near the ball
+- `TS`: team-shape anti-clumping penalty across LEFT players
+
+There is no role-zone reward, map-anchor reward, explicit pass bonus, turnover penalty, stamina reward / penalty, goalkeeper exception, or shot-quality reward.
 
 ## Curriculum (Train)
 
-- Shared 5-level curriculum progression from `core/curriculum.py`
-- Promotion settings live in `games/kick/config.py` under `CURRICULUM_PROMOTION`
-- LEFT always stays at `7` RL-controlled players
-- Opponent scaling:
-  - Level 1: `players_opponent=1`, `goals_size_scale=3`, `enemy_stamina_scale=0.25`, `entropy_coef=0.02`, `start_possession=RND_LEFT`
-  - Level 2: `players_opponent=3`, `goals_size_scale=2.25`, `enemy_stamina_scale=0.5`, `entropy_coef=0.015`, `start_possession=RND_LEFT`
-  - Level 3: `players_opponent=5`, `goals_size_scale=1.75`, `enemy_stamina_scale=0.625`, `entropy_coef=0.01`, `start_possession=CEN`
-  - Level 4: `players_opponent=7`, `goals_size_scale=1.25`, `enemy_stamina_scale=0.75`, `entropy_coef=0.0075`, `start_possession=CEN`
-  - Level 5: `players_opponent=7`, `goals_size_scale=1`, `enemy_stamina_scale=1`, `entropy_coef=0.005`, `start_possession=CEN`
+- Shared 5-level curriculum progression from `core/curriculum.py`.
+- `LEVEL_SCRIPTED_SETTINGS` is the single curriculum source of truth.
+- Each level owns the scripted knobs plus `right_players`, where `right_players` maps team size to active RIGHT count.
+- The env expands that table into the per-team-size structure required by the shared curriculum code; it is not a second place to tune curriculum.
+- There is no separate difficulty object, enum, or easy / medium / hard branch.
+- LEFT always uses the selected team size and level-5 scripted knobs for idle human-mode teammates.
+- RIGHT scales by level up to the selected team size.
 
-`start_possession` supports `CEN` for a free center-ball start, `RND_LEFT` for a random LEFT outfielder start, and `RND_RIGHT` for a random RIGHT outfielder start.
-In levels `1` and `2`, `RND_LEFT` seeds possession on a random LEFT outfield player and excludes the goalkeeper.
-Level `4` is the first full `7v7` game; level `5` keeps the same full role list with the regular goal and stamina modifiers.
+3v3 RIGHT counts by level: `1, 1, 2, 3, 3`
 
-An episode counts as a success if LEFT scores more than it concedes.
+5v5 RIGHT counts by level: `2, 3, 4, 5, 5`
+
+7v7 RIGHT counts by level: `3, 4, 5, 6, 7`
+
+Kickoff starts from a free center ball, and both scripted teams begin moving immediately. An episode counts as a success if LEFT scores more than it concedes.
 
 ## Run Commands
 
 ```bash
-rl-toybox-train --game kick
-rl-toybox-play-ai --game kick --render
-rl-toybox-play-user --game kick
-python -m scripts.train --game kick
-python -m scripts.play_ai --game kick --render
-python -m scripts.play_user --game kick
+rl-toybox-train --game kick --team-size 3
+rl-toybox-train --game kick --team-size 5
+rl-toybox-train --game kick --team-size 7
+
+rl-toybox-play-ai --game kick --team-size 3 --render
+rl-toybox-play-ai --game kick --team-size 5 --render
+rl-toybox-play-ai --game kick --team-size 7 --render
+
+rl-toybox-play-user --game kick --team-size 3
+rl-toybox-play-user --game kick --team-size 5
+rl-toybox-play-user --game kick --team-size 7
 ```
 
-When `--level` is omitted, `train` starts at `L1` and `play-user` / `play-ai` default to `L5`.
-
-See `games/kick/config.py` and `games/kick/env.py` for the CTDE runtime, rewards, curriculum settings, and training defaults. Kick's game-wide actor and critic sizes live in `DEFAULT_MODEL_CONFIG["hidden_sizes"]` and `DEFAULT_MODEL_CONFIG["critic_hidden_sizes"]`, its PPO-specific extras live in `ALGO_CONFIG_OVERRIDES["ppo"]`, its level-specific entropy schedule lives in `LEVEL_SETTINGS[*]["entropy_coef"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.
+When `--team-size` is omitted, Kick defaults to `3`. The CLI also accepts readable labels such as `3v3`, `5v5`, and `"7 vs. 7"`. When `--level` is omitted, `train` starts at `L1` and `play-user` / `play-ai` default to `L5`.

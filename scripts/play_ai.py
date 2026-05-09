@@ -10,6 +10,7 @@ from core.game import (
     apply_seed_from_config,
     build_algo_from_config,
     build_env_from_config,
+    normalize_kick_team_size,
     parse_override_assignments,
     prepare_run,
     resolve_play_model_path,
@@ -36,6 +37,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--episodes", type=int, default=10, help="Number of eval episodes")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
+    parser.add_argument(
+        "--team-size",
+        type=normalize_kick_team_size,
+        choices=[3, 5, 7],
+        default=None,
+        help="Kick team size mode: 3 vs. 3, 5 vs. 5, or 7 vs. 7",
+    )
     parser.add_argument(
         "--level",
         type=int,
@@ -64,9 +72,31 @@ def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
     set_nested_override(overrides, "common.episodes", int(args.episodes))
     if args.seed is not None:
         set_nested_override(overrides, "common.seed", int(args.seed))
+    if args.team_size is not None:
+        set_nested_override(overrides, "common.team_size", int(args.team_size))
     if args.checkpoint:
         set_nested_override(overrides, "common.checkpoint_path", str(Path(args.checkpoint)))
     return overrides
+
+
+def _missing_model_message(
+    *,
+    game_id: str,
+    algo_id: str,
+    run_name: str,
+    level: int,
+    team_size: object | None,
+    original_error: Exception,
+) -> str:
+    if str(game_id).strip().lower() != "kick":
+        return str(original_error)
+    size = normalize_kick_team_size(team_size)
+    return (
+        f"No trained Kick model was found for level {int(level)} "
+        f"({algo_id}_{run_name}_L{int(level)}). The selected mode is {size} vs. {size}. "
+        f"Train the shared Kick model first with: "
+        f"python -m scripts.train --game kick --team-size {size} --level {int(level)}"
+    )
 
 
 def main() -> None:
@@ -80,7 +110,6 @@ def main() -> None:
     game_id = str(dict(composed_config.get("game", {})).get("id", args.game))
     algo_id = str(dict(composed_config.get("algo", {})).get("id", args.algo or ""))
     apply_seed_from_config(composed_config)
-    algorithm = build_algo_from_config(composed_config)
 
     explicit_checkpoint = dict(composed_config.get("common", {})).get("checkpoint_path")
     if explicit_checkpoint:
@@ -88,23 +117,36 @@ def main() -> None:
         if not model_path.exists():
             raise FileNotFoundError(f"Checkpoint not found at '{model_path}'.")
     else:
-        model_path = resolve_play_model_path(run_paths, str(args.model).strip().lower(), int(level))
+        try:
+            model_path = resolve_play_model_path(run_paths, str(args.model).strip().lower(), int(level))
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                _missing_model_message(
+                    game_id=game_id,
+                    algo_id=algo_id,
+                    run_name=str(dict(composed_config.get("run", {})).get("name", "")),
+                    level=int(level),
+                    team_size=dict(composed_config.get("common", {})).get("team_size"),
+                    original_error=exc,
+                )
+            ) from None
     composed_config["common"]["checkpoint_path"] = str(model_path)
+    algorithm = build_algo_from_config(composed_config)
     algorithm.load(str(model_path))
 
     env = build_env_from_config(composed_config, mode="eval", level=int(level))
     try:
-        log_run_context(
-            "play-ai",
-            {
-                "game": game_id,
-                "algo": algo_id,
-                "model": model_path,
-                "episodes": int(dict(composed_config.get("common", {})).get("episodes", args.episodes)),
-                "level": int(level),
-                "render": bool(dict(composed_config.get("common", {})).get("render", False)),
-            },
-        )
+        run_context = {
+            "game": game_id,
+            "algo": algo_id,
+            "model": model_path,
+            "episodes": int(dict(composed_config.get("common", {})).get("episodes", args.episodes)),
+            "level": int(level),
+            "render": bool(dict(composed_config.get("common", {})).get("render", False)),
+        }
+        if game_id == "kick":
+            run_context["team_size"] = dict(composed_config.get("common", {})).get("team_size")
+        log_run_context("play-ai", run_context)
         result = run_eval(
             env,
             algorithm,

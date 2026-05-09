@@ -25,10 +25,12 @@ The shared flow covers:
 - `kick`
 
 `four` is fixed-mode. It can use the same launch configs safely because the CLI clamps fixed-mode games to `L1` and does not create a curriculum.
+`kick` uses the additional `kickTeamSize` selector for `3 vs. 3`, `5 vs. 5`, or `7 vs. 7`; non-Kick games ignore that argument.
 
 ## Levels And Modes
 
 - The `trainLevel` and `playLevel` inputs expose `L1` through `L5`.
+- The `kickTeamSize` input exposes Kick's `3 vs. 3`, `5 vs. 5`, and `7 vs. 7` modes.
 - Training defaults to `L1`.
 - `play-user`, `play-ai`, and `capture-demo` default to `L5`.
 - Curriculum games use those levels normally.
@@ -47,5 +49,5 @@ The shared default is now:
 
 ## Adding A New Game Later
 
-- If a new curriculum-based game follows the shared ladder, add it to `activeGame` and make sure its config exposes `LEVEL_SETTINGS[1..5]`.
+- If a new curriculum-based game follows the shared ladder, add it to `activeGame` and make sure its config exposes a clear per-level settings table for `L1` through `L5`.
 - If a new fixed-mode game is added, include it in `activeGame` and add its id to `FIXED_LEVEL_GAME_IDS` in `core/game.py`.

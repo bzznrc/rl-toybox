@@ -97,8 +97,8 @@ class PreparedRun:
 
 
 def build_env_factory(env_type: type[Env]) -> Callable[..., Env]:
-    def make_env(mode: str, render: bool, level: int | None = None) -> Env:
-        return env_type(mode=mode, render=render, level=level)
+    def make_env(mode: str, render: bool, level: int | None = None, **env_kwargs: object) -> Env:
+        return env_type(mode=mode, render=render, level=level, **env_kwargs)
 
     return make_env
 
@@ -751,6 +751,32 @@ def _normalize_device(device: str) -> str:
     raise ValueError(f"Unsupported device '{device}'. Expected cpu, cuda, or auto.")
 
 
+def normalize_kick_team_size(value: object | None) -> int:
+    from games.kick.config import DEFAULT_TEAM_SIZE, TEAM_SIZE_CHOICES, TEAM_SIZE_LABELS
+
+    choices = tuple(int(size) for size in TEAM_SIZE_CHOICES)
+    labels_by_size = {int(size): str(label) for size, label in dict(TEAM_SIZE_LABELS).items()}
+    if value is None:
+        return int(DEFAULT_TEAM_SIZE)
+    raw_value = str(value).strip().lower()
+    compact = raw_value.replace(" ", "").replace("-", "").replace("_", "").replace(".", "")
+    accepted: dict[str, int] = {}
+    for size in choices:
+        label = str(labels_by_size.get(int(size), f"{int(size)} vs. {int(size)}")).strip().lower()
+        accepted[str(size)] = int(size)
+        accepted[f"{size}v{size}"] = int(size)
+        accepted[f"{size}vs{size}"] = int(size)
+        accepted[f"{size}versus{size}"] = int(size)
+        accepted[label.replace(" ", "").replace("-", "").replace("_", "").replace(".", "")] = int(size)
+    if compact in accepted:
+        return int(accepted[compact])
+    digits = [char for char in compact if char.isdigit()]
+    if len(digits) == 2 and digits[0] == digits[1] and int(digits[0]) in choices:
+        return int(digits[0])
+    valid = ", ".join(str(labels_by_size.get(int(size), f"{int(size)} vs. {int(size)}")) for size in choices)
+    raise ValueError(f"Unsupported Kick team size '{value}'. Expected {valid}.")
+
+
 def _runtime_uses_gpu(device: str) -> bool:
     normalized = _normalize_device(device)
     if normalized == "cuda":
@@ -1005,6 +1031,8 @@ def compose_run_config(
     common["headless"] = bool(common.get("headless", False))
     if bool(common["headless"]):
         common["render"] = False
+    if spec.game_id == "kick":
+        common["team_size"] = normalize_kick_team_size(common.get("team_size", 3))
     composed["common"] = common
 
     algo_block = dict(composed.setdefault("algo", {}))
@@ -1098,7 +1126,10 @@ def build_env_from_config(
     resolved_render = bool(common.get("render", False) if render is None else render)
     if bool(common.get("headless", False)):
         resolved_render = False
-    return spec.make_env(mode=resolved_mode, render=bool(resolved_render), level=level)
+    env_kwargs: dict[str, object] = {}
+    if game_id == "kick" and common.get("team_size") is not None:
+        env_kwargs["team_size"] = normalize_kick_team_size(common["team_size"])
+    return spec.make_env(mode=resolved_mode, render=bool(resolved_render), level=level, **env_kwargs)
 
 
 def _resolve_algo_runtime_config(config: dict[str, object]) -> tuple[str, int, Space, dict[str, object]]:
@@ -1382,6 +1413,7 @@ __all__ = [
     "compose_run_config",
     "get_algo_spec",
     "get_game_spec",
+    "normalize_kick_team_size",
     "parse_override_assignments",
     "prepare_run",
     "set_nested_override",

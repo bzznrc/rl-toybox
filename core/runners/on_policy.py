@@ -15,6 +15,8 @@ from core.io.runs import RunPaths, write_metrics
 from core.logging_utils import (
     format_reward_components,
     log_on_policy_episode_line,
+    log_ppo_metrics_line,
+    log_ppo_update_line,
     log_save_line,
     should_emit_train_progress_log,
 )
@@ -69,11 +71,15 @@ def _apply_level_entropy_coef(algorithm: Algorithm, env: Env, level: int) -> flo
     return entropy_value
 
 
-def _should_log_ppo_metrics_line(env: Env) -> bool:
-    flag = getattr(env, "log_ppo_metrics_line", None)
-    if flag is None:
-        return True
-    return bool(flag)
+def _metric_float(metrics: dict[str, float], key: str) -> float | None:
+    value = metrics.get(str(key))
+    if isinstance(value, (int, float, np.floating)):
+        return float(value)
+    return None
+
+
+def _should_log_ppo_debug_metrics(env: Env) -> bool:
+    return bool(getattr(env, "log_ppo_metrics_line", False))
 
 
 def run_on_policy_training(
@@ -95,8 +101,8 @@ def run_on_policy_training(
     best_avg_success_by_level: dict[int, float] = {}
     total_steps = 0
     total_episodes = 0
+    total_updates = 0
     last_loss = 0.0
-    last_ppo_update_metrics: dict[str, float] | None = None
     current_level = infer_current_level(env, default=1)
     _apply_level_entropy_coef(algorithm, env, int(current_level))
 
@@ -194,8 +200,6 @@ def run_on_policy_training(
                 components_text = format_reward_components(info.get("reward_components"))
                 best_avg_for_level = best_avg_reward_by_level.get(int(episode_level))
                 if should_emit_train_progress_log("on_policy_progress"):
-                    cached_metrics = last_ppo_update_metrics or {}
-                    include_policy_metrics = _should_log_ppo_metrics_line(env)
                     log_on_policy_episode_line(
                         episode=int(total_episodes),
                         level=int(episode_level),
@@ -210,31 +214,6 @@ def run_on_policy_training(
                         success=int(episode_success),
                         avg_success=avg_success_ep,
                         best_avg_label=f"BR{int(episode_level)}",
-                        policy_loss=(
-                            float(cached_metrics["policy_loss"])
-                            if include_policy_metrics and "policy_loss" in cached_metrics
-                            else None
-                        ),
-                        value_loss=(
-                            float(cached_metrics["value_loss"])
-                            if include_policy_metrics and "value_loss" in cached_metrics
-                            else None
-                        ),
-                        entropy=(
-                            float(cached_metrics["entropy"])
-                            if include_policy_metrics and "entropy" in cached_metrics
-                            else None
-                        ),
-                        approx_kl=(
-                            float(cached_metrics["approx_kl"])
-                            if include_policy_metrics and "approx_kl" in cached_metrics
-                            else None
-                        ),
-                        clip_frac=(
-                            float(cached_metrics["clip_frac"])
-                            if include_policy_metrics and "clip_frac" in cached_metrics
-                            else None
-                        ),
                         reward_components=components_text,
                     )
                 obs = env.reset()
@@ -246,12 +225,25 @@ def run_on_policy_training(
         if "loss" in metrics:
             last_loss = float(metrics["loss"])
         if metrics:
-            last_ppo_update_metrics = {
-                str(key): float(value)
-                for key, value in metrics.items()
-                if str(key) in {"policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac"}
-                and isinstance(value, (int, float, np.floating))
-            }
+            total_updates += 1
+            log_ppo_update_line(
+                update=int(total_updates),
+                level=int(current_level),
+                steps=int(total_steps),
+                policy_loss=_metric_float(metrics, "policy_loss"),
+                value_loss=_metric_float(metrics, "value_loss"),
+                explained_variance=_metric_float(metrics, "explained_variance"),
+                entropy=_metric_float(metrics, "entropy"),
+                approx_kl=_metric_float(metrics, "approx_kl"),
+            )
+            if _should_log_ppo_debug_metrics(env):
+                log_ppo_metrics_line(
+                    policy_loss=_metric_float(metrics, "policy_loss"),
+                    value_loss=_metric_float(metrics, "value_loss"),
+                    entropy=_metric_float(metrics, "entropy"),
+                    approx_kl=_metric_float(metrics, "approx_kl"),
+                    clip_frac=_metric_float(metrics, "clip_frac"),
+                )
 
         if iteration % int(config.checkpoint_every_iterations) == 0:
             checkpoint_path = run_paths.model_path(level=int(current_level), kind="check")
@@ -274,6 +266,7 @@ def run_on_policy_training(
     best_avg_reward = max(best_avg_reward_by_level.values()) if best_avg_reward_by_level else float("-inf")
     final_metrics: dict[str, float | int] = {
         "iterations": int(config.max_iterations),
+        "updates": int(total_updates),
         "total_steps": total_steps,
         "total_episodes": total_episodes,
         "best_avg_reward": best_avg_reward if best_avg_reward > float("-inf") else 0.0,

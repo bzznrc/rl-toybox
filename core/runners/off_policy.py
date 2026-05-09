@@ -15,6 +15,7 @@ from core.logging_utils import (
     log_episode_line,
     log_periodic_event_line,
     log_save_line,
+    log_sac_update_line,
     should_emit_train_progress_log,
 )
 from core.runners.env_access import (
@@ -36,6 +37,17 @@ class OffPolicyConfig:
     checkpoint_every_steps: int = 50_000
     reward_window: int = 100
     min_episodes_for_stats: int = 100
+
+
+def _metric_float(metrics: dict[str, float], key: str) -> float | None:
+    value = metrics.get(str(key))
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _has_sac_update_metrics(metrics: dict[str, float]) -> bool:
+    return "actor_loss" in metrics and "critic_loss" in metrics
 
 
 def run_off_policy_training(
@@ -65,6 +77,7 @@ def run_off_policy_training(
     best_avg_success_by_level: dict[int, float] = {}
     update_attempts = 0
     updates = 0
+    actor_critic_updates = 0
     last_loss = 0.0
     current_level = infer_current_level(env, default=1)
 
@@ -106,6 +119,17 @@ def run_off_policy_training(
                 if "loss" in metrics:
                     last_loss = float(metrics["loss"])
                     updates += 1
+                if _has_sac_update_metrics(metrics):
+                    actor_critic_updates += 1
+                    log_sac_update_line(
+                        update=int(actor_critic_updates),
+                        level=int(current_level),
+                        steps=int(total_steps),
+                        actor_loss=_metric_float(metrics, "actor_loss"),
+                        critic_loss=_metric_float(metrics, "critic_loss"),
+                        entropy=_metric_float(metrics, "entropy"),
+                        alpha=_metric_float(metrics, "alpha"),
+                    )
 
         if total_steps % int(config.checkpoint_every_steps) == 0 and total_episodes >= min_episodes_for_stats:
             checkpoint_path = run_paths.model_path(level=int(current_level), kind="check")

@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical, Normal
 
+from core.actor_critic.metrics import explained_variance
 from core.actor_critic.ppo.networks import ActorCritic, RecurrentActorCritic, RecurrentState
 from core.actor_critic.ppo.rollout import RolloutBuffer
 from core.algorithms.base import Algorithm
@@ -819,14 +820,39 @@ class PPOAlgorithm(Algorithm):
         mean_entropy = entropy_sum / float(denom)
         mean_approx_kl = approx_kl_sum / float(denom)
         mean_clip_frac = clip_frac_sum / float(denom)
+        with torch.no_grad():
+            _, final_values = self.model(obs_tensor, critic_obs=critic_obs_tensor)
+        critic_ev = explained_variance(returns_flat, final_values.detach().cpu().numpy())
         return {
             "loss": mean_loss,
             "policy_loss": mean_policy_loss,
             "value_loss": mean_value_loss,
+            "explained_variance": critic_ev,
             "entropy": mean_entropy,
             "approx_kl": mean_approx_kl,
             "clip_frac": mean_clip_frac,
         }
+
+    def _recurrent_explained_variance(self, chunks: list[RecurrentChunk]) -> float:
+        if not chunks:
+            return 0.0
+        returns_flat: list[np.ndarray] = []
+        values_flat: list[np.ndarray] = []
+        with torch.no_grad():
+            for chunk in chunks:
+                obs_array = np.asarray(chunk.observations, dtype=np.float32).reshape(
+                    1,
+                    -1,
+                    int(self.config.obs_dim),
+                )
+                obs_tensor = torch.as_tensor(obs_array, dtype=torch.float32, device=self.device)
+                initial_state_tensor = self._stack_recurrent_states([chunk.initial_state])
+                _, values, _ = self.model.forward_sequence(obs_tensor, state=initial_state_tensor)
+                values_flat.append(values.detach().cpu().numpy().reshape(-1))
+                returns_flat.append(np.asarray(chunk.returns, dtype=np.float32).reshape(-1))
+        if not returns_flat or not values_flat:
+            return 0.0
+        return explained_variance(np.concatenate(returns_flat, axis=0), np.concatenate(values_flat, axis=0))
 
     def _build_recurrent_chunks(
         self,
@@ -1059,6 +1085,7 @@ class PPOAlgorithm(Algorithm):
             "loss": total_loss / float(denom),
             "policy_loss": policy_loss_sum / float(denom),
             "value_loss": value_loss_sum / float(denom),
+            "explained_variance": self._recurrent_explained_variance(chunks),
             "entropy": entropy_sum / float(denom),
             "approx_kl": approx_kl_sum / float(denom),
             "clip_frac": clip_frac_sum / float(denom),

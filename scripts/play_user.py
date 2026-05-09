@@ -10,6 +10,7 @@ from core.game import (
     build_algo_from_config,
     build_env_from_config,
     compose_run_config,
+    normalize_kick_team_size,
     parse_override_assignments,
     set_nested_override,
 )
@@ -27,6 +28,13 @@ def parse_args() -> argparse.Namespace:
         help="Difficulty selector (defaults to L5 for curriculum games; fixed-mode games use L1)",
     )
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
+    parser.add_argument(
+        "--team-size",
+        type=normalize_kick_team_size,
+        choices=[3, 5, 7],
+        default=None,
+        help="Kick team size mode: 3 vs. 3, 5 vs. 5, or 7 vs. 7",
+    )
     parser.add_argument("--headless", action="store_true", help="Disable rendering")
     parser.add_argument(
         "--set",
@@ -45,6 +53,8 @@ def _build_play_overrides(args: argparse.Namespace) -> dict[str, object]:
     set_nested_override(overrides, "common.headless", bool(args.headless))
     if args.seed is not None:
         set_nested_override(overrides, "common.seed", int(args.seed))
+    if args.team_size is not None:
+        set_nested_override(overrides, "common.team_size", int(args.team_size))
     return overrides
 
 
@@ -60,6 +70,13 @@ def _attach_play_user_ai_opponent(env: object, composed_config: dict[str, object
     run_paths = resolve_run_paths(game_id, algo_id, run_name, create=True)
     model_path = run_paths.model_path(int(level), "best")
     if not model_path.exists():
+        if game_id == "kick":
+            team_size = normalize_kick_team_size(dict(composed_config.get("common", {})).get("team_size"))
+            raise FileNotFoundError(
+                f"No trained Kick opponent model was found for level {int(level)} at '{model_path}'. "
+                f"The selected mode is {team_size} vs. {team_size}. Train the shared Kick model first with: "
+                f"python -m scripts.train --game kick --team-size {team_size} --level {int(level)}"
+            )
         raise FileNotFoundError(f"No BEST model found for play-user opponent at '{model_path}'.")
 
     algorithm = build_algo_from_config(composed_config)
@@ -80,15 +97,16 @@ def main() -> None:
     try:
         opponent_model = _attach_play_user_ai_opponent(env, composed_config, level=int(level))
 
-        log_run_context(
-            "play-user",
-            {
-                "game": str(dict(composed_config.get("game", {})).get("id", args.game)),
-                "level": int(level),
-                "render": render,
-                "opponent": opponent_model,
-            },
-        )
+        game_id = str(dict(composed_config.get("game", {})).get("id", args.game))
+        run_context = {
+            "game": game_id,
+            "level": int(level),
+            "render": render,
+            "opponent": opponent_model,
+        }
+        if game_id == "kick":
+            run_context["team_size"] = dict(composed_config.get("common", {})).get("team_size")
+        log_run_context("play-user", run_context)
 
         obs = env.reset()
         del obs

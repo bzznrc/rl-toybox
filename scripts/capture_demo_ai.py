@@ -17,6 +17,7 @@ from core.game import (
     apply_seed_from_config,
     build_algo_from_config,
     build_env_from_config,
+    normalize_kick_team_size,
     parse_override_assignments,
     prepare_run,
     resolve_latest_play_model_path,
@@ -70,6 +71,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--game", required=True, help="Game id")
     parser.add_argument("--algo", default=None, help="Override algorithm id; use auto/default to keep the game's default")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
+    parser.add_argument(
+        "--team-size",
+        type=normalize_kick_team_size,
+        choices=[3, 5, 7],
+        default=None,
+        help="Kick team size mode: 3 vs. 3, 5 vs. 5, or 7 vs. 7",
+    )
     parser.add_argument("--checkpoint", default=None, help="Explicit checkpoint path to load")
     parser.add_argument(
         "--level",
@@ -94,6 +102,8 @@ def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
     set_nested_override(overrides, "common.headless", False)
     if args.seed is not None:
         set_nested_override(overrides, "common.seed", int(args.seed))
+    if args.team_size is not None:
+        set_nested_override(overrides, "common.team_size", int(args.team_size))
     if args.checkpoint:
         set_nested_override(overrides, "common.checkpoint_path", str(Path(args.checkpoint)))
     return overrides
@@ -256,7 +266,6 @@ def main() -> None:
     game_id = str(dict(composed_config.get("game", {})).get("id", args.game))
     algo_id = str(dict(composed_config.get("algo", {})).get("id", args.algo or ""))
     apply_seed_from_config(composed_config)
-    algorithm = build_algo_from_config(composed_config)
 
     explicit_checkpoint = dict(composed_config.get("common", {})).get("checkpoint_path")
     if explicit_checkpoint:
@@ -264,8 +273,19 @@ def main() -> None:
         if not model_path.exists():
             raise FileNotFoundError(f"Checkpoint not found at '{model_path}'.")
     else:
-        model_path = resolve_latest_play_model_path(run_paths, level)
+        try:
+            model_path = resolve_latest_play_model_path(run_paths, level)
+        except FileNotFoundError as exc:
+            if game_id == "kick":
+                team_size = normalize_kick_team_size(dict(composed_config.get("common", {})).get("team_size"))
+                raise FileNotFoundError(
+                    f"No trained Kick model was found for level {int(level)}. "
+                    f"The selected mode is {team_size} vs. {team_size}. Train the shared Kick model first with: "
+                    f"python -m scripts.train --game kick --team-size {team_size} --level {int(level)}"
+                ) from None
+            raise
     composed_config["common"]["checkpoint_path"] = str(model_path)
+    algorithm = build_algo_from_config(composed_config)
     algorithm.load(str(model_path))
 
     native_fps = int(SHOW_GAME_FPS)
@@ -289,23 +309,23 @@ def main() -> None:
             next_capture_step += float(capture_period_frames)
 
     try:
-        log_run_context(
-            "capture-demo-ai",
-            {
-                "game": game_id,
-                "algo": algo_id,
-                "level": int(level),
-                "native_fps": int(native_fps),
-                "capture_fps": int(capture_fps),
-                "duration_seconds": int(CAPTURE_DURATION_SECONDS),
-                "explore": bool(exploratory_capture),
-                "random_opening_plies": (
-                    int(CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES) if bool(exploratory_capture) else 0
-                ),
-                "model": model_path,
-                "output": output_path,
-            },
-        )
+        run_context = {
+            "game": game_id,
+            "algo": algo_id,
+            "level": int(level),
+            "native_fps": int(native_fps),
+            "capture_fps": int(capture_fps),
+            "duration_seconds": int(CAPTURE_DURATION_SECONDS),
+            "explore": bool(exploratory_capture),
+            "random_opening_plies": (
+                int(CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES) if bool(exploratory_capture) else 0
+            ),
+            "model": model_path,
+            "output": output_path,
+        }
+        if game_id == "kick":
+            run_context["team_size"] = dict(composed_config.get("common", {})).get("team_size")
+        log_run_context("capture-demo-ai", run_context)
         reset_eval_policy_state(algorithm)
         obs = env.reset()
         _draw_current_frame(env)

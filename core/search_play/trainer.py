@@ -13,13 +13,14 @@ from core.io.runs import RunPaths, write_metrics
 from core.logging_utils import format_reward_components, log_arena_line, log_save_line, log_search_play_game_line
 from core.runners.env_access import extract_action_mask
 from core.search_play.interfaces import SearchPlayTrainConfig
-from games.four.rules import (
+from games.flip.rules import (
     PLAYER_NONE,
     PLAYER_ONE,
     PLAYER_TWO,
-    FourState,
+    FlipState,
     apply_action,
     build_action_mask,
+    flips_for_action,
     initial_state,
     is_winning_action,
     is_terminal_state,
@@ -54,7 +55,7 @@ def _winner_label(winner_value: object) -> str:
     return str(winner_int)
 
 
-def _opponent_action_random(state: FourState) -> int:
+def _opponent_action_random(state: FlipState) -> int:
     mask = build_action_mask(state.board, int(state.current_player))
     mask_actions = np.flatnonzero(mask)
     if int(mask_actions.size) <= 0:
@@ -62,28 +63,39 @@ def _opponent_action_random(state: FourState) -> int:
     return int(np.random.choice(mask_actions))
 
 
-def _opponent_action_greedy(state: FourState) -> int:
-    actions = legal_actions(state.board)
+def _opponent_action_greedy(state: FlipState) -> int:
+    actions = legal_actions(state.board, int(state.current_player))
     if not actions:
         return 0
     for action in actions:
         if is_winning_action(state, int(action)):
             return int(action)
 
-    opponent_state = FourState(
+    opponent_state = FlipState(
         board=state.board,
         current_player=-int(state.current_player),
         move_count=int(state.move_count),
+        pass_count=int(state.pass_count),
     )
     for action in actions:
         if is_winning_action(opponent_state, int(action)):
             return int(action)
 
-    center = (len(build_action_mask(state.board, int(state.current_player))) - 1) / 2.0
-    return int(min(actions, key=lambda action: abs(float(action) - center)))
+    center_row = (float(getattr(state.board, "shape", (6, 6))[0]) - 1.0) * 0.5
+    center_col = (float(getattr(state.board, "shape", (6, 6))[1]) - 1.0) * 0.5
+    return int(
+        max(
+            actions,
+            key=lambda action: (
+                len(flips_for_action(state, int(action))),
+                -abs(float(action // int(state.board.shape[1])) - center_row)
+                - abs(float(action % int(state.board.shape[1])) - center_col),
+            ),
+        )
+    )
 
 
-def _arena_opponent_action(state: FourState, opponent: str) -> int:
+def _arena_opponent_action(state: FlipState, opponent: str) -> int:
     opponent_key = str(opponent).strip().lower()
     if opponent_key == "greedy":
         return _opponent_action_greedy(state)
@@ -125,7 +137,7 @@ def _play_arena_game(
 def _evaluate_arena(algorithm: Algorithm, *, games_per_opponent: int) -> dict[str, float]:
     config = getattr(algorithm, "config", None)
     board_rows = int(getattr(config, "board_rows", 6))
-    board_cols = int(getattr(config, "board_cols", 7))
+    board_cols = int(getattr(config, "board_cols", 6))
     games_each = max(1, int(games_per_opponent))
     scores: list[float] = []
     by_opponent: dict[str, float] = {}

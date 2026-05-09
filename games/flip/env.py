@@ -1,4 +1,4 @@
-"""Four environment, rendering, and human controls."""
+"""Flip environment, rendering, and human controls."""
 
 from __future__ import annotations
 
@@ -14,47 +14,61 @@ from core.arcade_style import (
     COLOR_DARK_NEUTRAL,
     COLOR_DEEP_TEAL,
     COLOR_FOG_GRAY,
-    COLOR_LIGHT_NEUTRAL,
-    COLOR_SAND,
     COLOR_SLATE_GRAY,
 )
 from core.envs.arcade import ArcadeEnvMixin
 from core.envs.base import Env
 from core.primitives import (
+    draw_filled_square_block,
     draw_status_bar,
     draw_status_icon_row,
     draw_status_square_icon,
-    draw_two_tone_tile,
+    draw_two_tone_square_block,
+    square_block_inset,
+    square_block_size,
     status_icon_inset,
     status_icon_size,
 )
-from core.shared_config import BB_HEIGHT, FPS, SCREEN_HEIGHT, SCREEN_WIDTH, TRAINING_FPS, WORLD_HEIGHT
-from games.four import config
-from games.four.rules import (
+from core.shared_config import (
+    BB_HEIGHT,
+    CELL_INSET,
+    FPS,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    TILE_SIZE,
+    TRAINING_FPS,
+    WORLD_HEIGHT,
+)
+from games.flip import config
+from games.flip.rules import (
     PLAYER_NONE,
     PLAYER_ONE,
     PLAYER_TWO,
+    FlipState,
+    action_to_row_col,
     apply_action,
     build_action_mask,
-    drop_row_for_column,
+    disc_counts,
+    flips_for_action,
     initial_state,
     is_terminal_state,
+    legal_actions,
+    normalize_turn,
     observation_from_state,
     outcome_for_player,
     reward_for_player,
+    row_col_to_action,
     winner,
 )
 
 
-BOARD_FRAME_OUTER = COLOR_FOG_GRAY
-BOARD_TILE_OUTER = COLOR_SLATE_GRAY
-BOARD_TILE_INNER = COLOR_DARK_NEUTRAL
+BOARD_FRAME_COLOR = COLOR_FOG_GRAY
+BOARD_GRID_COLOR = COLOR_SLATE_GRAY
+BOARD_CELL_COLOR = COLOR_DARK_NEUTRAL
 P1_TOKEN_OUTER = COLOR_AQUA
 P1_TOKEN_INNER = COLOR_DEEP_TEAL
 P2_TOKEN_OUTER = COLOR_CORAL
 P2_TOKEN_INNER = COLOR_BRICK_RED
-LEGAL_HINT_COLOR = COLOR_SAND
-HOVER_OUTLINE_COLOR = COLOR_LIGHT_NEUTRAL
 
 
 @dataclass(frozen=True)
@@ -66,13 +80,14 @@ class BoardLayout:
     board_height: float
 
 
-class FourEnv(ArcadeEnvMixin, Env):
-    """AlphaZero-lite friendly Connect Four environment."""
+class FlipEnv(ArcadeEnvMixin, Env):
+    """AlphaZero-lite friendly 6x6 disc-flipping environment."""
 
     INPUT_FEATURE_NAMES = tuple(config.INPUT_FEATURE_NAMES)
     ACTION_NAMES = tuple(config.ACTION_NAMES)
     OBS_DIM = int(config.OBS_DIM)
     ACT_DIM = int(config.ACT_DIM)
+    PLAY_USER_OPPONENT = "scripted"
 
     def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
         self.mode = str(mode)
@@ -109,25 +124,14 @@ class FourEnv(ArcadeEnvMixin, Env):
             reset_policy_state()
 
     def _build_board_layout(self) -> BoardLayout:
-        usable_width = float(SCREEN_WIDTH) - float(config.BOARD_SIDE_MARGIN) * 2.0
         usable_height = (
             float(WORLD_HEIGHT)
             - float(config.BOARD_TOP_MARGIN)
             - float(config.BOARD_BOTTOM_MARGIN)
         )
-        tile_size = float(
-            int(
-                max(
-                    24.0,
-                    min(
-                        usable_width / float(self.board_cols),
-                        usable_height / float(self.board_rows),
-                    ),
-                )
-            )
-        )
-        board_width = float(tile_size * self.board_cols)
-        board_height = float(tile_size * self.board_rows)
+        tile_size = float(self._cell_inner_size() + self._board_line_width())
+        board_width = float(self._board_line_width() + tile_size * self.board_cols)
+        board_height = float(self._board_line_width() + tile_size * self.board_rows)
         left = (float(SCREEN_WIDTH) - board_width) * 0.5
         top = float(config.BOARD_TOP_MARGIN) + max(0.0, (usable_height - board_height) * 0.5)
         return BoardLayout(
@@ -137,6 +141,26 @@ class FourEnv(ArcadeEnvMixin, Env):
             board_width=float(board_width),
             board_height=float(board_height),
         )
+
+    @staticmethod
+    def _cell_inner_size() -> float:
+        return square_block_size(float(TILE_SIZE), int(config.BOARD_CELL_TILES))
+
+    @staticmethod
+    def _piece_size() -> float:
+        return square_block_size(float(TILE_SIZE), int(config.PIECE_TILES))
+
+    @classmethod
+    def _board_line_width(cls) -> float:
+        return float(config.BOARD_FRAME_PADDING)
+
+    def _ensure_actionable_state(self) -> None:
+        if self._done:
+            return
+        self._state = normalize_turn(self._state)
+        self._last_obs = observation_from_state(self._state)
+        self._done = bool(is_terminal_state(self._state))
+        self._last_winner = int(winner(self._state.board)) if self._done else PLAYER_NONE
 
     def reset(self) -> np.ndarray:
         self._state = initial_state(self.board_rows, self.board_cols)
@@ -152,6 +176,7 @@ class FourEnv(ArcadeEnvMixin, Env):
         return np.asarray(self._last_obs, dtype=np.float32)
 
     def get_action_mask(self, _obs: object | None = None) -> np.ndarray:
+        self._ensure_actionable_state()
         if self._done:
             return np.zeros((self.ACT_DIM,), dtype=np.bool_)
         return build_action_mask(self._state.board, int(self._state.current_player))
@@ -170,14 +195,19 @@ class FourEnv(ArcadeEnvMixin, Env):
         return int(legal_actions[0])
 
     def _state_info(self) -> dict[str, object]:
+        p1_count, p2_count = disc_counts(self._state.board)
         return {
             "board_rows": int(self.board_rows),
             "board_cols": int(self.board_cols),
             "current_player": int(self._state.current_player),
             "winner": int(self._last_winner) if self._done else PLAYER_NONE,
+            "p1_discs": int(p1_count),
+            "p2_discs": int(p2_count),
+            "passes": int(self._state.pass_count),
             "level": int(self._current_level),
             "human_player": int(self._human_player),
-            "ai_player": int(self._ai_player) if self._ai_opponent is not None else PLAYER_NONE,
+            "ai_player": int(self._ai_player) if self.mode == "human" or self._ai_opponent is not None else PLAYER_NONE,
+            "opponent": "model" if self._ai_opponent is not None else "scripted" if self.mode == "human" else None,
         }
 
     @staticmethod
@@ -187,7 +217,12 @@ class FourEnv(ArcadeEnvMixin, Env):
         return P1_TOKEN_OUTER, P1_TOKEN_INNER
 
     def _apply_action_and_collect(self, action_index: int) -> tuple[np.ndarray, float, bool, dict[str, object]]:
+        self._ensure_actionable_state()
         actor = int(self._state.current_player)
+        pass_count_before = int(self._state.pass_count)
+        flipped = flips_for_action(self._state, int(action_index))
+        action_row, action_col = action_to_row_col(int(action_index))
+
         self._state = apply_action(self._state, int(action_index))
         self._last_obs = observation_from_state(self._state)
         self._done = bool(is_terminal_state(self._state))
@@ -214,7 +249,12 @@ class FourEnv(ArcadeEnvMixin, Env):
         info.update(
             {
                 "actor": int(actor),
-                "action_col": int(action_index),
+                "next_player": int(self._state.current_player),
+                "action_row": int(action_row),
+                "action_col": int(action_col),
+                "action_cell": int(action_index),
+                "flipped": int(len(flipped)),
+                "auto_passed": bool(int(self._state.pass_count) > int(pass_count_before)),
                 "win": bool(self._done and int(self._last_winner) == PLAYER_ONE),
                 "success": 1 if self._done and int(self._last_winner) == PLAYER_ONE else 0,
                 "reward_breakdown": reward_breakdown,
@@ -231,20 +271,73 @@ class FourEnv(ArcadeEnvMixin, Env):
         return np.asarray(self._last_obs, dtype=np.float32), float(reward), bool(self._done), info
 
     def _is_ai_turn(self) -> bool:
+        self._ensure_actionable_state()
         return bool(
-            self._ai_opponent is not None
+            (self._ai_opponent is not None or self.mode == "human")
             and not self._done
             and int(self._state.current_player) == int(self._ai_player)
         )
 
     def capture_pre_action_delay_seconds(self) -> float:
+        self._ensure_actionable_state()
         if self._done:
             return 0.0
         if int(self._state.current_player) == PLAYER_TWO:
             return float(config.AI_STEP_DELAY_SECONDS)
         return 0.0
 
+    def _select_scripted_opponent_action(self) -> int:
+        actions = legal_actions(self._state.board, int(self._state.current_player))
+        if not actions:
+            return self._resolve_valid_action(0)
+
+        for action in actions:
+            try:
+                next_state = apply_action(self._state, int(action))
+            except ValueError:
+                continue
+            if bool(is_terminal_state(next_state)) and outcome_for_player(next_state.board, int(self._state.current_player)) > 0.0:
+                return int(action)
+
+        opponent_state = FlipState(
+            board=self._state.board,
+            current_player=-int(self._state.current_player),
+            move_count=int(self._state.move_count),
+            pass_count=int(self._state.pass_count),
+        )
+        for action in actions:
+            if action in legal_actions(opponent_state.board, int(opponent_state.current_player)):
+                try:
+                    next_opponent_state = apply_action(opponent_state, int(action))
+                except ValueError:
+                    continue
+                if bool(is_terminal_state(next_opponent_state)) and outcome_for_player(
+                    next_opponent_state.board,
+                    int(opponent_state.current_player),
+                ) > 0.0:
+                    return int(action)
+
+        corners = {0, self.board_cols - 1, (self.board_rows - 1) * self.board_cols, self.ACT_DIM - 1}
+        corner_actions = [int(action) for action in actions if int(action) in corners]
+        if corner_actions:
+            return int(max(corner_actions, key=lambda action: len(flips_for_action(self._state, int(action)))))
+
+        center_row = (float(self.board_rows) - 1.0) * 0.5
+        center_col = (float(self.board_cols) - 1.0) * 0.5
+        return int(
+            max(
+                actions,
+                key=lambda action: (
+                    len(flips_for_action(self._state, int(action))),
+                    -abs(float(action // self.board_cols) - center_row)
+                    - abs(float(action % self.board_cols) - center_col),
+                ),
+            )
+        )
+
     def _select_ai_opponent_action(self) -> int:
+        if self._ai_opponent is None:
+            return self._select_scripted_opponent_action()
         mask = self.get_action_mask()
         observation = np.asarray(self._last_obs, dtype=np.float32)
         act = getattr(self._ai_opponent, "act", None)
@@ -259,7 +352,9 @@ class FourEnv(ArcadeEnvMixin, Env):
     def _apply_ai_opponent_turn(self) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         action_index = self._select_ai_opponent_action()
         obs, reward, done, info = self._apply_action_and_collect(action_index)
-        info["ai_action_col"] = int(action_index)
+        row, col = action_to_row_col(int(action_index))
+        info["ai_action_row"] = int(row)
+        info["ai_action_col"] = int(col)
         return obs, float(reward), bool(done), info
 
     def _mouse_to_action(self, x: float, y_arcade: float) -> int | None:
@@ -270,9 +365,10 @@ class FourEnv(ArcadeEnvMixin, Env):
         if relative_x < 0.0 or relative_y < 0.0:
             return None
         col = int(relative_x // float(board.tile_size))
-        if not (0 <= col < self.board_cols) or relative_y >= float(board.board_height):
+        row = int(relative_y // float(board.tile_size))
+        if not (0 <= row < self.board_rows and 0 <= col < self.board_cols):
             return None
-        return int(col)
+        return row_col_to_action(int(row), int(col))
 
     def _update_hover_action(self) -> None:
         self._hover_action = None
@@ -302,6 +398,7 @@ class FourEnv(ArcadeEnvMixin, Env):
         return np.asarray(self._last_obs, dtype=np.float32), 0.0, False, self._state_info()
 
     def _step_human(self) -> tuple[np.ndarray, float, bool, dict[str, object]]:
+        self._ensure_actionable_state()
         if self._done:
             return self._handle_human_terminal()
 
@@ -348,6 +445,7 @@ class FourEnv(ArcadeEnvMixin, Env):
         if self.mode == "human":
             return self._step_human()
 
+        self._ensure_actionable_state()
         if self._done:
             info = self._state_info()
             info.update(
@@ -367,91 +465,91 @@ class FourEnv(ArcadeEnvMixin, Env):
 
     def _draw_board(self) -> None:
         board = self._board_layout
-        frame_left = float(board.left) - float(config.BOARD_FRAME_PADDING)
-        frame_top = float(board.top) - float(config.BOARD_FRAME_PADDING)
-        frame_width = float(board.board_width) + float(config.BOARD_FRAME_PADDING) * 2.0
-        frame_height = float(board.board_height) + float(config.BOARD_FRAME_PADDING) * 2.0
-        gridline_width = max(1.0, float(board.tile_size) * 0.08)
-        frame_bottom = self.window_controller.to_arcade_y(float(frame_top) + float(frame_height))
-        arcade.draw_lbwh_rectangle_outline(
+        frame_thickness = float(self._board_line_width())
+        frame_left = float(board.left) - frame_thickness
+        frame_top = float(board.top) - frame_thickness
+        frame_width = float(board.board_width) + frame_thickness * 2.0
+        frame_height = float(board.board_height) + frame_thickness * 2.0
+        frame_bottom = self.window_controller.to_arcade_y(float(frame_top) + frame_height)
+        arcade.draw_lbwh_rectangle_filled(
             float(frame_left),
             float(frame_bottom),
             float(frame_width),
             float(frame_height),
-            BOARD_FRAME_OUTER,
-            float(gridline_width),
+            BOARD_FRAME_COLOR,
+        )
+        board_bottom = self.window_controller.to_arcade_y(float(board.top) + float(board.board_height))
+        arcade.draw_lbwh_rectangle_filled(
+            float(board.left),
+            float(board_bottom),
+            float(board.board_width),
+            float(board.board_height),
+            BOARD_GRID_COLOR,
         )
 
         for row in range(self.board_rows):
             for col in range(self.board_cols):
-                cell_left = float(board.left) + float(col) * float(board.tile_size)
-                cell_top = float(board.top) + float(row) * float(board.tile_size)
-                draw_two_tone_tile(
+                cell_left, cell_top = self._cell_inner_top_left(int(row), int(col))
+                draw_filled_square_block(
                     self.window_controller,
                     top_left_x=float(cell_left),
                     top_left_y=float(cell_top),
-                    size=float(board.tile_size),
-                    outer_color=BOARD_TILE_OUTER,
-                    inner_color=BOARD_TILE_INNER,
-                    inset=max(1.0, float(board.tile_size) * float(config.CELL_INSET_RATIO)),
+                    tile_size=float(TILE_SIZE),
+                    tiles_per_side=int(config.BOARD_CELL_TILES),
+                    color=BOARD_CELL_COLOR,
                 )
+
+    def _cell_top_left(self, row: int, col: int) -> tuple[float, float]:
+        board = self._board_layout
+        return (
+            float(board.left) + float(col) * float(board.tile_size),
+            float(board.top) + float(row) * float(board.tile_size),
+        )
+
+    def _cell_inner_top_left(self, row: int, col: int) -> tuple[float, float]:
+        cell_left, cell_top = self._cell_top_left(int(row), int(col))
+        inset = float(self._board_line_width())
+        return float(cell_left) + inset, float(cell_top) + inset
 
     def _draw_legal_hints(self) -> None:
         if self._done:
             return
         mask = self.get_action_mask()
-        board = self._board_layout
-        hint_size = max(6.0, float(board.tile_size) * float(config.LEGAL_HINT_RATIO))
+        cell_inner_size = float(self._cell_inner_size())
+        hint_size = square_block_size(float(TILE_SIZE), int(config.LEGAL_HINT_TILES))
         for action_index in np.flatnonzero(mask):
-            row = drop_row_for_column(self._state.board, int(action_index))
-            if row is None:
-                continue
-            center_x = float(board.left) + (float(action_index) + 0.5) * float(board.tile_size)
-            center_y = float(board.top) + (float(row) + 0.5) * float(board.tile_size)
-            bottom = self.window_controller.to_arcade_y(float(center_y) + hint_size * 0.5)
-            arcade.draw_lbwh_rectangle_filled(
-                float(center_x) - hint_size * 0.5,
-                float(bottom),
-                float(hint_size),
-                float(hint_size),
-                LEGAL_HINT_COLOR,
+            row, col = action_to_row_col(int(action_index))
+            cell_left, cell_top = self._cell_inner_top_left(int(row), int(col))
+            hint_left = float(cell_left) + (cell_inner_size - hint_size) * 0.5
+            hint_top = float(cell_top) + (cell_inner_size - hint_size) * 0.5
+            draw_filled_square_block(
+                self.window_controller,
+                top_left_x=float(hint_left),
+                top_left_y=float(hint_top),
+                tile_size=float(TILE_SIZE),
+                tiles_per_side=int(config.LEGAL_HINT_TILES),
+                color=COLOR_FOG_GRAY,
             )
 
-    def _draw_hover_outline(self) -> None:
-        if self._hover_action is None:
-            return
-        board = self._board_layout
-        left = float(board.left) + float(self._hover_action) * float(board.tile_size)
-        top = float(board.top)
-        bottom = self.window_controller.to_arcade_y(float(top) + float(board.board_height))
-        arcade.draw_lbwh_rectangle_outline(
-            float(left),
-            float(bottom),
-            float(board.tile_size),
-            float(board.board_height),
-            HOVER_OUTLINE_COLOR,
-            float(config.HOVER_OUTLINE_WIDTH),
-        )
-
     def _draw_tokens(self) -> None:
-        board = self._board_layout
-        token_size = float(board.tile_size) * (1.0 - float(config.STONE_INSET_RATIO) * 2.0)
-        token_inset = float(board.tile_size) * float(config.STONE_INSET_RATIO)
-        inner_inset = max(2.0, token_size * 0.18)
         for row in range(self.board_rows):
             for col in range(self.board_cols):
                 stone = int(self._state.board[row, col])
                 if stone == PLAYER_NONE:
                     continue
                 outer_color, inner_color = self._token_colors(stone)
-                draw_two_tone_tile(
+                cell_left, cell_top = self._cell_inner_top_left(int(row), int(col))
+                cell_inner_size = float(self._cell_inner_size())
+                piece_size = float(self._piece_size())
+                draw_two_tone_square_block(
                     self.window_controller,
-                    top_left_x=float(board.left) + float(col) * float(board.tile_size) + float(token_inset),
-                    top_left_y=float(board.top) + float(row) * float(board.tile_size) + float(token_inset),
-                    size=float(token_size),
+                    top_left_x=float(cell_left) + (cell_inner_size - piece_size) * 0.5,
+                    top_left_y=float(cell_top) + (cell_inner_size - piece_size) * 0.5,
+                    tile_size=float(TILE_SIZE),
+                    tiles_per_side=int(config.PIECE_TILES),
                     outer_color=outer_color,
                     inner_color=inner_color,
-                    inset=float(inner_inset),
+                    inset=square_block_inset(float(CELL_INSET), int(config.PIECE_TILES)),
                 )
 
     def _draw_player_icon(self, player: int, center_x: float, center_y: float, size: float) -> None:
@@ -464,15 +562,15 @@ class FourEnv(ArcadeEnvMixin, Env):
             size=float(size),
             outer_color=outer_color,
             inner_color=inner_color,
-            inset=float(status_icon_inset(float(size) * 0.18)),
+            inset=float(status_icon_inset(float(CELL_INSET))),
         )
 
     def _draw_hud(self) -> None:
         layout = draw_status_bar(
             width=float(SCREEN_WIDTH),
             bottom_bar_height=float(BB_HEIGHT),
-            tile_size=float(self._board_layout.tile_size),
-            cell_inset=float(config.STONE_INSET_RATIO * self._board_layout.tile_size),
+            tile_size=float(TILE_SIZE),
+            cell_inset=float(CELL_INSET),
             include_clock=False,
         )
         player = int(self._state.current_player) if not self._done else int(self._last_winner)
@@ -482,7 +580,7 @@ class FourEnv(ArcadeEnvMixin, Env):
             left=float(layout.score_left),
             right=float(layout.score_right),
             center_y=float(layout.center_y),
-            icon_size=float(status_icon_size(float(BB_HEIGHT), float(self._board_layout.tile_size))),
+            icon_size=float(status_icon_size(float(BB_HEIGHT), float(TILE_SIZE))),
             items=[player],
             draw_item=lambda player_value, center_x, row_center_y, size: self._draw_player_icon(
                 int(player_value),
@@ -495,12 +593,12 @@ class FourEnv(ArcadeEnvMixin, Env):
     def render(self) -> None:
         if self.window_controller.window is None:
             return
+        self._ensure_actionable_state()
         if self.mode == "human":
             self._update_hover_action()
         self.window_controller.clear(COLOR_DARK_NEUTRAL)
         self._draw_board()
         self._draw_legal_hints()
         self._draw_tokens()
-        self._draw_hover_outline()
         self._draw_hud()
         self.window_controller.flip()

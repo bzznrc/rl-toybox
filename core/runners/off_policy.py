@@ -50,6 +50,10 @@ def _has_sac_update_metrics(metrics: dict[str, float]) -> bool:
     return "actor_loss" in metrics and "critic_loss" in metrics
 
 
+def _should_log_sac_update_metrics(env: Env) -> bool:
+    return bool(getattr(env, "log_sac_update_line", False))
+
+
 def run_off_policy_training(
     env: Env,
     algorithm: Algorithm,
@@ -121,15 +125,16 @@ def run_off_policy_training(
                     updates += 1
                 if _has_sac_update_metrics(metrics):
                     actor_critic_updates += 1
-                    log_sac_update_line(
-                        update=int(actor_critic_updates),
-                        level=int(current_level),
-                        steps=int(total_steps),
-                        actor_loss=_metric_float(metrics, "actor_loss"),
-                        critic_loss=_metric_float(metrics, "critic_loss"),
-                        entropy=_metric_float(metrics, "entropy"),
-                        alpha=_metric_float(metrics, "alpha"),
-                    )
+                    if _should_log_sac_update_metrics(env):
+                        log_sac_update_line(
+                            update=int(actor_critic_updates),
+                            level=int(current_level),
+                            steps=int(total_steps),
+                            actor_loss=_metric_float(metrics, "actor_loss"),
+                            critic_loss=_metric_float(metrics, "critic_loss"),
+                            entropy=_metric_float(metrics, "entropy"),
+                            alpha=_metric_float(metrics, "alpha"),
+                        )
 
         if total_steps % int(config.checkpoint_every_steps) == 0 and total_episodes >= min_episodes_for_stats:
             checkpoint_path = run_paths.model_path(level=int(current_level), kind="check")

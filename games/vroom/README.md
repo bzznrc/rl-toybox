@@ -9,9 +9,9 @@ Top-down one-lap racing with procedural closed-loop tracks and continuous `steer
 ## Algorithm / Network
 
 - Default algorithm: `sac`
-- IO: `obs=20`, `act=3`
-- Actor: `20 -> 64 -> 64 -> 3`
-- Twin critics: `(20 + 3) -> 64 -> 64 -> 1`
+- IO: `obs=32`, `act=3`
+- Actor: `32 -> 64 -> 64 -> 3`
+- Twin critics: `(32 + 3) -> 64 -> 64 -> 1`
 
 ## Controls (Human)
 
@@ -19,21 +19,62 @@ Top-down one-lap racing with procedural closed-loop tracks and continuous `steer
 - Throttle: `W` or up arrow
 - Brake: `S` or down arrow
 - Coast: release throttle and brake
-- Rendered overlays: `X` toggles translucent `sens_*` ray ghosts during `play-user` and `play-ai`
+- Rendered overlays: `X` toggles translucent route, edge, and car sensor ghosts during `play-user` and `play-ai`
 
 ## Observation / Actions
 
 - Observation family: arcade / egocentric `SELF -> SENS -> FLAG`
-- Observation: `20` floats (`INPUT_FEATURE_NAMES`, exact order)
+- Observation: `32` floats (`INPUT_FEATURE_NAMES`, exact order)
   - `SELF` (7): `self_lat_off self_spd_lat self_spd_fwd self_spd_delta self_yaw_rate self_head_err_sin self_head_err_cos`
-  - `SENS` (11): `sens_look_near_sin sens_look_near_cos sens_look_far_sin sens_look_far_cos sens_curve_near sens_curve_far sens_fwd sens_left_front sens_right_front sens_left sens_right`
+  - `SENS / ROUTE` (14): 3 future centerline breadcrumbs plus near/far curve summaries
+  - `SENS / EDGE` (5): continuous road-boundary clearance rays
+  - `SENS / CAR` (4): continuous nearby-car clearances
   - `FLAG` (2): `flag_contact flag_off_track`
 - Actions: `Box(3)` (`ACTION_NAMES`, ordered)
   - `steer` in `[-1, 1]`
   - `throttle` in `[0, 1]`
   - `brake` in `[0, 1]`
 
-The observation is intentionally vector-only and compact. `self_*` features encode car state in the local track frame, `sens_*` features encode look-ahead geometry plus road-edge clearance, and `flag_*` features expose binary control-state information.
+Ordered observation features:
+
+```text
+self_lat_off
+self_spd_lat
+self_spd_fwd
+self_spd_delta
+self_yaw_rate
+self_head_err_sin
+self_head_err_cos
+sens_route1_fwd
+sens_route1_lat
+sens_route1_tan_sin
+sens_route1_tan_cos
+sens_route2_fwd
+sens_route2_lat
+sens_route2_tan_sin
+sens_route2_tan_cos
+sens_route3_fwd
+sens_route3_lat
+sens_route3_tan_sin
+sens_route3_tan_cos
+sens_curve_near
+sens_curve_far
+sens_edge_fwd
+sens_edge_left_front
+sens_edge_right_front
+sens_edge_left
+sens_edge_right
+sens_car_fwd
+sens_car_left
+sens_car_right
+sens_car_back
+flag_contact
+flag_off_track
+```
+
+The observation is intentionally vector-only and compact. `self_*` features encode car state in the local track frame. `sens_route*` samples future centerline points by track progress, which keeps lookahead meaningful on bendy, deformed, or folded playmat tracks where straight-line screen distance can point at the wrong road ribbon. `sens_curve_near` and `sens_curve_far` summarize upcoming turn strength, while `sens_edge_*` expose continuous road clearance.
+
+`sens_car_*` values are continuous egocentric car clearances, not binary flags: `1.0` means no car is nearby in that sector, and `0.0` means touching or immediate collision risk. This gives the SAC policy a small signal for braking behind a car, avoiding occupied side space, and noticing pressure from behind without adding full opponent state.
 
 ## Environment Notes
 
@@ -49,7 +90,8 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 
 - Steering authority, drag, lateral damping, off-track slowdown, and contact response all come from the same underlying top-down car model.
 - The policy and human runtime share the same continuous control interface.
-- `flag_contact` and `flag_off_track` are binary observations; the optional rendered rays are visual-only and are not a separate observation channel.
+- `flag_contact` and `flag_off_track` are binary observations.
+- Ghost mode is visual-only and draws the 3 route breadcrumbs with tangent markers, the 5 edge rays, and the 4 car-clearance rays.
 
 ### Track Generation
 

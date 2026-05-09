@@ -1,8 +1,8 @@
-"""Config-derived public spec for Four."""
+"""Config-derived public spec for Flip."""
 
 from __future__ import annotations
 
-from games.four import config
+from games.flip import config
 
 
 GAME_ID = config.GAME_ID

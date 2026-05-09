@@ -59,6 +59,10 @@ def _build_play_overrides(args: argparse.Namespace) -> dict[str, object]:
 
 
 def _attach_play_user_ai_opponent(env: object, composed_config: dict[str, object], *, level: int) -> str | None:
+    scripted_opponent = getattr(env, "PLAY_USER_OPPONENT", None)
+    if str(scripted_opponent).strip().lower() == "scripted":
+        return "scripted"
+
     attach_ai_opponent = getattr(env, "set_ai_opponent", None)
     if not callable(attach_ai_opponent):
         return None

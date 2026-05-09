@@ -134,6 +134,54 @@ def spawn_connected_random_walk_shapes(
     return shapes
 
 
+def square_block_size(tile_size: float, tiles_per_side: int = 1) -> float:
+    return float(tile_size) * float(max(1, int(tiles_per_side)))
+
+
+def square_block_inset(cell_inset: float, tiles_per_side: int = 1) -> float:
+    return float(cell_inset) * float(max(1, int(tiles_per_side)))
+
+
+def draw_filled_square_block(
+    window_controller: ArcadeWindowController,
+    *,
+    top_left_x: float,
+    top_left_y: float,
+    tile_size: float,
+    tiles_per_side: int = 1,
+    color: tuple[int, int, int] | tuple[int, int, int, int],
+) -> None:
+    size = square_block_size(float(tile_size), int(tiles_per_side))
+    bottom = window_controller.top_left_to_bottom(float(top_left_y), size)
+    arcade.draw_lbwh_rectangle_filled(float(top_left_x), float(bottom), size, size, color)
+
+
+def draw_two_tone_rect(
+    window_controller: ArcadeWindowController,
+    *,
+    left: float,
+    top: float,
+    width: float,
+    height: float,
+    outer_color: tuple[int, int, int] | tuple[int, int, int, int],
+    inner_color: tuple[int, int, int] | tuple[int, int, int, int],
+    inset: float,
+) -> None:
+    bottom = window_controller.top_left_to_bottom(float(top), float(height))
+    arcade.draw_lbwh_rectangle_filled(float(left), float(bottom), float(width), float(height), outer_color)
+    inner_width = max(1.0, float(width) - 2.0 * float(inset))
+    inner_height = max(1.0, float(height) - 2.0 * float(inset))
+    inner_top = float(top) + float(inset)
+    inner_bottom = window_controller.top_left_to_bottom(float(inner_top), float(inner_height))
+    arcade.draw_lbwh_rectangle_filled(
+        float(left) + float(inset),
+        float(inner_bottom),
+        float(inner_width),
+        float(inner_height),
+        inner_color,
+    )
+
+
 def draw_two_tone_tile(
     window_controller: ArcadeWindowController,
     *,
@@ -198,10 +246,32 @@ def draw_two_tone_square_block(
         window_controller,
         top_left_x=float(top_left_x),
         top_left_y=float(top_left_y),
-        size=float(tile_size) * float(side_tiles),
+        size=square_block_size(float(tile_size), side_tiles),
         outer_color=outer_color,
         inner_color=inner_color,
         inset=float(inset),
+    )
+
+
+def draw_two_tone_cell(
+    window_controller: ArcadeWindowController,
+    *,
+    top_left_x: float,
+    top_left_y: float,
+    tile_size: float,
+    outer_color: tuple[int, int, int] | tuple[int, int, int, int],
+    inner_color: tuple[int, int, int] | tuple[int, int, int, int],
+    cell_inset: float,
+) -> None:
+    draw_two_tone_square_block(
+        window_controller,
+        top_left_x=float(top_left_x),
+        top_left_y=float(top_left_y),
+        tile_size=float(tile_size),
+        tiles_per_side=1,
+        outer_color=outer_color,
+        inner_color=inner_color,
+        inset=float(cell_inset),
     )
 
 

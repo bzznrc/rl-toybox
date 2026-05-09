@@ -923,8 +923,6 @@ def raycast_polygon_edges(
     sy = vectors[:, 1]
     den = float(ux) * sy - float(uy) * sx
     valid_den = np.abs(den) > 1e-10
-    if not bool(np.any(valid_den)):
-        return None
 
     ray_t = np.full((starts.shape[0],), np.inf, dtype=np.float32)
     seg_u = np.full((starts.shape[0],), np.inf, dtype=np.float32)
@@ -937,6 +935,28 @@ def raycast_polygon_edges(
         & (seg_u >= 0.0)
         & (seg_u <= 1.0)
     )
+
+    collinear_tol = max(1e-5, float(origin_epsilon) * 2.0)
+    line_cross = qx * float(uy) - qy * float(ux)
+    collinear = (~valid_den) & (np.abs(line_cross) <= float(collinear_tol)) & ((sx * sx + sy * sy) > 1e-12)
+    if bool(np.any(collinear)):
+        t0 = qx[collinear] * float(ux) + qy[collinear] * float(uy)
+        t1 = (qx[collinear] + sx[collinear]) * float(ux) + (qy[collinear] + sy[collinear]) * float(uy)
+        t_min = np.minimum(t0, t1)
+        t_max = np.maximum(t0, t1)
+        collinear_hit = np.where(t_min > float(origin_epsilon), t_min, t_max)
+        collinear_valid = (
+            (t_max > float(origin_epsilon))
+            & (collinear_hit > float(origin_epsilon))
+            & (collinear_hit <= float(max_distance))
+        )
+        if bool(np.any(collinear_valid)):
+            collinear_candidates = collinear_hit[collinear_valid].astype(np.float32, copy=False)
+            ray_t = np.concatenate((ray_t[valid], collinear_candidates))
+            if ray_t.size <= 0:
+                return None
+            return float(np.min(ray_t))
+
     if not bool(np.any(valid)):
         return None
     return float(np.min(ray_t[valid]))
@@ -984,7 +1004,27 @@ def validate_track_geometry(track: TrackGeometry, *, min_centerline_clearance: f
     hit_left = raycast_track_edge(track, track.start_pos, track.start_normal, ray_span)
     hit_right = raycast_track_edge(track, track.start_pos, (-float(track.start_normal[0]), -float(track.start_normal[1])), ray_span)
     if hit_left is None or hit_right is None:
-        raise RuntimeError("Start-strip normal ray did not hit road boundary.")
+        nx, ny = _normalize(float(track.start_normal[0]), float(track.start_normal[1]))
+        left_dx = float(track.start_line[0][0]) - float(track.start_pos[0])
+        left_dy = float(track.start_line[0][1]) - float(track.start_pos[1])
+        right_dx = float(track.start_line[1][0]) - float(track.start_pos[0])
+        right_dy = float(track.start_line[1][1]) - float(track.start_pos[1])
+        projected_left = float(left_dx) * float(nx) + float(left_dy) * float(ny)
+        projected_right = -(float(right_dx) * float(nx) + float(right_dy) * float(ny))
+        left_proj = project_point_to_track(track, track.start_line[0])
+        right_proj = project_point_to_track(track, track.start_line[1])
+        line_tol = max(2.0, 0.08 * float(track.half_width))
+        fallback_valid = (
+            projected_left > 0.0
+            and projected_right > 0.0
+            and abs(abs(float(left_proj.lateral_offset)) - float(track.half_width)) <= float(line_tol)
+            and abs(abs(float(right_proj.lateral_offset)) - float(track.half_width)) <= float(line_tol)
+            and float(left_proj.lateral_offset) * float(right_proj.lateral_offset) < 0.0
+        )
+        if not bool(fallback_valid):
+            raise RuntimeError("Start-strip normal ray did not hit road boundary.")
+        hit_left = float(projected_left)
+        hit_right = float(projected_right)
     tol = max(2.0, 0.08 * float(track.half_width))
     if abs(float(hit_left) - float(track.half_width)) > tol or abs(float(hit_right) - float(track.half_width)) > tol:
         raise RuntimeError("Start-strip normal ray distance does not match track half width.")

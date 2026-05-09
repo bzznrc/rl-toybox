@@ -33,7 +33,7 @@ from core.primitives import (
     draw_status_icon_row,
     status_icon_inset,
     draw_status_square_icon,
-    draw_two_tone_tile,
+    draw_two_tone_cell,
     spawn_connected_random_walk_shapes,
     status_icon_size,
 )
@@ -265,21 +265,6 @@ class BaseSnakeGame:
             return False
         return True
 
-    def _draw_tile(self, top_left: Point, outer_color, inner_color) -> None:
-        draw_two_tone_tile(
-            self.window_controller,
-            top_left_x=float(top_left.x),
-            top_left_y=float(top_left.y),
-            size=float(TILE_SIZE),
-            outer_color=outer_color,
-            inner_color=inner_color,
-            inset=float(CELL_INSET),
-        )
-
-    def _draw_tile_batch(self, tiles: list[Point], outer_color, inner_color) -> None:
-        for tile in tiles:
-            self._draw_tile(tile, outer_color, inner_color)
-
     def _draw_status_bar(self) -> None:
         layout = draw_status_bar(
             width=float(self.width),
@@ -408,9 +393,35 @@ class BaseSnakeGame:
 
         self.window_controller.clear(COLOR_DARK_NEUTRAL)
         self._draw_ghost_overlay()
-        self._draw_tile_batch(self.snake, COLOR_AQUA, COLOR_DEEP_TEAL)
-        self._draw_tile(self.food, COLOR_CORAL, COLOR_BRICK_RED)
-        self._draw_tile_batch(self.obstacles, COLOR_FOG_GRAY, COLOR_SLATE_GRAY)
+        for tile in self.snake:
+            draw_two_tone_cell(
+                self.window_controller,
+                top_left_x=float(tile.x),
+                top_left_y=float(tile.y),
+                tile_size=float(TILE_SIZE),
+                outer_color=COLOR_AQUA,
+                inner_color=COLOR_DEEP_TEAL,
+                cell_inset=float(CELL_INSET),
+            )
+        draw_two_tone_cell(
+            self.window_controller,
+            top_left_x=float(self.food.x),
+            top_left_y=float(self.food.y),
+            tile_size=float(TILE_SIZE),
+            outer_color=COLOR_CORAL,
+            inner_color=COLOR_BRICK_RED,
+            cell_inset=float(CELL_INSET),
+        )
+        for tile in self.obstacles:
+            draw_two_tone_cell(
+                self.window_controller,
+                top_left_x=float(tile.x),
+                top_left_y=float(tile.y),
+                tile_size=float(TILE_SIZE),
+                outer_color=COLOR_FOG_GRAY,
+                inner_color=COLOR_SLATE_GRAY,
+                cell_inset=float(CELL_INSET),
+            )
         self._draw_status_bar()
         self.window_controller.flip()
 

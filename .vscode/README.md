@@ -9,7 +9,7 @@ The launch configs mirror the canonical CLI flow:
 
 ## How It Is Organized
 
-There is one canonical launch flow for active games:
+There is one canonical launch flow for non-Kick active games:
 
 - `Run - Train`
 - `Run - Play User`
@@ -21,21 +21,27 @@ The shared flow covers:
 - `bang`
 - `jump`
 - `vroom`
-- `four`
-- `kick`
+- `flip`
 
-`four` is fixed-mode. It can use the same launch configs safely because the CLI clamps fixed-mode games to `L1` and does not create a curriculum.
-`kick` uses the additional `kickTeamSize` selector for `3 vs. 3`, `5 vs. 5`, or `7 vs. 7`; non-Kick games ignore that argument.
+Kick has its own launch flow because it is the only active game with a game-specific selector:
+
+- `Kick - Train`
+- `Kick - Play User`
+- `Kick - Play AI`
+- `Kick - Capture Demo`
+
+`flip` is fixed-mode. It can use the shared non-Kick launch configs safely because the CLI clamps fixed-mode games to `L1` and does not create a curriculum.
+`kick` uses the additional `kickTeamSize` selector for `3 vs. 3`, `5 vs. 5`, or `7 vs. 7`.
 
 ## Levels And Modes
 
 - The `trainLevel` and `playLevel` inputs expose `L1` through `L5`.
-- The `kickTeamSize` input exposes Kick's `3 vs. 3`, `5 vs. 5`, and `7 vs. 7` modes.
+- The `kickTeamSize` input appears only in the Kick launch configs and exposes Kick's `3 vs. 3`, `5 vs. 5`, and `7 vs. 7` modes.
 - Training defaults to `L1`.
 - `play-user`, `play-ai`, and `capture-demo` default to `L5`.
 - Curriculum games use those levels normally.
-- Four ignores higher level selections and resolves to `L1`.
-- `7x6` is the fixed Four board shape.
+- Flip ignores higher level selections and resolves to `L1`.
+- `6x6` is the fixed Flip board shape.
 
 ## Algo Dropdowns
 
@@ -49,5 +55,6 @@ The shared default is now:
 
 ## Adding A New Game Later
 
-- If a new curriculum-based game follows the shared ladder, add it to `activeGame` and make sure its config exposes a clear per-level settings table for `L1` through `L5`.
-- If a new fixed-mode game is added, include it in `activeGame` and add its id to `FIXED_LEVEL_GAME_IDS` in `core/game.py`.
+- If a new curriculum-based game follows the shared ladder and has no special launch options, add it to `activeGame` and make sure its config exposes a clear per-level settings table for `L1` through `L5`.
+- If a new fixed-mode game is added and has no special launch options, include it in `activeGame` and add its id to `FIXED_LEVEL_GAME_IDS` in `core/game.py`.
+- If a game needs its own launch-only selector, give it separate launch configs like Kick so unrelated games do not inherit its prompts.

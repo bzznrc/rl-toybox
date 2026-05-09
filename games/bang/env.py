@@ -42,7 +42,7 @@ from core.primitives import (
     draw_status_icon_row,
     status_icon_inset,
     draw_status_square_icon,
-    draw_two_tone_tile,
+    draw_two_tone_cell,
     spawn_connected_random_walk_shapes,
     status_icon_size,
 )
@@ -329,11 +329,14 @@ class Renderer:
         self.window_controller.clear(COLOR_DARK_NEUTRAL)
 
         for obstacle in self.game.obstacles:
-            self._draw_two_tone_tile(
+            draw_two_tone_cell(
+                self.window_controller,
                 top_left_x=float(obstacle.x),
                 top_left_y=float(obstacle.y),
+                tile_size=float(TILE_SIZE),
                 outer_color=COLOR_FOG_GRAY,
                 inner_color=COLOR_SLATE_GRAY,
+                cell_inset=float(CELL_INSET),
             )
 
         self._draw_ghost_overlay()
@@ -438,6 +441,7 @@ class Renderer:
         fill_color = style.get("render_fill", COLOR_DEEP_TEAL)
         outline_color = style.get("render_outline", COLOR_AQUA)
         inset = status_icon_inset(float(CELL_INSET))
+        marker_size = max(2.0, round(NN_CONTROL_MARKER_SIZE_PX * (size / max(1.0, float(TILE_SIZE)))))
         draw_status_square_icon(
             center_x=float(center_x),
             center_y=float(center_y),
@@ -445,34 +449,20 @@ class Renderer:
             outer_color=outline_color,
             inner_color=fill_color,
             inset=float(inset),
-        )
-        if self.game.is_nn_controlled_player(player_id):
-            marker_size = max(2.0, round(NN_CONTROL_MARKER_SIZE_PX * (size / max(1.0, float(TILE_SIZE)))))
-            arcade.draw_lbwh_rectangle_filled(
-                center_x - marker_size / 2.0,
-                center_y - marker_size / 2.0,
-                marker_size,
-                marker_size,
-                outline_color,
-            )
-
-    def _draw_two_tone_tile(self, top_left_x: float, top_left_y: float, outer_color, inner_color) -> None:
-        draw_two_tone_tile(
-            self.window_controller,
-            top_left_x=float(top_left_x),
-            top_left_y=float(top_left_y),
-            size=float(TILE_SIZE),
-            outer_color=outer_color,
-            inner_color=inner_color,
-            inset=float(CELL_INSET),
+            packed=self.game.is_nn_controlled_player(player_id),
+            packed_marker_color=outline_color,
+            packed_marker_size=float(marker_size),
         )
 
     def _draw_actor(self, actor: Actor, fill_color, outline_color, draw_nn_marker: bool = False) -> None:
-        self._draw_two_tone_tile(
+        draw_two_tone_cell(
+            self.window_controller,
             top_left_x=actor.position.x - TILE_SIZE / 2,
             top_left_y=actor.position.y - TILE_SIZE / 2,
+            tile_size=float(TILE_SIZE),
             outer_color=outline_color,
             inner_color=fill_color,
+            cell_inset=float(CELL_INSET),
         )
         if draw_nn_marker:
             self._draw_nn_control_marker(actor, outline_color)

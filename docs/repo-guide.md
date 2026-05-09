@@ -22,7 +22,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 - Separate reusable RL systems from game-specific environment logic.
 - Present a coherent progression across RL families and tradeoffs.
 - Prefer compact, complete games over oversized systems.
-- Standardize curriculum-based games on a shared 5-level ladder, with `four` as the fixed-mode board game.
+- Standardize curriculum-based games on a shared 5-level ladder, with `flip` as the fixed-mode board game.
 - Keep shared runtime and window defaults centralized in `core/shared_config.py`.
 - Keep a coherent visual system built from the shared square-block language and shared palette.
 
@@ -34,7 +34,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 | `bang` | Flagship discrete-control arena game | value-based | active |
 | `jump` | Traversal platformer | actor-critic | active |
 | `vroom` | Continuous-control racing game | actor-critic | active |
-| `four` | Planning + self-play capstone | search + self-play | active |
+| `flip` | Planning + self-play capstone | search + self-play | active |
 | `kick` | Scalable 3v3 / 5v5 / 7v7 football with one kick action | actor-critic / CTDE | active |
 
 ## 3) Repository Layout and Shared Responsibilities
@@ -60,7 +60,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 - shared PPO/A2C/recurrent PPO/SAC infrastructure
 - target home for shared rollout, policy, critic, centralized-critic, and continuous-control helpers
 - `core/search_play/`
-- compact MCTS, self-play training, and policy/value helpers for `four`
+- compact MCTS, self-play training, and policy/value helpers for `flip`
 - `core/io/`, `core/runners/`, and `core/logging_utils.py`
 - shared run IO, training loops, and logging behavior
 - `core/runners/env_access.py`
@@ -102,9 +102,9 @@ Per-game snapshots live in `games/<game>/README.md`.
 - Reward components are appended at the end of the line as one- or two-letter codes separated by spaces, for example `W:10 D:0 L:0`.
 - Periodic or occasional events use the `>>>` prefix, for example `>>> Save:`, `>>> Arena:`, `>>> Explore:`, and `>>> Warn:`.
 - `Ep:` lines show environment performance: episode length, reward, rolling averages, success, and optional reward components.
-- `Up:` lines show optimizer health for actor-critic methods and appear once per optimizer update, not once per episode.
+- `Up:` lines show optimizer health for PPO / coach-critic methods and appear once per optimizer update, not once per episode.
 - PPO-style `Up:` fields are `Up`, `Lv`, `Steps`, `Pi`, `V`, `EV`, `Ent`, and `KL`.
-- SAC-style `Up:` fields are `Up`, `Lv`, `Steps`, `Pi`, `Q`, `Ent`, and `Alpha`.
+- SAC-style `Up:` fields are `Up`, `Lv`, `Steps`, `Pi`, `Q`, `Ent`, and `Alpha`, but SAC update logging is opt-in and Vroom keeps it disabled by default.
 - `Pi` is actor / policy loss, `V` is value loss, `Q` is critic / Q loss, `Ent` is policy entropy, and `KL` is approximate KL when available.
 - `EV` is critic explained variance, computed as `1 - Var(returns - values) / Var(returns)`: near `1.0` is excellent, around `0.0` means weak or no baseline improvement, and negative means worse than predicting the mean.
 - Artifact output remains under `runs/<game>/...`.
@@ -131,7 +131,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 ### `core/search_play/`
 
-- Used by: `four`
+- Used by: `flip`
 - Contains: compact MCTS, search-play training, and small policy/value helpers
 
 ### Default algorithm matrix
@@ -142,7 +142,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 | `bang` | `dqn` | `qlearn`, `ppo`, `a2c` |
 | `jump` | `ppo` | `a2c`, `dqn` |
 | `vroom` | `sac` | `ppo`, `a2c` |
-| `four` | `search_play` | none; requires self-play/search support |
+| `flip` | `search_play` | none; requires self-play/search support |
 | `kick` | `ppo` | `mappo`, `a2c`; requires centralized critic and multi-agent support |
 
 ## 7) Special Areas

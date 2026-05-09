@@ -22,7 +22,7 @@ OFF_TRACK_MAX_SPEED_FACTOR = 0.25
 OFF_TRACK_SPEED_TRANSITION_SECONDS = 0.5
 
 # TRACK GENERATION
-TRACK_WIDTH_PX = 75.0
+TRACK_WIDTH_PX = 90.0  # Supported: 80.0 or 90.0.
 TRACK_PADDING_PX = 8.0
 TRACK_FOOTPRINT_SCALE = 1.0
 TRACK_CORNER_RADIUS_PX = 120.0
@@ -52,6 +52,7 @@ TRACK_COMPLEXITY_BY_LEVEL = {
 
 # IO
 INPUT_FEATURE_NAMES = [
+    # SELF: 7
     "self_lat_off",
     "self_spd_lat",
     "self_spd_fwd",
@@ -59,17 +60,37 @@ INPUT_FEATURE_NAMES = [
     "self_yaw_rate",
     "self_head_err_sin",
     "self_head_err_cos",
-    "sens_look_near_sin",
-    "sens_look_near_cos",
-    "sens_look_far_sin",
-    "sens_look_far_cos",
+
+    # SENS / ROUTE: 14
+    "sens_route1_fwd",
+    "sens_route1_lat",
+    "sens_route1_tan_sin",
+    "sens_route1_tan_cos",
+    "sens_route2_fwd",
+    "sens_route2_lat",
+    "sens_route2_tan_sin",
+    "sens_route2_tan_cos",
+    "sens_route3_fwd",
+    "sens_route3_lat",
+    "sens_route3_tan_sin",
+    "sens_route3_tan_cos",
     "sens_curve_near",
     "sens_curve_far",
-    "sens_fwd",
-    "sens_left_front",
-    "sens_right_front",
-    "sens_left",
-    "sens_right",
+
+    # SENS / EDGE: 5
+    "sens_edge_fwd",
+    "sens_edge_left_front",
+    "sens_edge_right_front",
+    "sens_edge_left",
+    "sens_edge_right",
+
+    # SENS / CAR: 4
+    "sens_car_fwd",
+    "sens_car_left",
+    "sens_car_right",
+    "sens_car_back",
+
+    # FLAG: 2
     "flag_contact",
     "flag_off_track",
 ]
@@ -78,8 +99,12 @@ ACTION_NAMES = [
     "throttle",
     "brake",
 ]
-OBS_DIM = len(INPUT_FEATURE_NAMES)
-ACT_DIM = len(ACTION_NAMES)
+OBS_DIM = 32
+ACT_DIM = 3
+assert len(INPUT_FEATURE_NAMES) == 32
+assert len(ACTION_NAMES) == ACT_DIM
+assert OBS_DIM == 32
+assert ACT_DIM == 3
 
 
 # GAME
@@ -103,6 +128,9 @@ LATERAL_DAMPING_OFF_TRACK = 0.975
 # Probe distance for road-edge sensing.
 EDGE_PROBE_MAX_DISTANCE_PX = 140.0
 FORWARD_RAY_MAX_DISTANCE_PX = 180.0
+ROUTE_LOOKAHEADS_PX = (60.0, 130.0, 230.0)
+SENS_CAR_RANGE_PX = 140.0
+SENS_CAR_SIDE_RANGE_PX = 100.0
 
 
 # CURRICULUM

@@ -14,8 +14,6 @@
         "${input:activeGame}",
         "--algo",
         "${input:activeAlgo}",
-        "--team-size",
-        "${input:kickTeamSize}",
         "--level",
         "${input:trainLevel}",
         "--resume",
@@ -33,8 +31,6 @@
       "args": [
         "--game",
         "${input:activeGame}",
-        "--team-size",
-        "${input:kickTeamSize}",
         "--level",
         "${input:playLevel}"
       ]
@@ -52,8 +48,6 @@
         "${input:activeGame}",
         "--algo",
         "${input:activeAlgo}",
-        "--team-size",
-        "${input:kickTeamSize}",
         "--level",
         "${input:playLevel}",
         "--render"
@@ -70,6 +64,81 @@
       "args": [
         "--game",
         "${input:activeGame}",
+        "--algo",
+        "${input:activeAlgo}",
+        "--level",
+        "${input:playLevel}"
+      ]
+    },
+    {
+      "name": "Kick - Train",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.train",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick",
+        "--algo",
+        "${input:activeAlgo}",
+        "--team-size",
+        "${input:kickTeamSize}",
+        "--level",
+        "${input:trainLevel}",
+        "--resume",
+        "${input:resumeMode}"
+      ]
+    },
+    {
+      "name": "Kick - Play User",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_user",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick",
+        "--team-size",
+        "${input:kickTeamSize}",
+        "--level",
+        "${input:playLevel}"
+      ]
+    },
+    {
+      "name": "Kick - Play AI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.play_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick",
+        "--algo",
+        "${input:activeAlgo}",
+        "--team-size",
+        "${input:kickTeamSize}",
+        "--level",
+        "${input:playLevel}",
+        "--render"
+      ]
+    },
+    {
+      "name": "Kick - Capture Demo",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
+      "module": "scripts.capture_demo_ai",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "args": [
+        "--game",
+        "kick",
         "--algo",
         "${input:activeAlgo}",
         "--team-size",
@@ -90,14 +159,13 @@
         "bang",
         "jump",
         "vroom",
-        "four",
-        "kick"
+        "flip"
       ]
     },
     {
       "id": "kickTeamSize",
       "type": "pickString",
-      "description": "Kick team size mode; non-Kick games ignore this",
+      "description": "Kick team size mode",
       "default": "3 vs. 3",
       "options": [
         "3 vs. 3",

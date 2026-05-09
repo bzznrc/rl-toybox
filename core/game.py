@@ -38,10 +38,10 @@ ACTIVE_GAME_ORDER: tuple[str, ...] = (
     "bang",
     "jump",
     "vroom",
-    "four",
+    "flip",
     "kick",
 )
-FIXED_LEVEL_GAME_IDS = frozenset({"four"})
+FIXED_LEVEL_GAME_IDS = frozenset({"flip"})
 DEFAULT_TRAINING_LAUNCH_LEVEL = int(DEFAULT_CURRICULUM_MIN_LEVEL)
 DEFAULT_PLAY_LAUNCH_LEVEL = int(DEFAULT_CURRICULUM_MAX_LEVEL)
 
@@ -1054,8 +1054,8 @@ def _build_game_specs() -> dict[str, GameSpec]:
     # their declarative config without separate spec shims.
     from games.bang import config as bang_config
     from games.bang.env import BangEnv
-    from games.four import config as four_config
-    from games.four.env import FourEnv
+    from games.flip import config as flip_config
+    from games.flip.env import FlipEnv
     from games.jump import config as jump_config
     from games.jump.env import JumpEnv
     from games.kick import config as kick_config
@@ -1070,7 +1070,7 @@ def _build_game_specs() -> dict[str, GameSpec]:
         build_game_spec_from_config(config_module=bang_config, env_type=BangEnv),
         build_game_spec_from_config(config_module=jump_config, env_type=JumpEnv),
         build_game_spec_from_config(config_module=vroom_config, env_type=VroomEnv),
-        build_game_spec_from_config(config_module=four_config, env_type=FourEnv),
+        build_game_spec_from_config(config_module=flip_config, env_type=FlipEnv),
         build_game_spec_from_config(config_module=kick_config, env_type=KickEnv),
     )
     return {spec.game_id: spec for spec in specs}

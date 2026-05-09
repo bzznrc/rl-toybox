@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class TrackGenConfig:
-    track_width_px: float = 75.0
+    track_width_px: float = 80.0
     padding_px: float = 8.0
     footprint_scale: float = 1.0
     corner_radius_px: float = 130.0

@@ -33,7 +33,9 @@ from core.primitives import (
     draw_status_clock,
     draw_status_icon_row,
     draw_status_square_icon,
+    draw_two_tone_cell,
     draw_two_tone_square_block,
+    square_block_inset,
     status_icon_inset,
     status_icon_size,
 )
@@ -1482,30 +1484,25 @@ class JumpEnv(Env):
         max_camera = max(0.0, float(self.world_width_px - config.SCREEN_WIDTH))
         return float(max(0.0, min(raw, max_camera)))
 
-    def _draw_two_tone_rect(
+    def _draw_platform_obstacle_cells(
         self,
         *,
         left: float,
         top: float,
-        width: float,
-        height: float,
-        outer_color: tuple[int, int, int],
-        inner_color: tuple[int, int, int],
-        inset: float,
+        width_tiles: int,
+        camera_x: float,
     ) -> None:
-        bottom = self.window_controller.top_left_to_bottom(float(top), float(height))
-        arcade.draw_lbwh_rectangle_filled(float(left), float(bottom), float(width), float(height), outer_color)
-        inner_width = max(1.0, float(width) - 2.0 * float(inset))
-        inner_height = max(1.0, float(height) - 2.0 * float(inset))
-        inner_top = float(top + inset)
-        inner_bottom = self.window_controller.top_left_to_bottom(float(inner_top), float(inner_height))
-        arcade.draw_lbwh_rectangle_filled(
-            float(left + inset),
-            float(inner_bottom),
-            float(inner_width),
-            float(inner_height),
-            inner_color,
-        )
+        cell_size = float(config.TILE_SIZE)
+        for tile_offset in range(int(width_tiles)):
+            draw_two_tone_cell(
+                self.window_controller,
+                top_left_x=float(left - camera_x + tile_offset * cell_size),
+                top_left_y=float(top),
+                tile_size=cell_size,
+                outer_color=COLOR_FOG_GRAY,
+                inner_color=COLOR_SLATE_GRAY,
+                cell_inset=float(config.CELL_INSET),
+            )
 
     def _draw_world(self) -> None:
         arcade.draw_lbwh_rectangle_filled(
@@ -1519,26 +1516,20 @@ class JumpEnv(Env):
         for segment in self.segments:
             if float(segment.right) < float(camera_x) or float(segment.left) > float(camera_x + config.SCREEN_WIDTH):
                 continue
-            self._draw_two_tone_rect(
-                left=float(segment.left - camera_x),
+            self._draw_platform_obstacle_cells(
+                left=float(segment.left),
                 top=float(segment.surface_y),
-                width=float(segment.width),
-                height=float(config.PLATFORM_THICKNESS_PX),
-                outer_color=COLOR_FOG_GRAY,
-                inner_color=COLOR_SLATE_GRAY,
-                inset=float(max(2.0, config.CELL_INSET)),
+                width_tiles=int(segment.width_tiles),
+                camera_x=float(camera_x),
             )
         for platform in self.moving_platforms:
             if float(platform.right) < float(camera_x) or float(platform.left) > float(camera_x + config.SCREEN_WIDTH):
                 continue
-            self._draw_two_tone_rect(
-                left=float(platform.left - camera_x),
+            self._draw_platform_obstacle_cells(
+                left=float(platform.left),
                 top=float(platform.surface_y),
-                width=float(platform.width),
-                height=float(config.PLATFORM_THICKNESS_PX),
-                outer_color=COLOR_FOG_GRAY,
-                inner_color=COLOR_SLATE_GRAY,
-                inset=float(max(2.0, config.CELL_INSET)),
+                width_tiles=int(platform.width_tiles),
+                camera_x=float(camera_x),
             )
 
         goal_segment = self.segments[int(self.goal_segment_index)]
@@ -1561,7 +1552,7 @@ class JumpEnv(Env):
             tiles_per_side=int(config.GOAL_FLAG_WIDTH_TILES),
             outer_color=COLOR_AQUA,
             inner_color=COLOR_DEEP_TEAL,
-            inset=float(config.CELL_INSET),
+            inset=square_block_inset(float(config.CELL_INSET), int(config.GOAL_FLAG_WIDTH_TILES)),
         )
 
         for enemy in self.enemies:
@@ -1574,7 +1565,7 @@ class JumpEnv(Env):
                 tiles_per_side=int(config.ENEMY_TILES),
                 outer_color=COLOR_CORAL,
                 inner_color=COLOR_BRICK_RED,
-                inset=float(config.CELL_INSET),
+                inset=square_block_inset(float(config.CELL_INSET), int(config.ENEMY_TILES)),
             )
 
         draw_two_tone_square_block(
@@ -1585,7 +1576,7 @@ class JumpEnv(Env):
             tiles_per_side=int(config.PLAYER_TILES),
             outer_color=COLOR_AQUA,
             inner_color=COLOR_DEEP_TEAL,
-            inset=float(config.CELL_INSET),
+            inset=square_block_inset(float(config.CELL_INSET), int(config.PLAYER_TILES)),
         )
 
     def _draw_ghost_overlay(self) -> None:

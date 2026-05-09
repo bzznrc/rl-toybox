@@ -17,7 +17,8 @@ from core.io.checkpoint import load_torch_checkpoint, save_torch_checkpoint
 from core.search_play.interfaces import MCTSConfig, ReplaySample
 from core.search_play.mcts import run_mcts
 from core.search_play.networks import build_policy_value_network
-from games.four.rules import (
+from games.flip.rules import (
+    PLAYER_NONE,
     action_mask_from_observation,
     canonical_board_from_observation,
     symmetry_observation_policy_pairs,
@@ -70,7 +71,7 @@ class SearchPlayAlgorithm(Algorithm):
             dirichlet_epsilon=float(config.dirichlet_epsilon),
         )
         self.replay: deque[ReplaySample] = deque(maxlen=int(config.replay_size))
-        self._episode_history: list[dict[str, np.ndarray]] = []
+        self._episode_history: list[dict[str, Any]] = []
         self._pending_policy_target: np.ndarray | None = None
         self._episode_step_index = 0
         self.completed_games = 0
@@ -169,6 +170,13 @@ class SearchPlayAlgorithm(Algorithm):
 
     def observe(self, transition: dict[str, Any]) -> None:
         observation = np.asarray(transition["obs"], dtype=np.float32).reshape(-1)
+        info = transition.get("info", {})
+        actor_value: int | None = None
+        if isinstance(info, dict) and info.get("actor") is not None:
+            try:
+                actor_value = int(info.get("actor"))
+            except (TypeError, ValueError):
+                actor_value = None
         policy_target = self._pending_policy_target
         if policy_target is None:
             policy_target = np.zeros((int(self.action_dim),), dtype=np.float32)
@@ -182,6 +190,7 @@ class SearchPlayAlgorithm(Algorithm):
             {
                 "observation": observation.astype(np.float32, copy=False),
                 "policy_target": np.asarray(policy_target, dtype=np.float32),
+                "actor": actor_value,
             }
         )
         self._pending_policy_target = None
@@ -191,21 +200,43 @@ class SearchPlayAlgorithm(Algorithm):
         if not bool(transition.get("done", False)):
             return
 
-        info = transition.get("info", {})
         search_value = dict(info).get("search_value") if isinstance(info, dict) else None
-        if search_value is None:
-            reward_value = float(transition.get("reward", 0.0))
-            search_value = 1.0 if reward_value > 0.0 else -1.0 if reward_value < 0.0 else 0.0
-        outcome = float(search_value)
-        for sample in reversed(self._episode_history):
-            augmented_samples = self._symmetry_samples(
-                np.asarray(sample["observation"], dtype=np.float32),
-                np.asarray(sample["policy_target"], dtype=np.float32),
-                float(outcome),
-            )
-            for replay_sample in augmented_samples:
-                self.replay.append(replay_sample)
-            outcome = -float(outcome)
+        winner_value: int | None = None
+        if isinstance(info, dict) and info.get("winner") is not None:
+            try:
+                winner_value = int(info.get("winner"))
+            except (TypeError, ValueError):
+                winner_value = None
+        if winner_value is not None and all(sample.get("actor") is not None for sample in self._episode_history):
+            for sample in self._episode_history:
+                sample_actor = int(sample["actor"])
+                if int(winner_value) == PLAYER_NONE:
+                    sample_value = 0.0
+                elif int(winner_value) == int(sample_actor):
+                    sample_value = 1.0
+                else:
+                    sample_value = -1.0
+                augmented_samples = self._symmetry_samples(
+                    np.asarray(sample["observation"], dtype=np.float32),
+                    np.asarray(sample["policy_target"], dtype=np.float32),
+                    float(sample_value),
+                )
+                for replay_sample in augmented_samples:
+                    self.replay.append(replay_sample)
+        else:
+            if search_value is None:
+                reward_value = float(transition.get("reward", 0.0))
+                search_value = 1.0 if reward_value > 0.0 else -1.0 if reward_value < 0.0 else 0.0
+            outcome = float(search_value)
+            for sample in reversed(self._episode_history):
+                augmented_samples = self._symmetry_samples(
+                    np.asarray(sample["observation"], dtype=np.float32),
+                    np.asarray(sample["policy_target"], dtype=np.float32),
+                    float(outcome),
+                )
+                for replay_sample in augmented_samples:
+                    self.replay.append(replay_sample)
+                outcome = -float(outcome)
 
         self.completed_games += 1
         self._episode_history.clear()

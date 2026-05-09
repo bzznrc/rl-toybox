@@ -8,9 +8,10 @@ from typing import Callable
 import numpy as np
 
 from core.search_play.interfaces import MCTSConfig
-from games.four.rules import (
+from games.flip.rules import (
     PLAYER_ONE,
     apply_canonical_action,
+    apply_canonical_action_with_turn,
     build_action_mask,
     is_terminal_board,
     terminal_outcome_from_canonical,
@@ -23,6 +24,7 @@ PolicyValueFn = Callable[[np.ndarray], tuple[np.ndarray, float]]
 @dataclass
 class SearchNode:
     prior: float
+    value_to_parent_sign: int = -1
     visit_count: int = 0
     value_sum: float = 0.0
     children: dict[int, "SearchNode"] = field(default_factory=dict)
@@ -39,7 +41,7 @@ def _normalize_mask(action_mask: np.ndarray, action_dim: int) -> np.ndarray:
     if int(mask.size) != int(action_dim):
         raise ValueError(f"MCTS action mask expected {action_dim} values, got {int(mask.size)}.")
     if int(mask.sum()) <= 0:
-        return np.ones((int(action_dim),), dtype=np.bool_)
+        raise ValueError("MCTS received an all-zero action mask for a non-terminal position.")
     return mask.astype(np.bool_, copy=False)
 
 
@@ -63,10 +65,14 @@ def _masked_softmax(logits: np.ndarray, action_mask: np.ndarray) -> np.ndarray:
     return probs
 
 
-def _expand(node: SearchNode, priors: np.ndarray, action_mask: np.ndarray) -> None:
+def _expand(node: SearchNode, canonical_board: np.ndarray, priors: np.ndarray, action_mask: np.ndarray) -> None:
     mask = _normalize_mask(action_mask, int(priors.size))
     for action_index in np.flatnonzero(mask):
-        node.children[int(action_index)] = SearchNode(prior=float(priors[int(action_index)]))
+        _next_board, turn_sign = apply_canonical_action_with_turn(canonical_board, int(action_index))
+        node.children[int(action_index)] = SearchNode(
+            prior=float(priors[int(action_index)]),
+            value_to_parent_sign=int(turn_sign),
+        )
 
 
 def _add_root_noise(priors: np.ndarray, action_mask: np.ndarray, config: MCTSConfig) -> np.ndarray:
@@ -91,7 +97,7 @@ def _select_child(node: SearchNode, c_puct: float) -> tuple[int, SearchNode]:
     best_child: SearchNode | None = None
     root_visits = np.sqrt(float(max(1, node.visit_count)))
     for action_index, child in node.children.items():
-        q_score = -float(child.value)
+        q_score = float(child.value_to_parent_sign) * float(child.value)
         u_score = float(c_puct) * float(child.prior) * root_visits / float(1 + int(child.visit_count))
         score = q_score + u_score
         if score > best_score:
@@ -108,7 +114,7 @@ def _backpropagate(search_path: list[SearchNode], value: float) -> None:
     for node in reversed(search_path):
         node.visit_count += 1
         node.value_sum += float(backup_value)
-        backup_value = -float(backup_value)
+        backup_value = float(node.value_to_parent_sign) * float(backup_value)
 
 
 def run_mcts(
@@ -121,12 +127,12 @@ def run_mcts(
 ) -> tuple[np.ndarray, float]:
     board = np.asarray(canonical_board, dtype=np.int8)
     action_dim = int(root_action_mask.shape[0])
-    root = SearchNode(prior=1.0)
+    root = SearchNode(prior=1.0, value_to_parent_sign=1)
     root_logits, root_value = policy_value_fn(board.reshape(-1))
     root_priors = _masked_softmax(root_logits, root_action_mask)
     if bool(add_root_noise):
         root_priors = _add_root_noise(root_priors, root_action_mask, config)
-    _expand(root, root_priors, root_action_mask)
+    _expand(root, board, root_priors, root_action_mask)
 
     for _ in range(int(config.simulations_per_move)):
         node = root
@@ -144,7 +150,7 @@ def run_mcts(
             leaf_action_mask = build_action_mask(rollout_board, current_player=PLAYER_ONE)
             leaf_logits, leaf_value = policy_value_fn(rollout_board.reshape(-1))
             leaf_priors = _masked_softmax(leaf_logits, leaf_action_mask)
-            _expand(node, leaf_priors, leaf_action_mask)
+            _expand(node, rollout_board, leaf_priors, leaf_action_mask)
 
         _backpropagate(search_path, float(leaf_value))
 

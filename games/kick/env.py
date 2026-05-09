@@ -35,7 +35,7 @@ from core.primitives import (
     draw_status_clock,
     draw_status_icon_row,
     draw_status_square_icon,
-    draw_two_tone_tile,
+    draw_two_tone_cell,
     resolve_circle_collisions,
     status_icon_inset,
     status_icon_size,
@@ -2081,14 +2081,14 @@ class KickEnv(Env):
         else:
             outer = COLOR_CORAL
             inner = COLOR_BRICK_RED
-        draw_two_tone_tile(
+        draw_two_tone_cell(
             self.window_controller,
             top_left_x=player.x - self.player_half,
             top_left_y=player.y - self.player_half,
-            size=self.player_size,
+            tile_size=self.player_size,
             outer_color=outer,
             inner_color=inner,
-            inset=float(CELL_INSET),
+            cell_inset=float(CELL_INSET),
         )
         if controlled_marker:
             draw_control_marker(

@@ -26,6 +26,37 @@ class Env(ABC):
         """Render one composed frame for tooling such as capture/export."""
         self.render()
 
+    def capture_render_fps(self) -> float:
+        """Return the rendered play-mode FPS used by capture/export tooling."""
+        from core.shared_config import FPS
+
+        value = getattr(self, "render_fps", None)
+        if value is None:
+            game = getattr(self, "game", None)
+            value = getattr(game, "render_fps", None)
+        if value is None:
+            value = FPS
+        return max(1.0, float(value))
+
+    def capture_action_repeat_frames(self) -> int:
+        """Return how many rendered frames one policy action spans in play mode."""
+        value = getattr(self, "rl_action_repeat_frames", None)
+        if value is None:
+            game = getattr(self, "game", None)
+            value = getattr(game, "rl_action_repeat_frames", None)
+        return max(1, int(1 if value is None else value))
+
+    def capture_step_seconds(self) -> float:
+        """Return how much play-mode time one environment step represents."""
+        delay_seconds = getattr(self, "eval_step_delay_seconds", None)
+        if delay_seconds is None:
+            game = getattr(self, "game", None)
+            delay_seconds = getattr(game, "eval_step_delay_seconds", 0.0)
+        return (
+            float(self.capture_action_repeat_frames()) / float(self.capture_render_fps())
+            + max(0.0, float(delay_seconds))
+        )
+
     def get_window_controller(self):
         """Return the active window controller when the env is rendered."""
         controller = getattr(self, "window_controller", None)

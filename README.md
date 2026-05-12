@@ -26,6 +26,7 @@
 </p>
 <p align="center">
   <img src="media/vroom-demo.gif" alt="Vroom demo clip" width="32%" />
+  <img src="media/flip-demo.gif" alt="Flip demo clip" width="32%" />
   <img src="media/kick-demo.gif" alt="Kick demo clip" width="32%" />
 </p>
 

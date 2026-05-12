@@ -7,11 +7,9 @@ import os
 from pathlib import Path
 
 import arcade
-import numpy as np
 from PIL import Image
 
 from core import arcade_style
-from core.shared_config import FPS as SHOW_GAME_FPS
 from core.game import (
     apply_generic_launch_level,
     apply_seed_from_config,
@@ -20,18 +18,16 @@ from core.game import (
     normalize_kick_team_size,
     parse_override_assignments,
     prepare_run,
-    resolve_latest_play_model_path,
+    resolve_play_model_path,
     set_nested_override,
 )
 from core.logging_utils import configure_logging, log_key_values, log_run_context
-from core.runners.env_access import act_with_optional_signals, extract_action_mask, extract_centralized_state
 from core.runners.eval import reset_eval_policy_state, select_eval_action
 from core.utils import PROJECT_ROOT
 
 
 CAPTURE_DURATION_SECONDS = 15
 CAPTURE_FPS = 30
-CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES = 2
 CAPTURE_GIF_COLORS = 32
 CAPTURE_GIF_OPTIMIZE = True
 
@@ -66,10 +62,21 @@ def _shared_arcade_palette_colors() -> tuple[tuple[int, int, int], ...]:
 SHARED_ARCADE_PALETTE_COLORS = _shared_arcade_palette_colors()
 
 
+def _normalize_choice(value: str) -> str:
+    return str(value).strip().lower()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture a short rendered AI demo")
     parser.add_argument("--game", required=True, help="Game id")
     parser.add_argument("--algo", default=None, help="Override algorithm id; use auto/default to keep the game's default")
+    parser.add_argument(
+        "--model",
+        default="best",
+        type=_normalize_choice,
+        choices=["best", "check"],
+        help="Model artifact to load",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
     parser.add_argument(
         "--team-size",
@@ -93,6 +100,26 @@ def parse_args() -> argparse.Namespace:
         help="Generic override in dotted.path=value form, e.g. --set algo.config.learning_rate=0.0003",
     )
     return parser.parse_args()
+
+
+def _missing_model_message(
+    *,
+    game_id: str,
+    algo_id: str,
+    run_name: str,
+    level: int,
+    team_size: object | None,
+    original_error: Exception,
+) -> str:
+    if str(game_id).strip().lower() != "kick":
+        return str(original_error)
+    size = normalize_kick_team_size(team_size)
+    return (
+        f"No trained Kick model was found for level {int(level)} "
+        f"({algo_id}_{run_name}_L{int(level)}). The selected mode is {size} vs. {size}. "
+        f"Train the shared Kick model first with: "
+        f"python -m scripts.train --game kick --team-size {size} --level {int(level)}"
+    )
 
 
 def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
@@ -168,30 +195,6 @@ def _capture_current_frame(env: object) -> Image.Image:
     )
 
 
-def _capture_pre_action_delay_seconds(env: object) -> float:
-    delay_fn = getattr(env, "capture_pre_action_delay_seconds", None)
-    if not callable(delay_fn):
-        return 0.0
-    try:
-        return max(0.0, float(delay_fn()))
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _capture_repeated_current_frames(
-    env: object,
-    frames: list[Image.Image],
-    *,
-    target_frame_count: int,
-    frame_count: int,
-) -> None:
-    repeats = max(0, int(frame_count))
-    for _idx in range(repeats):
-        if len(frames) >= int(target_frame_count):
-            return
-        frames.append(_capture_current_frame(env))
-
-
 def _build_output_path(game_id: str, level: int) -> Path:
     del level
     target_dir = PROJECT_ROOT / "media"
@@ -215,46 +218,6 @@ def _save_gif(frames: list[Image.Image], output_path: Path, capture_fps: int) ->
     )
 
 
-def _should_use_exploratory_capture(composed_config: dict[str, object]) -> bool:
-    algo_id = str(dict(composed_config.get("algo", {})).get("id", "")).strip().lower()
-    return algo_id == "search_play"
-
-
-def _sample_masked_action(action_mask: object | None) -> int | None:
-    if action_mask is None:
-        return None
-    mask = np.asarray(action_mask, dtype=np.bool_).reshape(-1)
-    legal_actions = np.flatnonzero(mask)
-    if int(legal_actions.size) <= 0:
-        return None
-    return int(np.random.choice(legal_actions))
-
-
-def _select_capture_action(
-    env: object,
-    algorithm: object,
-    obs: object,
-    *,
-    explore: bool,
-    random_opening: bool,
-):
-    if not bool(explore):
-        return select_eval_action(env, algorithm, obs)
-    action_mask = extract_action_mask(env, obs)
-    if bool(random_opening):
-        sampled_action = _sample_masked_action(action_mask)
-        if sampled_action is not None:
-            return int(sampled_action)
-    central_obs = extract_centralized_state(env, obs)
-    return act_with_optional_signals(
-        algorithm,
-        obs,
-        explore=True,
-        action_mask=action_mask,
-        central_obs=central_obs,
-    )
-
-
 def main() -> None:
     args = parse_args()
     configure_logging()
@@ -274,52 +237,55 @@ def main() -> None:
             raise FileNotFoundError(f"Checkpoint not found at '{model_path}'.")
     else:
         try:
-            model_path = resolve_latest_play_model_path(run_paths, level)
+            model_path = resolve_play_model_path(run_paths, str(args.model).strip().lower(), int(level))
         except FileNotFoundError as exc:
-            if game_id == "kick":
-                team_size = normalize_kick_team_size(dict(composed_config.get("common", {})).get("team_size"))
-                raise FileNotFoundError(
-                    f"No trained Kick model was found for level {int(level)}. "
-                    f"The selected mode is {team_size} vs. {team_size}. Train the shared Kick model first with: "
-                    f"python -m scripts.train --game kick --team-size {team_size} --level {int(level)}"
-                ) from None
-            raise
+            raise FileNotFoundError(
+                _missing_model_message(
+                    game_id=game_id,
+                    algo_id=algo_id,
+                    run_name=str(dict(composed_config.get("run", {})).get("name", "")),
+                    level=int(level),
+                    team_size=dict(composed_config.get("common", {})).get("team_size"),
+                    original_error=exc,
+                )
+            ) from None
     composed_config["common"]["checkpoint_path"] = str(model_path)
     algorithm = build_algo_from_config(composed_config)
     algorithm.load(str(model_path))
 
-    native_fps = int(SHOW_GAME_FPS)
     capture_fps = int(CAPTURE_FPS)
-    capture_period_frames = float(native_fps) / float(capture_fps)
+    capture_period_seconds = 1.0 / float(capture_fps)
     target_frame_count = max(1, int(CAPTURE_DURATION_SECONDS) * int(capture_fps))
     output_path = _build_output_path(game_id, level)
-    exploratory_capture = bool(_should_use_exploratory_capture(composed_config))
 
     os.environ["RL_TOYBOX_RENDER_VISIBLE"] = "0"
     env = build_env_from_config(composed_config, mode="eval", render=True, level=int(level))
+    play_action_repeat_frames = int(env.capture_action_repeat_frames())
+    original_action_repeat_frames = getattr(env, "rl_action_repeat_frames", None)
+    if original_action_repeat_frames is not None:
+        setattr(env, "rl_action_repeat_frames", 1)
     frames: list[Image.Image] = []
-    step_index = 0
-    episode_step_index = 0
-    next_capture_step = 0.0
+    play_elapsed_seconds = 0.0
+    next_capture_second = 0.0
 
     def capture_if_due() -> None:
-        nonlocal next_capture_step
-        while len(frames) < target_frame_count and float(step_index) >= float(next_capture_step) - 1e-9:
+        nonlocal next_capture_second
+        while (
+            len(frames) < target_frame_count
+            and float(play_elapsed_seconds) >= float(next_capture_second) - 1e-9
+        ):
             frames.append(_capture_current_frame(env))
-            next_capture_step += float(capture_period_frames)
+            next_capture_second += float(capture_period_seconds)
 
     try:
         run_context = {
             "game": game_id,
             "algo": algo_id,
             "level": int(level),
-            "native_fps": int(native_fps),
+            "render_fps": float(env.capture_render_fps()),
             "capture_fps": int(capture_fps),
             "duration_seconds": int(CAPTURE_DURATION_SECONDS),
-            "explore": bool(exploratory_capture),
-            "random_opening_plies": (
-                int(CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES) if bool(exploratory_capture) else 0
-            ),
+            "action_repeat_frames": int(play_action_repeat_frames),
             "model": model_path,
             "output": output_path,
         }
@@ -332,35 +298,17 @@ def main() -> None:
         capture_if_due()
 
         while len(frames) < target_frame_count:
-            pre_action_delay_seconds = _capture_pre_action_delay_seconds(env)
-            _capture_repeated_current_frames(
-                env,
-                frames,
-                target_frame_count=int(target_frame_count),
-                frame_count=round(float(pre_action_delay_seconds) * float(capture_fps)),
-            )
-            if len(frames) >= target_frame_count:
-                break
-
-            random_opening = bool(
-                exploratory_capture
-                and int(episode_step_index) < int(CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES)
-            )
-            action = _select_capture_action(
-                env,
-                algorithm,
-                obs,
-                explore=bool(exploratory_capture),
-                random_opening=bool(random_opening),
-            )
-            obs, _reward, done, _info = env.step(action)
-            step_index += 1
-            episode_step_index += 1
-            capture_if_due()
+            action = select_eval_action(env, algorithm, obs)
+            done = False
+            for _repeat_index in range(int(play_action_repeat_frames)):
+                obs, _reward, done, _info = env.step(action)
+                play_elapsed_seconds += float(env.capture_step_seconds())
+                capture_if_due()
+                if done or len(frames) >= target_frame_count:
+                    break
             if done:
                 reset_eval_policy_state(algorithm)
                 obs = env.reset()
-                episode_step_index = 0
                 _draw_current_frame(env)
 
         _save_gif(frames, output_path, capture_fps)
@@ -368,13 +316,10 @@ def main() -> None:
             "rl_toybox.capture_demo_ai",
             {
                 "Frames": len(frames),
-                "Native FPS": int(native_fps),
+                "Render FPS": float(env.capture_render_fps()),
                 "Capture FPS": int(capture_fps),
                 "Duration Seconds": int(CAPTURE_DURATION_SECONDS),
-                "Explore": bool(exploratory_capture),
-                "Random Opening Plies": (
-                    int(CAPTURE_SEARCH_PLAY_RANDOM_OPENING_PLIES) if bool(exploratory_capture) else 0
-                ),
+                "Action Repeat Frames": int(play_action_repeat_frames),
                 "Model": model_path,
                 "Output": output_path,
             },
@@ -382,6 +327,8 @@ def main() -> None:
             key_value_separator=":",
         )
     finally:
+        if original_action_repeat_frames is not None:
+            setattr(env, "rl_action_repeat_frames", original_action_repeat_frames)
         env.close()
 
 

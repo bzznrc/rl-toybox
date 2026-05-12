@@ -4,7 +4,7 @@
 
 ## Clip
 
-A demo clip can be captured after training with `python -m scripts.capture_demo_ai --game flip`.
+![Flip Demo](../../media/flip-demo.gif)
 
 ## Algorithm / Network
 

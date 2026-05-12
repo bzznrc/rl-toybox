@@ -53,6 +53,7 @@ from games.snake.config import (
     ACTION_NAMES as SNAKE_ACTION_NAMES,
     ACT_DIM as SNAKE_ACT_DIM,
     CURRICULUM_PROMOTION,
+    FOOD_TIMEOUT_STEPS,
     LEVEL_SETTINGS,
     MAX_OBSTACLE_SECTIONS,
     MAX_LEVEL,
@@ -521,7 +522,6 @@ class TrainingSnakeGame(BaseSnakeGame):
 
     def __init__(self, show_game: bool = True) -> None:
         super().__init__(show_game=show_game)
-        self.timeout_steps_per_length = 100
         self.foods_eaten = 0
         self.last_reward_breakdown: dict[str, float] = {}
 
@@ -614,31 +614,29 @@ class TrainingSnakeGame(BaseSnakeGame):
         manhattan_dist = abs(dx_cells) + abs(dy_cells)
         return float(clip_unit(float(manhattan_dist) / float(max_manhattan)))
 
-    def _hunger_cap_steps(self, *, snake_length: int | None = None) -> int:
-        length = max(1, int(len(self.snake) if snake_length is None else snake_length))
-        return max(1, int(self.timeout_steps_per_length) * length)
+    @staticmethod
+    def _hunger_norm(steps_since_food: int) -> float:
+        hunger_steps = max(0, int(steps_since_food))
+        timeout_steps = max(1, int(FOOD_TIMEOUT_STEPS))
+        return float(clip_unit(float(hunger_steps) / float(timeout_steps)))
 
     def _food_progress_potential(
         self,
         *,
         steps_since_food: int | None = None,
-        hunger_cap_steps: int | None = None,
     ) -> float:
         dist_food_norm = float(self._food_manhattan_norm())
         hunger_steps = int(self.steps_since_food if steps_since_food is None else steps_since_food)
-        hunger_cap = max(1, int(self._hunger_cap_steps() if hunger_cap_steps is None else hunger_cap_steps))
-        hunger_norm = float(clip_unit(float(hunger_steps) / float(hunger_cap)))
+        hunger_norm = float(self._hunger_norm(hunger_steps))
         return float(-dist_food_norm - 0.5 * hunger_norm)
 
     def play_step(self, action: list[int]) -> tuple[float, bool, int]:
         self.frame_iteration += 1
         self.poll_events()
 
-        hunger_cap_steps = int(self._hunger_cap_steps(snake_length=len(self.snake)))
         phi_prev = float(
             self._food_progress_potential(
                 steps_since_food=int(self.steps_since_food),
-                hunger_cap_steps=hunger_cap_steps,
             )
         )
         action_idx = self._action_index(action)
@@ -653,8 +651,7 @@ class TrainingSnakeGame(BaseSnakeGame):
             "event.reward_food": 0.0,
             "outcome.penalty_lose": 0.0,
         }
-        timeout_limit = max(1, int(self.timeout_steps_per_length) * max(1, len(self.snake)))
-        if self._has_collision() or self.frame_iteration > timeout_limit:
+        if self._has_collision():
             reached_success_target = int(self.score) >= int(SUCCESS_FOODS_REQUIRED)
             if not reached_success_target:
                 reward += float(PENALTY_LOSE)
@@ -664,10 +661,20 @@ class TrainingSnakeGame(BaseSnakeGame):
 
         ate_food = bool(self.head == self.food)
         next_steps_since_food = 0 if ate_food else int(self.steps_since_food) + 1
+        if not ate_food:
+            self.snake.pop()
+            self.steps_since_food = int(next_steps_since_food)
+            if int(self.steps_since_food) >= int(FOOD_TIMEOUT_STEPS):
+                reached_success_target = int(self.score) >= int(SUCCESS_FOODS_REQUIRED)
+                if not reached_success_target:
+                    reward += float(PENALTY_LOSE)
+                    reward_breakdown["outcome.penalty_lose"] = float(PENALTY_LOSE)
+                self.last_reward_breakdown = reward_breakdown
+                return reward, True, self.score
+
         phi_next = float(
             self._food_progress_potential(
                 steps_since_food=next_steps_since_food,
-                hunger_cap_steps=hunger_cap_steps,
             )
         )
         progress_reward = float(
@@ -687,12 +694,8 @@ class TrainingSnakeGame(BaseSnakeGame):
             reward += float(REWARD_FOOD)
             reward_breakdown["event.reward_food"] = float(REWARD_FOOD)
             self._place_food()
-            self.frame_iteration = 0
             self.steps_since_food = 0
             self._prev_tgt_manhattan_norm = None
-        else:
-            self.snake.pop()
-            self.steps_since_food = int(next_steps_since_food)
 
         self.draw_frame()
         self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
@@ -739,7 +742,7 @@ class TrainingSnakeGame(BaseSnakeGame):
             "self_heading_cos": float(heading_cos),
             "self_len_norm": float(clip_unit(float(len(self.snake)) / float(grid_cells))),
             "self_last_act_norm": float(normalize_last_action(self.last_action_index, SNAKE_ACT_DIM)),
-            "self_hunger_norm": float(clip_unit(float(self.steps_since_food) / float(grid_cells))),
+            "self_hunger_norm": float(self._hunger_norm(int(self.steps_since_food))),
             "sens_fwd": float(self._ray_distance_to_collision(dir_x, dir_y)),
             "sens_left": float(self._ray_distance_to_collision(left_x, left_y)),
             "sens_right": float(self._ray_distance_to_collision(right_x, right_y)),
@@ -824,8 +827,6 @@ class SnakeEnv(Env):
         if not isinstance(self.game, BaseSnakeGame):
             return
         self.game.num_obstacles = max(0, int(settings["num_obstacles"]))
-        if isinstance(self.game, TrainingSnakeGame):
-            self.game.timeout_steps_per_length = max(1, int(settings["timeout_steps_per_length"]))
 
     @staticmethod
     def _action_to_one_hot(action_idx: int) -> list[int]:

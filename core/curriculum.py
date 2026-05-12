@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from statistics import mean
 from typing import Callable, Mapping
 
@@ -18,6 +18,7 @@ class CurriculumConfig:
     max_level: int = DEFAULT_CURRICULUM_MAX_LEVEL
     min_episodes_per_level: int = 100
     success_threshold: float = 0.60
+    success_threshold_by_level: dict[int, float] = field(default_factory=dict)
 
 
 def build_curriculum_config(
@@ -34,12 +35,21 @@ def build_curriculum_config(
     min_episodes = max(1, int(settings.get("min_episodes_per_level", defaults.min_episodes_per_level)))
     threshold = float(settings.get("success_threshold", defaults.success_threshold))
     threshold = float(max(0.0, min(1.0, threshold)))
+    raw_thresholds_by_level = settings.get("success_threshold_by_level", {})
+    thresholds_by_level: dict[int, float] = {}
+    if isinstance(raw_thresholds_by_level, Mapping):
+        for raw_level, raw_threshold in raw_thresholds_by_level.items():
+            level = int(raw_level)
+            if int(min_level) <= level <= int(max_level):
+                level_threshold = float(raw_threshold)
+                thresholds_by_level[level] = float(max(0.0, min(1.0, level_threshold)))
 
     return CurriculumConfig(
         min_level=int(min_level),
         max_level=int(max_level),
         min_episodes_per_level=int(min_episodes),
         success_threshold=float(threshold),
+        success_threshold_by_level=thresholds_by_level,
     )
 
 
@@ -100,6 +110,10 @@ class SharedCurriculum:
             return None
         return float(mean(buffer))
 
+    def success_threshold_for_level(self, level: int | None = None) -> float:
+        target_level = int(self._level if level is None else level)
+        return float(self.config.success_threshold_by_level.get(target_level, self.config.success_threshold))
+
     def on_episode_end(self, success: int) -> bool:
         success_int = 1 if int(success) > 0 else 0
         level = int(self._level)
@@ -116,7 +130,7 @@ class SharedCurriculum:
         if len(recent) < int(self.config.min_episodes_per_level):
             return False
         avg_success = self.avg_success_in_level(level)
-        if avg_success is None or float(avg_success) < float(self.config.success_threshold):
+        if avg_success is None or float(avg_success) < float(self.success_threshold_for_level(level)):
             return False
 
         self._level = min(int(self.config.max_level), int(self._level) + 1)

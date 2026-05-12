@@ -43,6 +43,7 @@ ACT_DIM = len(ACTION_NAMES)
 
 # GAME
 DEFAULT_ALGO = "qlearn"
+FOOD_TIMEOUT_STEPS = 180
 
 
 # CURRICULUM
@@ -59,23 +60,18 @@ CURRICULUM_PROMOTION = {
 LEVEL_SETTINGS = {
     1: {
         "num_obstacles": 0,
-        "timeout_steps_per_length": 120,
     },
     2: {
-        "num_obstacles": 3,
-        "timeout_steps_per_length": 110,
+        "num_obstacles": 2,
     },
     3: {
-        "num_obstacles": 6,
-        "timeout_steps_per_length": 100,
+        "num_obstacles": 4,
     },
     4: {
-        "num_obstacles": 9,
-        "timeout_steps_per_length": 90,
+        "num_obstacles": 6,
     },
     5: {
-        "num_obstacles": 12,
-        "timeout_steps_per_length": 80,
+        "num_obstacles": 8,
     },
 }
 
@@ -83,7 +79,7 @@ LEVEL_SETTINGS = {
 # REWARDS
 PENALTY_LOSE = -5.0
 REWARD_FOOD = 1.0
-PENALTY_STEP = -0.005
+PENALTY_STEP = -0.01
 PROGRESS_SCALE = 1.0
 PROGRESS_CLIP = 0.05
 REWARD_COMPONENTS = {

@@ -109,14 +109,11 @@ The same dynamic scripted-team logic drives RIGHT opponents and idle LEFT teamma
 
 Temporary jobs are recomputed from live state whenever the level reaction cadence allows it:
 
-- `carrier`: current team player with the ball
-- `support_a`: forward / diagonal support option
-- `support_b`: level or safer support option
-- `stopper`: closest scripted defender pressing the opponent carrier
-- `cover_a`: lane cover between ball / carrier and own goal
-- `cover_b`: dangerous-opponent mark or nearby passing-space cover
+- Attack: `carrier`, `support_a`, `support_b`, `extra_support`
+- Defense: `stopper`, `cover_center`, `cover_side`, `extra_cover`, `mark_space`
+- Loose ball: `chaser`, `support_a`, `safety`, `extra_support`
 
-These are temporary jobs, not roles. The planner uses target points, teammate separation, mild opponent avoidance, and small possession-style variation (`direct`, `wide_upper`, `wide_lower`, `patient`).
+These are temporary jobs, not roles. The planner builds live job targets and soft shape anchors from the ball, owner, goals, teammates, and opponents, assigns scripted players greedily by distance, blends each job with its anchor, then applies teammate separation, mild opponent avoidance, and small possession-style variation (`direct`, `wide_upper`, `wide_lower`, `patient`).
 
 ### Kick
 

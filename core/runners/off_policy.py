@@ -16,7 +16,6 @@ from core.logging_utils import (
     log_periodic_event_line,
     log_save_line,
     log_sac_update_line,
-    should_emit_train_progress_log,
 )
 from core.runners.env_access import (
     act_with_optional_signals,
@@ -220,34 +219,33 @@ def run_off_policy_training(
                     },
                 )
 
-            if should_emit_train_progress_log("off_policy_progress"):
-                episode_epsilon: float | None = None
-                algorithm_epsilon = getattr(algorithm, "epsilon", None)
-                if algorithm_epsilon is not None:
-                    episode_epsilon = float(algorithm_epsilon)
-                elif exploration_event is not None and "epsilon" in exploration_event:
-                    episode_epsilon = float(exploration_event["epsilon"])
+            episode_epsilon: float | None = None
+            algorithm_epsilon = getattr(algorithm, "epsilon", None)
+            if algorithm_epsilon is not None:
+                episode_epsilon = float(algorithm_epsilon)
+            elif exploration_event is not None and "epsilon" in exploration_event:
+                episode_epsilon = float(exploration_event["epsilon"])
 
-                components_text = format_reward_components(info.get("reward_components"))
-                best_avg_for_level = best_avg_reward_by_level.get(int(episode_level))
+            components_text = format_reward_components(info.get("reward_components"))
+            best_avg_for_level = best_avg_reward_by_level.get(int(episode_level))
 
-                log_episode_line(
-                    episode=int(total_episodes),
-                    level=int(episode_level),
-                    ep_len=int(episode_steps),
-                    reward=float(episode_reward),
-                    avg_reward=avg_reward,
-                    best_avg=(
-                        float(best_avg_for_level)
-                        if stats_ready_level and best_avg_for_level is not None
-                        else None
-                    ),
-                    epsilon=episode_epsilon,
-                    success=int(episode_success),
-                    avg_success=avg_success,
-                    best_avg_label=f"BR{int(episode_level)}",
-                    reward_components=components_text,
-                )
+            log_episode_line(
+                episode=int(total_episodes),
+                level=int(episode_level),
+                ep_len=int(episode_steps),
+                reward=float(episode_reward),
+                avg_reward=avg_reward,
+                best_avg=(
+                    float(best_avg_for_level)
+                    if stats_ready_level and best_avg_for_level is not None
+                    else None
+                ),
+                epsilon=episode_epsilon,
+                success=int(episode_success),
+                avg_success=avg_success,
+                best_avg_label=f"BR{int(episode_level)}",
+                reward_components=components_text,
+            )
 
             obs = env.reset()
             episode_reward = 0.0

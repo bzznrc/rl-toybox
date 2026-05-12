@@ -17,7 +17,7 @@ MAX_EPISODE_STEPS = 1_200
 
 # OFF-TRACK HANDLING
 # Max forward speed multiplier when fully off track.
-OFF_TRACK_MAX_SPEED_FACTOR = 0.25
+OFF_TRACK_MAX_SPEED_FACTOR = 0.50
 # Seconds to blend between on-track speed (1.0) and off-track speed factor.
 OFF_TRACK_SPEED_TRANSITION_SECONDS = 0.5
 
@@ -30,8 +30,6 @@ TRACK_SAMPLE_SPACING_PX = 6.0
 TRACK_START_STRAIGHT_LEN_PX = 180.0
 TRACK_LONG_SIDE_TEMPLATE_CHOICES = ("straight", "bell", "s_curve", "fold")
 TRACK_SHORT_SIDE_TEMPLATE_CHOICES = ("straight", "bell")
-TRACK_LEVEL_5_LONG_SIDE_TEMPLATE_CHOICES = ("straight", "bell", "s_curve", "fold")
-TRACK_LEVEL_5_SHORT_SIDE_TEMPLATE_CHOICES = ("straight", "bell")
 TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX = 50.0
 TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX = 64.0
 TRACK_LONG_SIDE_S_AMPLITUDE_MIN_PX = 40.0
@@ -40,14 +38,7 @@ TRACK_LONG_SIDE_INSET_WIDTH_CAP_RATIO = 1.35
 TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO = 0.24
 TRACK_FOLD_GAP_PX = 16.0
 TRACK_GENERATION_MAX_ATTEMPTS = 50
-# Complexity gates long-side templates from rounded rectangle to folded loop.
-TRACK_COMPLEXITY_BY_LEVEL = {
-    1: (0.00, 0.15),
-    2: (0.10, 0.35),
-    3: (0.25, 0.55),
-    4: (0.45, 0.75),
-    5: (0.65, 0.90),
-}
+TRACK_COMPLEXITY_HARD_SAMPLE_RATE = 0.30
 
 
 # IO
@@ -117,9 +108,12 @@ ACTION_SPACE_BOUNDS = {
 
 # VEHICLE MECHANICS
 # Surface grip multiplier when fully off-track (1.0 on-track).
-OFF_TRACK_SURFACE_GRIP = 0.50
+OFF_TRACK_SURFACE_GRIP = 0.75
 # Steering authority smooth speed decay strength.
 STEER_SPEED_DECAY = 1.35
+# Low-speed steering remains possible, but less spin-prone.
+STEER_FULL_SPEED_NORM = 0.75
+STEER_MIN_SPEED_FACTOR = 0.25
 # Throttle effectiveness loss at full steering.
 TURN_THROTTLE_LOSS = 0.30
 # Lateral velocity retention (closer to 1.0 = more slip).
@@ -128,9 +122,11 @@ LATERAL_DAMPING_OFF_TRACK = 0.975
 # Probe distance for road-edge sensing.
 EDGE_PROBE_MAX_DISTANCE_PX = 140.0
 FORWARD_RAY_MAX_DISTANCE_PX = 180.0
-ROUTE_LOOKAHEADS_PX = (60.0, 130.0, 230.0)
+ROUTE_LOOKAHEAD_RANGES_PX = ((45.0, 75.0), (90.0, 135.0), (180.0, 270.0))
 SENS_CAR_RANGE_PX = 140.0
 SENS_CAR_SIDE_RANGE_PX = 100.0
+OPPONENT_SPEED_MULT_RANGE = (0.95, 1.05)
+OPPONENT_BEND_COAST_MULT_RANGE = (0.90, 1.10)
 
 
 # CURRICULUM
@@ -141,34 +137,34 @@ REWARD_ROLLING_WINDOW = 100
 CURRICULUM_PROMOTION = {
     "min_episodes_per_level": 100,
     "success_threshold": 0.60,
+    "solo_success_threshold": 0.80,
 }
 
 LEVEL_SETTINGS = {
     1: {
         "num_cars": 1,
         "opponent_speed_cap": 0.0,
-        # Negative values coast early, positive values coast late.
-        "opponent_coast_error_choices": [0.0],
+        "track_complexity_range": (0.00, 0.30),
     },
     2: {
-        "num_cars": 2,
-        "opponent_speed_cap": 0.25,
-        "opponent_coast_error_choices": [-40.0, 0.0, 40.0],
+        "num_cars": 1,
+        "opponent_speed_cap": 0.0,
+        "track_complexity_range": (0.20, 0.50),
     },
     3: {
         "num_cars": 2,
         "opponent_speed_cap": 0.50,
-        "opponent_coast_error_choices": [-30.0, 0.0, 30.0],
+        "track_complexity_range": (0.40, 0.70),
     },
     4: {
         "num_cars": 3,
         "opponent_speed_cap": 0.75,
-        "opponent_coast_error_choices": [-20.0, 0.0, 20.0],
+        "track_complexity_range": (0.50, 0.80),
     },
     5: {
         "num_cars": 4,
-        "opponent_speed_cap": 1.0,
-        "opponent_coast_error_choices": [-10.0, 0.0, 10.0],
+        "opponent_speed_cap": 1.00,
+        "track_complexity_range": (0.60, 0.90),
     },
 }
 
@@ -176,14 +172,16 @@ LEVEL_SETTINGS = {
 # REWARDS
 REWARD_WIN = 10.0
 PENALTY_LOSE = -5.0
-PENALTY_STEP = -0.005
-PROGRESS_SCALE = 5.0
-PROGRESS_CLIP = 0.25
-PENALTY_COLLISION = -0.5
+PENALTY_STEP = -0.0075
+PROGRESS_SCALE = 7.5
+PROGRESS_CLIP = 0.20
+PENALTY_TRACK_COVERAGE = 0.005
+PENALTY_COLLISION = -0.02
 REWARD_COMPONENTS = {
     "outcome.reward_win": REWARD_WIN,
     "outcome.penalty_lose": PENALTY_LOSE,
     "progress.scale": PROGRESS_SCALE,
+    "track.penalty_coverage": PENALTY_TRACK_COVERAGE,
     "event.penalty_collision": PENALTY_COLLISION,
     "step.penalty_step": PENALTY_STEP,
 }

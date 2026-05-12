@@ -191,6 +191,15 @@ class KickPlayer:
     in_contact: bool = False
 
 
+@dataclass(frozen=True)
+class ScriptedJob:
+    name: str
+    job_target: tuple[float, float]
+    shape_anchor: tuple[float, float]
+    avoid_opponents: bool = True
+    preferred_player: KickPlayer | None = None
+
+
 class KickEnv(Env):
     """Top-down football environment with a scalable centralized critic signal."""
 
@@ -256,11 +265,12 @@ class KickEnv(Env):
     SCRIPTED_SUPPORT_SAFE_TILES = 4.2
     SCRIPTED_SUPPORT_WIDE_TILES = 4.2
     SCRIPTED_SUPPORT_SAFE_WIDE_TILES = 3.2
-    SCRIPTED_COVER_DEPTH = 0.54
-    SCRIPTED_MARK_DEPTH = 0.42
     SCRIPTED_COVER_WIDE_TILES = 3.2
     SCRIPTED_SEPARATION_TILES = 3.6
     SCRIPTED_AVOID_RADIUS_TILES = 2.4
+    SCRIPTED_JOB_TARGET_WEIGHT = 0.75
+    SCRIPTED_SHAPE_ANCHOR_WEIGHT = 0.25
+    SCRIPTED_PRESS_OFFSET_TILES = 1.45
     POSSESSION_STYLES = ("direct", "wide_upper", "wide_lower", "patient")
 
     def __init__(
@@ -1014,26 +1024,106 @@ class KickEnv(Env):
     def _perp(vec: tuple[float, float]) -> tuple[float, float]:
         return -float(vec[1]), float(vec[0])
 
-    def _separation_push(
+    def _unit_or_fallback(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        fallback: tuple[float, float],
+    ) -> tuple[float, float]:
+        unit_x, unit_y = self._unit_toward(start, end)
+        if math.hypot(unit_x, unit_y) > 1e-9:
+            return unit_x, unit_y
+        fallback_x = float(fallback[0])
+        fallback_y = float(fallback[1])
+        fallback_length = math.hypot(fallback_x, fallback_y)
+        if fallback_length <= 1e-9:
+            return 1.0, 0.0
+        return fallback_x / fallback_length, fallback_y / fallback_length
+
+    def _offset_point(
+        self,
+        origin: tuple[float, float],
+        forward_dir: tuple[float, float],
+        forward_tiles: float,
+        side_dir: tuple[float, float],
+        side_tiles: float,
+    ) -> tuple[float, float]:
+        return (
+            float(origin[0])
+            + float(forward_dir[0]) * float(TILE_SIZE) * float(forward_tiles)
+            + float(side_dir[0]) * float(TILE_SIZE) * float(side_tiles),
+            float(origin[1])
+            + float(forward_dir[1]) * float(TILE_SIZE) * float(forward_tiles)
+            + float(side_dir[1]) * float(TILE_SIZE) * float(side_tiles),
+        )
+
+    def _style_side_bias_for_dir(self, team: str, side_dir: tuple[float, float]) -> float:
+        bias = float(self._style_lateral_bias(team))
+        magnitude = max(0.1, abs(bias))
+        side_y = float(side_dir[1])
+        if abs(side_y) <= 1e-6:
+            return bias
+        if bias < 0.0:
+            return -magnitude if side_y > 0.0 else magnitude
+        return magnitude if side_y > 0.0 else -magnitude
+
+    def _side_sign_toward_y(
+        self,
+        side_dir: tuple[float, float],
+        *,
+        from_y: float,
+        target_y: float,
+        fallback: float,
+    ) -> float:
+        side_y = float(side_dir[1])
+        if abs(side_y) <= 1e-6 or abs(float(target_y) - float(from_y)) <= float(TILE_SIZE) * 0.2:
+            return 1.0 if float(fallback) >= 0.0 else -1.0
+        wants_down = float(target_y) > float(from_y)
+        return 1.0 if (side_y > 0.0) == wants_down else -1.0
+
+    def _blend_scripted_job_target(self, job: ScriptedJob) -> tuple[float, float]:
+        job_weight = float(self.SCRIPTED_JOB_TARGET_WEIGHT)
+        anchor_weight = float(self.SCRIPTED_SHAPE_ANCHOR_WEIGHT)
+        return self._clamp_to_field(
+            (
+                float(job.job_target[0]) * job_weight + float(job.shape_anchor[0]) * anchor_weight,
+                float(job.job_target[1]) * job_weight + float(job.shape_anchor[1]) * anchor_weight,
+            )
+        )
+
+    def _target_separation_push(
         self,
         player: KickPlayer,
+        target: tuple[float, float],
+        *,
         teammates: list[KickPlayer],
+        other_targets: list[tuple[float, float]],
         min_dist: float,
     ) -> tuple[float, float]:
         push_x = 0.0
         push_y = 0.0
-        for teammate in teammates:
-            if teammate is player:
-                continue
-            dx = float(player.x) - float(teammate.x)
-            dy = float(player.y) - float(teammate.y)
+        sources = list(other_targets)
+        sources.extend((float(teammate.x), float(teammate.y)) for teammate in teammates if teammate is not player)
+        for source_x, source_y in sources:
+            dx = float(target[0]) - float(source_x)
+            dy = float(target[1]) - float(source_y)
             distance = math.hypot(dx, dy)
-            if distance <= 1e-6 or distance >= float(min_dist):
+            if distance >= float(min_dist):
                 continue
+            if distance <= 1e-6:
+                angle = math.radians((int(player.slot_index) + 1) * 137.5)
+                dx = math.cos(angle)
+                dy = math.sin(angle)
+                distance = 1.0
             strength = (float(min_dist) - distance) / max(1.0, float(min_dist))
             push_x += (dx / distance) * strength
             push_y += (dy / distance) * strength
-        return push_x * TILE_SIZE * 1.4, push_y * TILE_SIZE * 1.4
+        push_x, push_y = self._clamp_vector_magnitude(
+            push_x * float(TILE_SIZE) * 1.15,
+            push_y * float(TILE_SIZE) * 1.15,
+            float(TILE_SIZE) * 1.8,
+        )
+        return push_x, push_y
 
     def _opponent_avoidance_push(
         self,
@@ -1053,15 +1143,6 @@ class KickEnv(Env):
             push_x += (dx / distance) * strength
             push_y += (dy / distance) * strength
         return push_x * TILE_SIZE * 1.0, push_y * TILE_SIZE * 1.0
-
-    def _nearest_players_to_point(
-        self,
-        players: list[KickPlayer],
-        point: tuple[float, float],
-    ) -> list[KickPlayer]:
-        ordered = list(players)
-        ordered.sort(key=lambda player: (self._distance(player.x, player.y, point[0], point[1]), int(player.slot_index)))
-        return ordered
 
     def _move_action_toward(
         self,
@@ -1114,41 +1195,6 @@ class KickEnv(Env):
             return float(self.left_scripted_player_speed)
         return float(self.right_scripted_player_speed)
 
-    def _support_point(
-        self,
-        team: str,
-        anchor: tuple[float, float],
-        *,
-        support_index: int,
-    ) -> tuple[float, float]:
-        goal = self._goal_center_for_attack(team)
-        attack_x, attack_y = self._unit_toward(anchor, goal)
-        if math.hypot(attack_x, attack_y) <= 1e-9:
-            attack_x = self._attack_sign_for_team(team)
-            attack_y = 0.0
-        lateral_x, lateral_y = self._perp((attack_x, attack_y))
-        style = self._style_for_team(team)
-        lateral_bias = self._style_lateral_bias(team)
-        if support_index <= 0:
-            forward_tiles = self.SCRIPTED_SUPPORT_FORWARD_TILES + (0.8 if style == "direct" else 0.0)
-            width_tiles = self.SCRIPTED_SUPPORT_WIDE_TILES
-            if style == "patient":
-                width_tiles += 0.8
-            target = (
-                float(anchor[0]) + attack_x * TILE_SIZE * forward_tiles + lateral_x * TILE_SIZE * width_tiles * lateral_bias,
-                float(anchor[1]) + attack_y * TILE_SIZE * forward_tiles + lateral_y * TILE_SIZE * width_tiles * lateral_bias,
-            )
-        else:
-            safety_tiles = self.SCRIPTED_SUPPORT_SAFE_TILES + (0.8 if style == "patient" else 0.0)
-            width_tiles = self.SCRIPTED_SUPPORT_SAFE_WIDE_TILES
-            if style == "patient":
-                width_tiles += 1.0
-            target = (
-                float(anchor[0]) - attack_x * TILE_SIZE * safety_tiles - lateral_x * TILE_SIZE * width_tiles * lateral_bias,
-                float(anchor[1]) - attack_y * TILE_SIZE * safety_tiles - lateral_y * TILE_SIZE * width_tiles * lateral_bias,
-            )
-        return self._clamp_to_field(target)
-
     def _adjust_scripted_target(
         self,
         player: KickPlayer,
@@ -1156,11 +1202,14 @@ class KickEnv(Env):
         *,
         teammates: list[KickPlayer],
         opponents: list[KickPlayer],
+        other_targets: list[tuple[float, float]] | None = None,
         avoid_opponents: bool = True,
     ) -> tuple[float, float]:
-        sep_x, sep_y = self._separation_push(
+        sep_x, sep_y = self._target_separation_push(
             player,
-            teammates,
+            target,
+            teammates=teammates,
+            other_targets=list(other_targets or []),
             min_dist=float(TILE_SIZE) * float(self.SCRIPTED_SEPARATION_TILES),
         )
         avoid_x = 0.0
@@ -1181,14 +1230,18 @@ class KickEnv(Env):
         teammates: list[KickPlayer],
         opponents: list[KickPlayer],
         avoid_opponents: bool = True,
+        target_already_adjusted: bool = False,
     ) -> int:
-        adjusted = self._adjust_scripted_target(
-            player,
-            target,
-            teammates=teammates,
-            opponents=opponents,
-            avoid_opponents=avoid_opponents,
-        )
+        if target_already_adjusted:
+            adjusted = self._clamp_to_field(target)
+        else:
+            adjusted = self._adjust_scripted_target(
+                player,
+                target,
+                teammates=teammates,
+                opponents=opponents,
+                avoid_opponents=avoid_opponents,
+            )
         self._scripted_target_cache[self._player_key(player)] = adjusted
         return self._move_action_toward(player, adjusted, self._scripted_player_speed_for_team(player.team))
 
@@ -1201,6 +1254,7 @@ class KickEnv(Env):
         self,
         player: KickPlayer,
         *,
+        target: tuple[float, float],
         teammates: list[KickPlayer],
         opponents: list[KickPlayer],
     ) -> int:
@@ -1223,74 +1277,306 @@ class KickEnv(Env):
             self._scripted_target_cache[self._player_key(player)] = target
             return self.ACTION_KICK
 
-        attack_x, attack_y = self._unit_toward((float(player.x), float(player.y)), goal)
-        lateral_x, lateral_y = self._perp((attack_x, attack_y))
-        lateral_bias = self._style_lateral_bias(team)
-        if self._style_for_team(team) == "direct":
-            lateral_bias *= 0.35
-        elif self._style_for_team(team) == "patient":
-            lateral_bias *= 1.35
-        target = (
-            float(player.x) + attack_x * TILE_SIZE * 4.2 + lateral_x * TILE_SIZE * lateral_bias,
-            float(player.y) + attack_y * TILE_SIZE * 4.2 + lateral_y * TILE_SIZE * lateral_bias,
-        )
         return self._scripted_target_action(
             player,
             target,
             teammates=teammates,
             opponents=opponents,
             avoid_opponents=True,
+            target_already_adjusted=True,
         )
 
-    def _dangerous_opponents(self, team: str, opponents: list[KickPlayer]) -> list[KickPlayer]:
+    def _dangerous_offball_opponent(self, team: str, carrier: KickPlayer) -> KickPlayer | None:
         own_goal = self._own_goal_center_for_team(team)
-        ordered = list(opponents)
-        ordered.sort(
+        carrier_point = (float(carrier.x), float(carrier.y))
+        candidates = [player for player in self._opponent_players(team) if player is not carrier]
+        candidates.sort(
             key=lambda player: (
                 self._distance(player.x, player.y, own_goal[0], own_goal[1]),
-                self._distance(player.x, player.y, self.ball_x, self.ball_y),
+                self._distance(player.x, player.y, carrier_point[0], carrier_point[1]),
                 int(player.slot_index),
             )
         )
-        return ordered
+        for candidate in candidates:
+            if self._distance(candidate.x, candidate.y, carrier_point[0], carrier_point[1]) >= float(TILE_SIZE) * 2.4:
+                return candidate
+        return None
 
-    def _defensive_cover_target(self, team: str, *, cover_index: int) -> tuple[float, float]:
-        own_goal = self._own_goal_center_for_team(team)
-        carrier_point = (
-            float(self.ball_owner.x),
-            float(self.ball_owner.y),
-        ) if self.ball_owner is not None else (float(self.ball_x), float(self.ball_y))
-        if cover_index <= 0:
-            lane_x, lane_y = self._point_between(own_goal, carrier_point, self.SCRIPTED_COVER_DEPTH)
-            return self._clamp_to_field((lane_x, lane_y))
+    def _scripted_attack_jobs(
+        self,
+        team: str,
+        scripted_players: list[KickPlayer],
+        owner: KickPlayer,
+    ) -> list[ScriptedJob]:
+        anchor = (float(owner.x), float(owner.y))
+        goal = self._goal_center_for_attack(team)
+        goal_dir = self._unit_or_fallback(anchor, goal, (self._attack_sign_for_team(team), 0.0))
+        side_dir = self._perp(goal_dir)
+        side_bias = self._style_side_bias_for_dir(team, side_dir)
+        style = self._style_for_team(team)
+        forward_tiles = float(self.SCRIPTED_SUPPORT_FORWARD_TILES) + (0.8 if style == "direct" else -0.3)
+        safe_tiles = float(self.SCRIPTED_SUPPORT_SAFE_TILES) + (0.9 if style == "patient" else 0.0)
+        spread_tiles = float(self.SCRIPTED_SUPPORT_WIDE_TILES) + (0.8 if style in {"wide_upper", "wide_lower"} else 0.0)
+        safe_spread_tiles = float(self.SCRIPTED_SUPPORT_SAFE_WIDE_TILES) + (0.8 if style == "patient" else 0.0)
+        jobs: list[ScriptedJob] = []
 
-        opponents = self._dangerous_opponents(team, self._opponent_players(team))
-        non_carriers = [player for player in opponents if player is not self.ball_owner]
-        lane_unit = self._unit_toward(own_goal, carrier_point)
-        lateral_x, lateral_y = self._perp(lane_unit)
-        carrier_side = 1.0 if float(carrier_point[1]) >= float(self.pitch_center_y) else -1.0
-        if non_carriers:
-            dangerous = non_carriers[0]
-            mark_x, mark_y = self._point_between(
-                own_goal,
-                (float(dangerous.x), float(dangerous.y)),
-                self.SCRIPTED_MARK_DEPTH,
-            )
-            dangerous_side = 1.0 if float(dangerous.y) >= float(self.pitch_center_y) else -1.0
-            side = -dangerous_side if abs(float(dangerous.y) - float(carrier_point[1])) > TILE_SIZE else carrier_side
-            return self._clamp_to_field(
-                (
-                    mark_x + lateral_x * TILE_SIZE * self.SCRIPTED_COVER_WIDE_TILES * side,
-                    mark_y + lateral_y * TILE_SIZE * self.SCRIPTED_COVER_WIDE_TILES * side,
+        owner_is_scripted = owner in scripted_players
+        if owner_is_scripted:
+            carrier_side = side_bias * (0.35 if style == "direct" else 1.15 if style == "patient" else 0.8)
+            carrier_job = self._offset_point(anchor, goal_dir, 4.2, side_dir, carrier_side)
+            carrier_anchor = self._offset_point(anchor, goal_dir, 3.0, side_dir, carrier_side * 0.45)
+            jobs.append(
+                ScriptedJob(
+                    "carrier",
+                    self._clamp_to_field(carrier_job),
+                    self._clamp_to_field(carrier_anchor),
+                    avoid_opponents=True,
+                    preferred_player=owner,
                 )
             )
-        lane_x, lane_y = self._point_between(own_goal, carrier_point, self.SCRIPTED_COVER_DEPTH + 0.12)
-        return self._clamp_to_field(
-            (
-                lane_x + lateral_x * TILE_SIZE * self.SCRIPTED_COVER_WIDE_TILES * carrier_side,
-                lane_y + lateral_y * TILE_SIZE * self.SCRIPTED_COVER_WIDE_TILES * carrier_side,
+
+        support_count = len(scripted_players) - (1 if owner_is_scripted else 0)
+        for support_index in range(max(0, support_count)):
+            if support_index == 0:
+                job_target = self._offset_point(anchor, goal_dir, forward_tiles, side_dir, spread_tiles * side_bias)
+                shape_anchor = self._offset_point(anchor, goal_dir, forward_tiles * 0.78, side_dir, spread_tiles * side_bias * 0.70)
+                name = "support_a"
+            elif support_index == 1:
+                job_target = self._offset_point(anchor, goal_dir, -safe_tiles, side_dir, -safe_spread_tiles * side_bias)
+                shape_anchor = self._offset_point(anchor, goal_dir, -safe_tiles * 1.10, side_dir, -safe_spread_tiles * side_bias * 0.60)
+                name = "support_b"
+            else:
+                extra_index = support_index - 2
+                side = side_bias if extra_index % 2 == 0 else -side_bias
+                depth = forward_tiles + 1.2 + 0.8 * (extra_index // 2)
+                if extra_index % 3 == 1:
+                    depth = -safe_tiles - 0.8 * (extra_index // 2)
+                width = spread_tiles + 1.3 + 0.7 * (extra_index // 2)
+                job_target = self._offset_point(anchor, goal_dir, depth, side_dir, width * side)
+                shape_anchor = self._offset_point(anchor, goal_dir, depth * 0.75, side_dir, width * side * 0.65)
+                name = "extra_support"
+            jobs.append(
+                ScriptedJob(
+                    name,
+                    self._clamp_to_field(job_target),
+                    self._clamp_to_field(shape_anchor),
+                    avoid_opponents=True,
+                )
             )
-        )
+        return jobs
+
+    def _scripted_loose_jobs(self, team: str, scripted_players: list[KickPlayer]) -> list[ScriptedJob]:
+        ball_point = (float(self.ball_x), float(self.ball_y))
+        goal = self._goal_center_for_attack(team)
+        goal_dir = self._unit_or_fallback(ball_point, goal, (self._attack_sign_for_team(team), 0.0))
+        side_dir = self._perp(goal_dir)
+        side_bias = self._style_side_bias_for_dir(team, side_dir)
+        jobs: list[ScriptedJob] = [
+            ScriptedJob("chaser", self._clamp_to_field(ball_point), self._clamp_to_field(ball_point), avoid_opponents=False)
+        ]
+        for support_index in range(max(0, len(scripted_players) - 1)):
+            if support_index == 0:
+                job_target = self._offset_point(
+                    ball_point,
+                    goal_dir,
+                    float(self.SCRIPTED_SUPPORT_FORWARD_TILES) * 0.75,
+                    side_dir,
+                    float(self.SCRIPTED_SUPPORT_WIDE_TILES) * side_bias,
+                )
+                shape_anchor = self._offset_point(
+                    ball_point,
+                    goal_dir,
+                    float(self.SCRIPTED_SUPPORT_FORWARD_TILES) * 0.55,
+                    side_dir,
+                    float(self.SCRIPTED_SUPPORT_WIDE_TILES) * side_bias * 0.65,
+                )
+                name = "support_a"
+            elif support_index == 1:
+                job_target = self._offset_point(
+                    ball_point,
+                    goal_dir,
+                    -float(self.SCRIPTED_SUPPORT_SAFE_TILES),
+                    side_dir,
+                    -float(self.SCRIPTED_SUPPORT_SAFE_WIDE_TILES) * side_bias,
+                )
+                shape_anchor = self._offset_point(
+                    ball_point,
+                    goal_dir,
+                    -float(self.SCRIPTED_SUPPORT_SAFE_TILES) * 1.15,
+                    side_dir,
+                    -float(self.SCRIPTED_SUPPORT_SAFE_WIDE_TILES) * side_bias * 0.55,
+                )
+                name = "safety"
+            else:
+                extra_index = support_index - 2
+                side = side_bias if extra_index % 2 == 0 else -side_bias
+                depth = 2.4 + 1.1 * (extra_index // 2)
+                if extra_index % 3 == 1:
+                    depth = -3.0 - 0.8 * (extra_index // 2)
+                width = float(self.SCRIPTED_SUPPORT_WIDE_TILES) + 1.0 + 0.5 * (extra_index // 2)
+                job_target = self._offset_point(ball_point, goal_dir, depth, side_dir, width * side)
+                shape_anchor = self._offset_point(ball_point, goal_dir, depth * 0.70, side_dir, width * side * 0.60)
+                name = "extra_support"
+            jobs.append(
+                ScriptedJob(
+                    name,
+                    self._clamp_to_field(job_target),
+                    self._clamp_to_field(shape_anchor),
+                    avoid_opponents=True,
+                )
+            )
+        return jobs
+
+    def _scripted_defense_jobs(
+        self,
+        team: str,
+        scripted_players: list[KickPlayer],
+        carrier: KickPlayer,
+    ) -> list[ScriptedJob]:
+        carrier_point = (float(carrier.x), float(carrier.y))
+        own_goal = self._own_goal_center_for_team(team)
+        goal_dir = self._unit_or_fallback(carrier_point, own_goal, (-self._attack_sign_for_team(team), 0.0))
+        side_dir = self._perp(goal_dir)
+        cover_center = self._point_between(carrier_point, own_goal, 0.35)
+        cover_center_anchor = self._point_between(carrier_point, own_goal, 0.46)
+        fallback_side = self._style_side_bias_for_dir(team, side_dir)
+        dangerous = self._dangerous_offball_opponent(team, carrier)
+        if dangerous is not None:
+            side_sign = self._side_sign_toward_y(
+                side_dir,
+                from_y=cover_center[1],
+                target_y=float(dangerous.y),
+                fallback=fallback_side,
+            )
+            dangerous_point = (float(dangerous.x), float(dangerous.y))
+            cover_side = self._point_between(dangerous_point, own_goal, 0.30)
+            cover_side_anchor = self._offset_point(
+                cover_center_anchor,
+                goal_dir,
+                0.3,
+                side_dir,
+                float(self.SCRIPTED_COVER_WIDE_TILES) * 0.60 * side_sign,
+            )
+        else:
+            side_sign = self._side_sign_toward_y(
+                side_dir,
+                from_y=cover_center[1],
+                target_y=float(self.pitch_center_y),
+                fallback=fallback_side,
+            )
+            cover_side = self._offset_point(
+                cover_center,
+                goal_dir,
+                0.2,
+                side_dir,
+                float(self.SCRIPTED_COVER_WIDE_TILES) * side_sign,
+            )
+            cover_side_anchor = self._offset_point(
+                cover_center_anchor,
+                goal_dir,
+                0.5,
+                side_dir,
+                float(self.SCRIPTED_COVER_WIDE_TILES) * 0.65 * side_sign,
+            )
+
+        jobs = [
+            ScriptedJob(
+                "stopper",
+                self._clamp_to_field(
+                    self._offset_point(
+                        carrier_point,
+                        goal_dir,
+                        float(self.SCRIPTED_PRESS_OFFSET_TILES),
+                        side_dir,
+                        0.0,
+                    )
+                ),
+                self._clamp_to_field(
+                    self._offset_point(
+                        carrier_point,
+                        goal_dir,
+                        float(self.SCRIPTED_PRESS_OFFSET_TILES) + 0.8,
+                        side_dir,
+                        0.0,
+                    )
+                ),
+                avoid_opponents=False,
+            ),
+            ScriptedJob(
+                "cover_center",
+                self._clamp_to_field(cover_center),
+                self._clamp_to_field(cover_center_anchor),
+                avoid_opponents=False,
+            ),
+            ScriptedJob(
+                "cover_side",
+                self._clamp_to_field(cover_side),
+                self._clamp_to_field(cover_side_anchor),
+                avoid_opponents=True,
+            ),
+        ]
+
+        extra_count = max(0, len(scripted_players) - 3)
+        for extra_index in range(extra_count):
+            side = side_sign if extra_index % 2 == 0 else -side_sign
+            ratio = min(0.68, 0.48 + 0.07 * (extra_index // 2))
+            width = float(self.SCRIPTED_COVER_WIDE_TILES) * (1.05 + 0.25 * (extra_index // 2))
+            lane = self._point_between(carrier_point, own_goal, ratio)
+            anchor = self._point_between(carrier_point, own_goal, min(0.74, ratio + 0.08))
+            name = "extra_cover" if extra_index % 2 == 0 else "mark_space"
+            jobs.append(
+                ScriptedJob(
+                    name,
+                    self._clamp_to_field(self._offset_point(lane, goal_dir, 0.2, side_dir, width * side)),
+                    self._clamp_to_field(self._offset_point(anchor, goal_dir, 0.0, side_dir, width * side * 0.70)),
+                    avoid_opponents=True,
+                )
+            )
+        return jobs
+
+    def _assign_scripted_jobs(
+        self,
+        players: list[KickPlayer],
+        jobs: list[ScriptedJob],
+    ) -> list[tuple[KickPlayer, ScriptedJob]]:
+        remaining = list(players)
+        assignments: list[tuple[KickPlayer, ScriptedJob]] = []
+        for job in jobs:
+            if not remaining:
+                break
+            if job.preferred_player is not None and job.preferred_player in remaining:
+                player = job.preferred_player
+            else:
+                player = min(
+                    remaining,
+                    key=lambda candidate: (
+                        self._distance(candidate.x, candidate.y, job.job_target[0], job.job_target[1]),
+                        int(candidate.slot_index),
+                    ),
+                )
+            remaining.remove(player)
+            assignments.append((player, job))
+        return assignments
+
+    def _final_scripted_targets(
+        self,
+        assignments: list[tuple[KickPlayer, ScriptedJob]],
+        *,
+        full_team: list[KickPlayer],
+        opponents: list[KickPlayer],
+    ) -> dict[KickPlayer, tuple[float, float]]:
+        final_targets: dict[KickPlayer, tuple[float, float]] = {}
+        for player, job in assignments:
+            blended = self._blend_scripted_job_target(job)
+            final_targets[player] = self._adjust_scripted_target(
+                player,
+                blended,
+                teammates=[teammate for teammate in full_team if teammate is not player],
+                opponents=opponents,
+                other_targets=list(final_targets.values()),
+                avoid_opponents=bool(job.avoid_opponents),
+            )
+        return final_targets
 
     def _maybe_scripted_mistake(self, team: str, action: int) -> int:
         action = int(np.clip(int(action), 0, self.NUM_ACTIONS - 1))
@@ -1348,65 +1634,33 @@ class KickEnv(Env):
         opponents = self._opponent_players(team)
         owner = self.ball_owner
         actions: dict[KickPlayer, int] = {}
-        ball_point = (float(self.ball_x), float(self.ball_y))
 
         if owner is not None and owner.team == team:
-            if owner in scripted_players:
-                teammates = [player for player in full_team if player is not owner]
-                actions[owner] = self._scripted_carrier_action(
-                    owner,
-                    teammates=teammates,
-                    opponents=opponents,
-                )
-            support_players = [player for player in scripted_players if player is not owner]
-            support_players = self._nearest_players_to_point(support_players, (float(owner.x), float(owner.y)))
-            for support_index, player in enumerate(support_players):
-                target = self._support_point(team, (float(owner.x), float(owner.y)), support_index=support_index)
-                actions[player] = self._scripted_target_action(
-                    player,
-                    target,
-                    teammates=[teammate for teammate in full_team if teammate is not player],
-                    opponents=opponents,
-                    avoid_opponents=True,
-                )
+            jobs = self._scripted_attack_jobs(team, scripted_players, owner)
         elif owner is None:
-            ordered = self._nearest_players_to_point(scripted_players, ball_point)
-            stopper = ordered[0]
-            actions[stopper] = self._scripted_target_action(
-                stopper,
-                ball_point,
-                teammates=[teammate for teammate in full_team if teammate is not stopper],
-                opponents=opponents,
-                avoid_opponents=False,
-            )
-            for support_index, player in enumerate(ordered[1:]):
-                target = self._support_point(team, ball_point, support_index=support_index)
-                actions[player] = self._scripted_target_action(
-                    player,
-                    target,
-                    teammates=[teammate for teammate in full_team if teammate is not player],
-                    opponents=opponents,
-                    avoid_opponents=True,
-                )
+            jobs = self._scripted_loose_jobs(team, scripted_players)
         else:
-            carrier_point = (float(owner.x), float(owner.y))
-            ordered = self._nearest_players_to_point(scripted_players, carrier_point)
-            stopper = ordered[0]
-            actions[stopper] = self._scripted_target_action(
-                stopper,
-                carrier_point,
-                teammates=[teammate for teammate in full_team if teammate is not stopper],
-                opponents=opponents,
-                avoid_opponents=False,
-            )
-            for cover_index, player in enumerate(ordered[1:]):
-                target = self._defensive_cover_target(team, cover_index=cover_index)
+            jobs = self._scripted_defense_jobs(team, scripted_players, owner)
+
+        assignments = self._assign_scripted_jobs(scripted_players, jobs)
+        final_targets = self._final_scripted_targets(assignments, full_team=full_team, opponents=opponents)
+        for player, job in assignments:
+            target = final_targets[player]
+            if job.name == "carrier" and self.ball_owner is player:
+                actions[player] = self._scripted_carrier_action(
+                    player,
+                    target=target,
+                    teammates=[teammate for teammate in full_team if teammate is not player],
+                    opponents=opponents,
+                )
+            else:
                 actions[player] = self._scripted_target_action(
                     player,
                     target,
                     teammates=[teammate for teammate in full_team if teammate is not player],
                     opponents=opponents,
-                    avoid_opponents=True,
+                    avoid_opponents=bool(job.avoid_opponents),
+                    target_already_adjusted=True,
                 )
 
         for player in scripted_players:

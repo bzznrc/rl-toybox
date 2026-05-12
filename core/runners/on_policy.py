@@ -18,7 +18,6 @@ from core.logging_utils import (
     log_ppo_metrics_line,
     log_ppo_update_line,
     log_save_line,
-    should_emit_train_progress_log,
 )
 from core.runners.env_access import (
     act_with_optional_signals,
@@ -199,23 +198,22 @@ def run_on_policy_training(
 
                 components_text = format_reward_components(info.get("reward_components"))
                 best_avg_for_level = best_avg_reward_by_level.get(int(episode_level))
-                if should_emit_train_progress_log("on_policy_progress"):
-                    log_on_policy_episode_line(
-                        episode=int(total_episodes),
-                        level=int(episode_level),
-                        ep_len=int(episode_steps),
-                        reward=float(episode_reward),
-                        avg_reward=avg_reward_ep,
-                        best_avg=(
-                            float(best_avg_for_level)
-                            if stats_ready_level and best_avg_for_level is not None
-                            else None
-                        ),
-                        success=int(episode_success),
-                        avg_success=avg_success_ep,
-                        best_avg_label=f"BR{int(episode_level)}",
-                        reward_components=components_text,
-                    )
+                log_on_policy_episode_line(
+                    episode=int(total_episodes),
+                    level=int(episode_level),
+                    ep_len=int(episode_steps),
+                    reward=float(episode_reward),
+                    avg_reward=avg_reward_ep,
+                    best_avg=(
+                        float(best_avg_for_level)
+                        if stats_ready_level and best_avg_for_level is not None
+                        else None
+                    ),
+                    success=int(episode_success),
+                    avg_success=avg_success_ep,
+                    best_avg_label=f"BR{int(episode_level)}",
+                    reward_components=components_text,
+                )
                 obs = env.reset()
                 reset_policy_state(algorithm)
                 episode_reward = 0.0

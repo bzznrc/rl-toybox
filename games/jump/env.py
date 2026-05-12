@@ -80,12 +80,20 @@ class TerrainSegment:
         return float(self.lane_surface_row * config.TILE_SIZE)
 
     @property
+    def row_count(self) -> int:
+        return int(config.STANDARD_PLATFORM_MATERIAL_ROWS)
+
+    @property
+    def height(self) -> float:
+        return float(config.STANDARD_PLATFORM_HEIGHT_PX)
+
+    @property
     def rect(self) -> Rect:
         return Rect(
             left=float(self.left),
             top=float(self.surface_y),
             width=float(self.width),
-            height=float(config.PLATFORM_THICKNESS_PX),
+            height=float(self.height),
         )
 
 
@@ -138,12 +146,20 @@ class MovingPlatform:
         return float(self.lane_surface_row * config.TILE_SIZE)
 
     @property
+    def row_count(self) -> int:
+        return int(config.MOVING_PLATFORM_MATERIAL_ROWS)
+
+    @property
+    def height(self) -> float:
+        return float(config.MOVING_PLATFORM_HEIGHT_PX)
+
+    @property
     def rect(self) -> Rect:
         return Rect(
             left=float(self.left),
             top=float(self.surface_y),
             width=float(self.width),
-            height=float(config.PLATFORM_THICKNESS_PX),
+            height=float(self.height),
         )
 
 
@@ -1490,19 +1506,26 @@ class JumpEnv(Env):
         left: float,
         top: float,
         width_tiles: int,
+        row_count: int,
         camera_x: float,
     ) -> None:
         cell_size = float(config.TILE_SIZE)
-        for tile_offset in range(int(width_tiles)):
-            draw_two_tone_cell(
-                self.window_controller,
-                top_left_x=float(left - camera_x + tile_offset * cell_size),
-                top_left_y=float(top),
-                tile_size=cell_size,
-                outer_color=COLOR_FOG_GRAY,
-                inner_color=COLOR_SLATE_GRAY,
-                cell_inset=float(config.CELL_INSET),
-            )
+        screen_left = float(left - camera_x)
+        platform_rows = max(1, int(row_count))
+        platform_width_tiles = max(0, int(width_tiles))
+        cell_inset = float(config.CELL_INSET)
+        for row_offset in range(platform_rows):
+            row_top = float(top + row_offset * cell_size)
+            for tile_offset in range(platform_width_tiles):
+                draw_two_tone_cell(
+                    self.window_controller,
+                    top_left_x=float(screen_left + tile_offset * cell_size),
+                    top_left_y=row_top,
+                    tile_size=cell_size,
+                    outer_color=COLOR_FOG_GRAY,
+                    inner_color=COLOR_SLATE_GRAY,
+                    cell_inset=cell_inset,
+                )
 
     def _draw_world(self) -> None:
         arcade.draw_lbwh_rectangle_filled(
@@ -1520,6 +1543,7 @@ class JumpEnv(Env):
                 left=float(segment.left),
                 top=float(segment.surface_y),
                 width_tiles=int(segment.width_tiles),
+                row_count=int(segment.row_count),
                 camera_x=float(camera_x),
             )
         for platform in self.moving_platforms:
@@ -1529,6 +1553,7 @@ class JumpEnv(Env):
                 left=float(platform.left),
                 top=float(platform.surface_y),
                 width_tiles=int(platform.width_tiles),
+                row_count=int(platform.row_count),
                 camera_x=float(camera_x),
             )
 

@@ -35,27 +35,28 @@ Classic grid Snake with a small obstacle curriculum, compact observations, and l
 
 - `WRAP_AROUND` is a global toggle in `games/snake/config.py`.
 - Obstacles are static for the duration of an episode and are excluded from food spawn placement.
-- The timeout budget scales with current snake length, so longer snakes are given more time to find food.
+- `FOOD_TIMEOUT_STEPS = 180`; hunger resets to `0` after food, and an episode times out if training goes that many steps without eating.
 
 ## Rewards (Training)
 
 - `REWARD_FOOD = +1.0` when food is eaten
 - `PENALTY_LOSE = -5.0` on death or timeout
 - Progress shaping: `clip(1.0 * (Phi_next - Phi_prev), -0.05, +0.05)` where `Phi = -dist_food_norm - 0.5 * hunger_norm`
-- `PENALTY_STEP = -0.005` every training step
+- `PENALTY_STEP = -0.01` every training step
 
-`tgt_manhattan_norm` is normalized Manhattan head-to-food distance. When wrap-around is enabled it uses the shortest wrapped path. `self_hunger_norm` is `clamp(steps_since_food / hunger_cap_steps, 0, 1)`.
+`tgt_manhattan_norm` is normalized Manhattan head-to-food distance. When wrap-around is enabled it uses the shortest wrapped path. `self_hunger_norm` is `clamp(steps_since_food / FOOD_TIMEOUT_STEPS, 0, 1)`, so `0.0` means food was just eaten and `1.0` means the snake is about to starve. IO is unchanged.
 
 ## Curriculum (Train)
 
 - Shared 5-level curriculum progression from `core/curriculum.py`
 - Promotion settings live in `games/snake/config.py` under `CURRICULUM_PROMOTION`
+- Levels only increase obstacle count.
 - Levels:
-  - Level 1: `0` obstacles, timeout `120 * snake_length`
-  - Level 2: `3` obstacles, timeout `110 * snake_length`
-  - Level 3: `6` obstacles, timeout `100 * snake_length`
-  - Level 4: `9` obstacles, timeout `90 * snake_length`
-  - Level 5: `12` obstacles, timeout `80 * snake_length`
+  - Level 1: `0` obstacles
+  - Level 2: `2` obstacles
+  - Level 3: `4` obstacles
+  - Level 4: `6` obstacles
+  - Level 5: `8` obstacles
 
 An episode counts as a success if the snake eats at least `5` foods (`SUCCESS_FOODS_REQUIRED`).
 

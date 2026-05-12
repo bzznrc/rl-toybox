@@ -79,24 +79,27 @@ from games.vroom.config import (
     OFF_TRACK_SURFACE_GRIP,
     OFF_TRACK_MAX_SPEED_FACTOR,
     OFF_TRACK_SPEED_TRANSITION_SECONDS,
+    OPPONENT_BEND_COAST_MULT_RANGE,
+    OPPONENT_SPEED_MULT_RANGE,
     EDGE_PROBE_MAX_DISTANCE_PX,
     PENALTY_COLLISION,
     PENALTY_LOSE,
     PENALTY_STEP,
+    PENALTY_TRACK_COVERAGE,
     PROGRESS_CLIP,
     PROGRESS_SCALE,
     REWARD_WIN,
-    ROUTE_LOOKAHEADS_PX,
+    ROUTE_LOOKAHEAD_RANGES_PX,
     SENS_CAR_RANGE_PX,
     SENS_CAR_SIDE_RANGE_PX,
+    STEER_FULL_SPEED_NORM,
+    STEER_MIN_SPEED_FACTOR,
     STEER_SPEED_DECAY,
-    TRACK_COMPLEXITY_BY_LEVEL,
     TRACK_CORNER_RADIUS_PX,
+    TRACK_COMPLEXITY_HARD_SAMPLE_RATE,
     TRACK_FOLD_GAP_PX,
     TRACK_FOOTPRINT_SCALE,
     TRACK_GENERATION_MAX_ATTEMPTS,
-    TRACK_LEVEL_5_LONG_SIDE_TEMPLATE_CHOICES,
-    TRACK_LEVEL_5_SHORT_SIDE_TEMPLATE_CHOICES,
     TRACK_LONG_SIDE_BELL_AMPLITUDE_MAX_PX,
     TRACK_LONG_SIDE_BELL_AMPLITUDE_MIN_PX,
     TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO,
@@ -143,9 +146,9 @@ class RaceCar:
     in_contact: bool = False
     ai_lane_home: float = 0.0
     ai_lane_offset: float = 0.0
-    ai_curve_error_percent: float = 0.0
-    ai_curve_key: int = -1
     ai_rejoin_steps: int = 0
+    speed_mult: float = 1.0
+    bend_coast_mult: float = 1.0
     off_track: bool = False
     off_track_blend: float = 0.0
     track_progress: float = 0.0
@@ -165,11 +168,12 @@ class VroomEnv(Env):
     NUM_CARS = 4
     TRAINING_TOTAL_RACES = 1
     PLAY_TOTAL_RACES = 10
-    REWARD_COMPONENT_ORDER = ("W", "L", "P", "C", "S")
+    REWARD_COMPONENT_ORDER = ("W", "L", "P", "T", "C", "S")
     REWARD_COMPONENT_KEY_TO_CODE = {
         "outcome.reward_win": "W",
         "outcome.penalty_lose": "L",
         "progress.shape": "P",
+        "track.penalty_coverage": "T",
         "event.penalty_collision": "C",
         "step.penalty_step": "S",
     }
@@ -255,9 +259,14 @@ class VroomEnv(Env):
         self.lateral_damping_off_track = self._clamp(float(LATERAL_DAMPING_OFF_TRACK), 0.0, 1.0)
         self.edge_probe_max_distance = max(8.0, float(EDGE_PROBE_MAX_DISTANCE_PX))
         self.forward_ray_max_distance = max(self.edge_probe_max_distance, float(FORWARD_RAY_MAX_DISTANCE_PX))
-        self.route_lookaheads_px = tuple(max(1.0, float(value)) for value in ROUTE_LOOKAHEADS_PX)
-        if len(self.route_lookaheads_px) != 3:
-            raise RuntimeError("Vroom ROUTE_LOOKAHEADS_PX must define exactly three route breadcrumbs.")
+        self.route_lookahead_ranges_px = tuple(
+            (max(1.0, float(low)), max(1.0, float(high)))
+            for low, high in ROUTE_LOOKAHEAD_RANGES_PX
+        )
+        if len(self.route_lookahead_ranges_px) != 3:
+            raise RuntimeError("Vroom ROUTE_LOOKAHEAD_RANGES_PX must define exactly three route breadcrumbs.")
+        self.steer_full_speed_norm = max(1e-6, float(STEER_FULL_SPEED_NORM))
+        self.steer_min_speed_factor = self._clamp(float(STEER_MIN_SPEED_FACTOR), 0.0, 1.0)
         self.sens_car_range_px = max(self.car_contact_radius * 2.0 + 1.0, float(SENS_CAR_RANGE_PX))
         self.sens_car_side_range_px = max(self.car_contact_radius * 2.0 + 1.0, float(SENS_CAR_SIDE_RANGE_PX))
         self.contact_sep_strength = 1.0
@@ -285,7 +294,10 @@ class VroomEnv(Env):
         )
         self.track_width_px = float(self.track_config.track_width_px)
         self.track_half_width = self.track_width_px * 0.5
-        self.track_complexity_range = tuple(float(value) for value in TRACK_COMPLEXITY_BY_LEVEL[int(MIN_LEVEL)])
+        initial_complexity_range = LEVEL_SETTINGS[int(MIN_LEVEL)]["track_complexity_range"]
+        self.track_complexity_range = tuple(float(value) for value in initial_complexity_range)
+        self.track_complexity_hard_sample_rate = self._clamp(float(TRACK_COMPLEXITY_HARD_SAMPLE_RATE), 0.0, 1.0)
+        self.current_track_complexity = 0.0
 
         self.track_geometry: TrackGeometry | None = None
         self.track_centerline: list[tuple[float, float]] = []
@@ -331,11 +343,10 @@ class VroomEnv(Env):
         self.win_history: list[int | None] = self.match_tracker.history
         self.num_cars = int(self.NUM_CARS)
         self.opponent_speed_cap = 1.0
-        self.opponent_coast_error_choices: tuple[float, ...] = (0.0,)
         curriculum_config = build_curriculum_config(
             min_level=int(MIN_LEVEL),
             max_level=int(MAX_LEVEL),
-            promotion_settings=CURRICULUM_PROMOTION,
+            promotion_settings=self._curriculum_promotion_settings(),
         )
         self._curriculum = (
             SharedCurriculum(config=curriculum_config, level_settings=LEVEL_SETTINGS)
@@ -372,8 +383,8 @@ class VroomEnv(Env):
         self._last_route_markers: list[tuple[tuple[float, float], tuple[float, float]]] = []
         self._player_contact_memory_steps = 0
         self._last_obs = np.zeros((self.OBS_DIM,), dtype=np.float32)
-        self._prev_progress_potential = 0.0
-        self._prev_player_in_contact = False
+        self._best_progress_norm = 0.0
+        self._race_progress_reward_total = 0.0
         self._prev_player_forward_speed = 0.0
         self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
         self._apply_level_settings(int(self._current_level))
@@ -384,26 +395,38 @@ class VroomEnv(Env):
             return int(self.TRAINING_TOTAL_RACES)
         return int(self.PLAY_TOTAL_RACES)
 
+    @staticmethod
+    def _curriculum_promotion_settings() -> dict[str, object]:
+        settings = dict(CURRICULUM_PROMOTION)
+        traffic_threshold = float(settings.get("success_threshold", 0.60))
+        solo_threshold = float(settings.get("solo_success_threshold", traffic_threshold))
+        settings["success_threshold_by_level"] = {
+            int(level): (solo_threshold if int(level_settings.get("num_cars", 1)) <= 1 else traffic_threshold)
+            for level, level_settings in LEVEL_SETTINGS.items()
+        }
+        return settings
+
     def _apply_level_settings(self, level: int) -> None:
         settings = LEVEL_SETTINGS.get(int(level), LEVEL_SETTINGS[int(MIN_LEVEL)])
         self.num_cars = max(1, min(int(settings["num_cars"]), len(self.player_color_pairs)))
         self.opponent_speed_cap = self._clamp(float(settings.get("opponent_speed_cap", 1.0)), 0.0, 1.0)
-        complexity_range = TRACK_COMPLEXITY_BY_LEVEL.get(int(level), TRACK_COMPLEXITY_BY_LEVEL[int(MIN_LEVEL)])
+        complexity_range = settings.get("track_complexity_range")
+        if not isinstance(complexity_range, (list, tuple)) or len(complexity_range) != 2:
+            raise ValueError("Vroom LEVEL_SETTINGS entries must define track_complexity_range as a pair.")
         self.track_complexity_range = (
             self._clamp(float(complexity_range[0]), 0.0, 1.0),
             self._clamp(float(complexity_range[1]), 0.0, 1.0),
         )
-        coast_error_choices = settings.get("opponent_coast_error_choices", [0.0])
-        if not isinstance(coast_error_choices, (list, tuple)) or len(coast_error_choices) == 0:
-            raise ValueError("Vroom LEVEL_SETTINGS entries must define non-empty opponent_coast_error_choices.")
-        try:
-            self.opponent_coast_error_choices = tuple(float(value) for value in coast_error_choices)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Vroom opponent_coast_error_choices entries must be numeric.") from exc
+        if self.track_complexity_range[1] < self.track_complexity_range[0]:
+            self.track_complexity_range = (self.track_complexity_range[1], self.track_complexity_range[0])
 
     @staticmethod
     def _clamp(value: float, low: float, high: float) -> float:
         return float(max(low, min(high, value)))
+
+    @staticmethod
+    def _lerp(low: float, high: float, t: float) -> float:
+        return float(low) + (float(high) - float(low)) * float(t)
 
     @staticmethod
     def _normalize(dx: float, dy: float) -> tuple[float, float]:
@@ -420,25 +443,55 @@ class VroomEnv(Env):
     def _distance(x1: float, y1: float, x2: float, y2: float) -> float:
         return math.hypot(x2 - x1, y2 - y1)
 
+    @staticmethod
+    def _sample_range(value_range: tuple[float, float] | list[float]) -> float:
+        low = float(value_range[0])
+        high = float(value_range[1])
+        if high < low:
+            low, high = high, low
+        return float(random.uniform(low, high))
+
+    def _route_lookaheads_for_speed(self, speed_norm: float) -> tuple[float, float, float]:
+        speed = self._clamp(float(speed_norm), 0.0, 1.0)
+        return (
+            self._lerp(self.route_lookahead_ranges_px[0][0], self.route_lookahead_ranges_px[0][1], speed),
+            self._lerp(self.route_lookahead_ranges_px[1][0], self.route_lookahead_ranges_px[1][1], speed),
+            self._lerp(self.route_lookahead_ranges_px[2][0], self.route_lookahead_ranges_px[2][1], speed),
+        )
+
+    def _hard_complexity_threshold(self, complexity_range: tuple[float, float] | None = None) -> float:
+        low, high = self.track_complexity_range if complexity_range is None else complexity_range
+        low = self._clamp(float(low), 0.0, 1.0)
+        high = self._clamp(float(high), 0.0, 1.0)
+        if high < low:
+            low, high = high, low
+        return float(low + (high - low) * (2.0 / 3.0))
+
+    def _sample_track_complexity(self) -> float:
+        low, high = self.track_complexity_range
+        low = self._clamp(float(low), 0.0, 1.0)
+        high = self._clamp(float(high), 0.0, 1.0)
+        if high < low:
+            low, high = high, low
+        if high <= low + 1e-9:
+            return float(high)
+        if random.random() < float(self.track_complexity_hard_sample_rate):
+            return self._sample_range((self._hard_complexity_threshold((low, high)), high))
+        return self._sample_range((low, high))
+
     def _require_track_geometry(self) -> TrackGeometry:
         if self.track_geometry is None:
             raise RuntimeError("Track geometry is not initialized.")
         return self.track_geometry
 
     def _generate_track(self, seed: int) -> None:
-        complexity_min, complexity_max = self.track_complexity_range
+        complexity = float(self._sample_track_complexity())
+        self.current_track_complexity = float(complexity)
         track_config = replace(
             self.track_config,
-            complexity_min=float(complexity_min),
-            complexity_max=float(complexity_max),
+            complexity_min=float(complexity),
+            complexity_max=float(complexity),
         )
-        if int(self._current_level) == int(MAX_LEVEL):
-            track_config = replace(
-                track_config,
-                long_side_template_choices=tuple(str(value) for value in TRACK_LEVEL_5_LONG_SIDE_TEMPLATE_CHOICES),
-                short_side_template_choices=tuple(str(value) for value in TRACK_LEVEL_5_SHORT_SIDE_TEMPLATE_CHOICES),
-                use_complexity_filter=False,
-            )
         track = generate_track(
             seed=int(seed),
             width=int(SCREEN_WIDTH),
@@ -633,6 +686,9 @@ class VroomEnv(Env):
                 start_back_offset=float(start_back_offset),
             )
             outer, inner = self.player_color_pairs[idx % len(self.player_color_pairs)]
+            is_player = int(idx) == int(self.player_index)
+            speed_mult = 1.0 if bool(is_player) else self._sample_range(OPPONENT_SPEED_MULT_RANGE)
+            bend_coast_mult = 1.0 if bool(is_player) else self._sample_range(OPPONENT_BEND_COAST_MULT_RANGE)
             car = RaceCar(
                 x=float(x),
                 y=float(y),
@@ -643,6 +699,8 @@ class VroomEnv(Env):
                 inner_color=inner,
                 ai_lane_home=float(desired_lateral),
                 ai_lane_offset=float(desired_lateral),
+                speed_mult=float(speed_mult),
+                bend_coast_mult=float(bend_coast_mult),
             )
             if not self._is_on_track_footprint(car.x, car.y):
                 (fallback_x, fallback_y), fallback_heading = spawn_pose(
@@ -664,7 +722,7 @@ class VroomEnv(Env):
             progress = float((float(proj.s) - float(track.start_s)) % float(track.length))
             car.track_progress = float(progress)
             car.prev_track_progress = float(progress)
-            car.lap_progress = float(progress)
+            car.lap_progress = 0.0
             car.lap_armed = False
             car.off_track = False
             car.off_track_blend = 0.0
@@ -697,10 +755,16 @@ class VroomEnv(Env):
         _, _, forward_speed, lateral_speed = self._project_to_car_frame(car)
         speed_ratio = self._clamp(abs(float(forward_speed)) / max(1e-6, float(self.max_speed)), 0.0, 1.0)
         surface_grip = self._surface_grip(car)
+        low_speed_steer_scale = self._clamp(
+            float(speed_ratio) / float(self.steer_full_speed_norm),
+            float(self.steer_min_speed_factor),
+            1.0,
+        )
+        effective_steer = float(steer) * float(low_speed_steer_scale)
         steer_speed_scale = 1.0 / (1.0 + float(self.steer_speed_decay) * speed_ratio * speed_ratio)
         steer_surface_scale = 0.45 + 0.55 * float(surface_grip)
         steer_authority = self._clamp(float(steer_speed_scale) * float(steer_surface_scale), 0.12, 1.0)
-        heading_delta = float(steer) * float(self.turn_rate) * float(steer_authority)
+        heading_delta = float(effective_steer) * float(self.turn_rate) * float(steer_authority)
         car.heading_degrees = self._normalize_degrees(float(car.heading_degrees) + heading_delta)
         car.yaw_rate = float(heading_delta)
 
@@ -711,7 +775,7 @@ class VroomEnv(Env):
         side_y = forward_x
 
         accel_scale = self.contact_accel_scale if car.in_contact else 1.0
-        steer_load = self._clamp(abs(float(steer)), 0.0, 1.0)
+        steer_load = self._clamp(abs(float(effective_steer)), 0.0, 1.0)
         throttle_turn_scale = 1.0 - float(self.turn_throttle_loss) * (steer_load**1.25)
         throttle_turn_scale = self._clamp(throttle_turn_scale, 0.0, 1.0)
         effective_throttle = self._clamp(float(throttle), 0.0, 1.0)
@@ -797,14 +861,14 @@ class VroomEnv(Env):
                 and curr_s <= seam_window
                 and is_forward
             )
+            car.lap_progress = min(float(lap_length), float(car.lap_progress) + float(wrapped_delta))
+
             if crossed_start_forward and bool(car.lap_armed) and on_track_now:
                 car.finished = True
                 car.lap_armed = False
                 car.lap_progress = lap_length
                 if self.winner_index is None:
                     self.winner_index = idx
-            else:
-                car.lap_progress = float(curr_s)
 
     def _player_progress_potential(self) -> float:
         track = self._require_track_geometry()
@@ -821,8 +885,8 @@ class VroomEnv(Env):
             car.ai_lane_offset = float(car.ai_lane_home)
         self.winner_index = None
         self.steps = 0
-        self._prev_progress_potential = float(self._player_progress_potential())
-        self._prev_player_in_contact = bool(self.cars[self.player_index].in_contact) if self.cars else False
+        self._best_progress_norm = float(self._player_progress_potential())
+        self._race_progress_reward_total = 0.0
         self._prev_player_forward_speed = 0.0
         self._player_contact_memory_steps = 0
 
@@ -887,16 +951,6 @@ class VroomEnv(Env):
             return 0.0, None
         return float(next_distance), next_key
 
-    def _opponent_coast_error_percent(self, car: RaceCar, corner_key: int | None) -> float:
-        if corner_key is None:
-            car.ai_curve_key = -1
-            car.ai_curve_error_percent = 0.0
-            return 0.0
-        if int(car.ai_curve_key) != int(corner_key):
-            car.ai_curve_key = int(corner_key)
-            car.ai_curve_error_percent = float(random.choice(self.opponent_coast_error_choices))
-        return float(car.ai_curve_error_percent)
-
     def _opponent_lane_target(self, car: RaceCar, signed_lateral: float) -> float:
         lane_limit = self._ai_lane_limit()
         if bool(car.in_contact) or bool(car.off_track):
@@ -944,9 +998,8 @@ class VroomEnv(Env):
         side_speed_factor = self._side_template_factor(current_side)
 
         ideal_corner_distance = max(72.0, 2.75 * float(self.track_half_width) + 18.0)
-        coast_error_percent = self._opponent_coast_error_percent(car, next_corner_key)
         corner_entry_distance = self._clamp(
-            float(ideal_corner_distance) * (1.0 - float(coast_error_percent) / 100.0),
+            float(ideal_corner_distance) * float(car.bend_coast_mult),
             36.0,
             220.0,
         )
@@ -971,7 +1024,8 @@ class VroomEnv(Env):
         track = self._require_track_geometry()
         proj = project_point_to_track(track, (float(car.x), float(car.y)))
         _, _, forward_speed, _ = self._project_to_car_frame(car)
-        max_forward_speed = max(0.0, float(self.max_speed) * float(self.opponent_speed_cap))
+        effective_speed_cap = float(self.opponent_speed_cap) * float(car.speed_mult)
+        max_forward_speed = max(0.0, float(self.max_speed) * float(effective_speed_cap))
         if float(max_forward_speed) <= 1e-6:
             return 0.0, 0.0, 1.0
         signed_lateral = float(proj.lateral_offset)
@@ -1064,7 +1118,8 @@ class VroomEnv(Env):
                 allowed_speed = float(self.max_speed) * float(speed_multiplier)
             else:
                 steer, throttle, brake = self._ai_control_for_car(idx, car)
-                allowed_speed = float(self.max_speed) * float(self.opponent_speed_cap) * float(speed_multiplier)
+                effective_speed_cap = float(self.opponent_speed_cap) * float(car.speed_mult)
+                allowed_speed = float(self.max_speed) * float(effective_speed_cap) * float(speed_multiplier)
             self._apply_car_controls(car, steer, throttle, brake, max_forward_speed=allowed_speed)
 
         for car in self.cars:
@@ -1135,10 +1190,11 @@ class VroomEnv(Env):
         heading_y: float,
         right_x: float,
         right_y: float,
+        lookaheads_px: tuple[float, float, float],
     ) -> tuple[dict[str, float], list[tuple[tuple[float, float], tuple[float, float]]]]:
         feature_values: dict[str, float] = {}
         markers: list[tuple[tuple[float, float], tuple[float, float]]] = []
-        for idx, lookahead in enumerate(self.route_lookaheads_px, start=1):
+        for idx, lookahead in enumerate(lookaheads_px, start=1):
             (point_x, point_y), (tan_x, tan_y), _ = sample_track_at_s(
                 track,
                 float(proj.s) + float(lookahead),
@@ -1207,12 +1263,13 @@ class VroomEnv(Env):
             dx = float(other.x) - float(car.x)
             dy = float(other.y) - float(car.y)
             center_distance = math.hypot(dx, dy)
-            if center_distance <= 1e-6:
-                continue
 
             local_fwd = dx * float(forward_x) + dy * float(forward_y)
             local_right = dx * float(right_x) + dy * float(right_y)
-            if abs(float(local_fwd)) >= abs(float(local_right)):
+            if float(center_distance) <= 1e-6:
+                sector_idx = 0
+                max_distance = float(self.sens_car_range_px)
+            elif abs(float(local_fwd)) >= abs(float(local_right)):
                 sector_idx = 0 if float(local_fwd) >= 0.0 else 3
                 max_distance = float(self.sens_car_range_px)
             else:
@@ -1248,6 +1305,8 @@ class VroomEnv(Env):
         _, (right_x, right_y) = self._car_axes(player)
         _, _, fwd_speed_raw, lat_speed_raw = self._project_to_car_frame(player)
         spd_fwd = clip_signed(float(fwd_speed_raw) / max(1.0, float(self.max_speed)))
+        route_speed = self._clamp(float(spd_fwd), 0.0, 1.0)
+        route_lookaheads_px = self._route_lookaheads_for_speed(float(route_speed))
         lat_vel = clip_signed(float(lat_speed_raw) / max(1.0, float(self.max_speed)))
         spd_delta = clip_signed(float(fwd_speed_raw - self._prev_player_forward_speed) / max(1.0, float(self.accel_force * 2.0)))
         yaw_rt = clip_signed(float(player.yaw_rate) / float(max(1e-6, self.yaw_rate_norm)))
@@ -1264,9 +1323,10 @@ class VroomEnv(Env):
             float(heading_y),
             float(right_x),
             float(right_y),
+            route_lookaheads_px,
         )
-        curve_near = self._curvature_sensor_value(track, float(proj.s), float(self.route_lookaheads_px[1]))
-        curve_far = self._curvature_sensor_value(track, float(proj.s), float(self.route_lookaheads_px[2]))
+        curve_near = self._curvature_sensor_value(track, float(proj.s), float(route_lookaheads_px[1]))
+        curve_far = self._curvature_sensor_value(track, float(proj.s), float(route_lookaheads_px[2]))
 
         ray_f, edg_fl, edg_fr, edg_l, edg_r, probe_dirs, probe_max_distances = self._edge_probe_values(player)
         car_values, car_dirs, car_max_distances = self._car_clearance_values(player)
@@ -1355,8 +1415,6 @@ class VroomEnv(Env):
         )
         self.last_action = action_array.copy()
 
-        phi_prev = float(self._prev_progress_potential)
-        was_in_contact = bool(self._prev_player_in_contact)
         self._step_simulation(action_array)
         self.steps += 1
 
@@ -1364,6 +1422,7 @@ class VroomEnv(Env):
         reward_breakdown = {
             "step.penalty_step": 0.0,
             "progress.shape": 0.0,
+            "track.penalty_coverage": 0.0,
             "event.penalty_collision": 0.0,
             "outcome.reward_win": 0.0,
             "outcome.penalty_lose": 0.0,
@@ -1375,24 +1434,32 @@ class VroomEnv(Env):
             reward_breakdown["step.penalty_step"] = float(PENALTY_STEP)
 
             player = self.cars[self.player_index]
-            phi_next = float(self._player_progress_potential())
-            progress_reward = float(
-                signed_potential_shaping(
-                    phi_prev=phi_prev,
-                    phi_next=phi_next,
-                    scale=float(PROGRESS_SCALE),
-                    clip_abs=float(PROGRESS_CLIP),
+            track_coverage = float(self._track_coverage_ratio(float(player.x), float(player.y)))
+            progress_norm = float(self._player_progress_potential())
+            progress_delta = float(progress_norm) - float(self._best_progress_norm)
+            progress_reward = 0.0
+            if float(progress_delta) > 0.0:
+                progress_reward = float(
+                    signed_potential_shaping(
+                        phi_prev=float(self._best_progress_norm),
+                        phi_next=float(progress_norm),
+                        scale=float(PROGRESS_SCALE),
+                        clip_abs=float(PROGRESS_CLIP),
+                    )
                 )
-            )
+                progress_reward *= float(track_coverage)
+                self._best_progress_norm = max(float(self._best_progress_norm), float(progress_norm))
             reward += progress_reward
             reward_breakdown["progress.shape"] = progress_reward
-            self._prev_progress_potential = float(phi_next)
+            self._race_progress_reward_total += float(progress_reward)
 
-            collision_started = (not was_in_contact) and bool(player.in_contact)
-            if collision_started:
+            track_penalty = -float(PENALTY_TRACK_COVERAGE) * (1.0 - float(track_coverage))
+            reward += track_penalty
+            reward_breakdown["track.penalty_coverage"] = track_penalty
+
+            if bool(player.in_contact):
                 reward += float(PENALTY_COLLISION)
                 reward_breakdown["event.penalty_collision"] = float(PENALTY_COLLISION)
-            self._prev_player_in_contact = bool(player.in_contact)
 
         timed_out = bool((self.winner_index is None) and (self.steps >= self.max_steps))
         race_finished = bool((self.winner_index is not None) or timed_out)
@@ -1401,6 +1468,10 @@ class VroomEnv(Env):
             if self.mode != "human":
                 player_won = race_winner == self.player_index
                 if player_won:
+                    progress_top_up = max(0.0, float(PROGRESS_SCALE) - float(self._race_progress_reward_total))
+                    reward += float(progress_top_up)
+                    reward_breakdown["progress.shape"] += float(progress_top_up)
+                    self._race_progress_reward_total += float(progress_top_up)
                     reward += float(REWARD_WIN)
                     reward_breakdown["outcome.reward_win"] = float(REWARD_WIN)
                 else:

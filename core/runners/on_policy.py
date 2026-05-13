@@ -17,7 +17,6 @@ from core.logging_utils import (
     log_on_policy_episode_line,
     log_ppo_metrics_line,
     log_ppo_update_line,
-    log_save_line,
 )
 from core.runners.env_access import (
     act_with_optional_signals,
@@ -31,6 +30,7 @@ from core.runners.env_access import (
     reward_scalar,
     safe_level,
 )
+from core.runners.level_saves import save_best_if_improved, save_level_checkpoint
 
 
 @dataclass
@@ -157,10 +157,7 @@ def run_on_policy_training(
                 )
                 level_success_window.append(int(episode_success))
                 episodes_by_level[int(episode_level)] = int(episodes_by_level.get(int(episode_level), 0)) + 1
-                if bool(info.get("level_changed", False)):
-                    bump_epsilon_to_cap(algorithm)
-                current_level = infer_current_level(env, default=episode_level)
-                _apply_level_entropy_coef(algorithm, env, int(current_level))
+                level_changed = bool(info.get("level_changed", False))
                 level_episode_count = int(episodes_by_level.get(int(episode_level), 0))
                 stats_ready_level = level_episode_count >= int(min_episodes_for_stats)
                 avg_reward_ep = float(mean(level_reward_window)) if stats_ready_level else None
@@ -168,6 +165,7 @@ def run_on_policy_training(
                 if avg_success_ep is None and stats_ready_level:
                     avg_success_ep = float(mean(level_success_window)) if level_success_window else None
 
+                saved_best_level = False
                 if stats_ready_level:
                     avg_reward_level = float(mean(level_reward_window))
                     avg_success_level = (
@@ -175,26 +173,29 @@ def run_on_policy_training(
                         if avg_success_ep is not None
                         else float(mean(level_success_window)) if level_success_window else 0.0
                     )
-                    best_success_level = best_avg_success_by_level.get(int(episode_level), float("-inf"))
-                    best_reward_level = best_avg_reward_by_level.get(int(episode_level), float("-inf"))
-                    if (
-                        avg_success_level > float(best_success_level)
-                        or (
-                            avg_success_level == float(best_success_level)
-                            and avg_reward_level > float(best_reward_level)
-                        )
-                    ):
-                        best_avg_success_by_level[int(episode_level)] = float(avg_success_level)
-                        best_avg_reward_by_level[int(episode_level)] = float(avg_reward_level)
-                        best_path = run_paths.model_path(level=int(episode_level), kind="best")
-                        algorithm.save(str(best_path))
-                        log_save_line(
-                            kind="best",
-                            level=int(episode_level),
-                            at=f"iter {int(iteration)}",
-                            avg_reward=float(avg_reward_level),
-                            path=best_path,
-                        )
+                    saved_best_level = save_best_if_improved(
+                        algorithm=algorithm,
+                        run_paths=run_paths,
+                        level=int(episode_level),
+                        avg_reward=float(avg_reward_level),
+                        avg_success=float(avg_success_level),
+                        best_avg_reward_by_level=best_avg_reward_by_level,
+                        best_avg_success_by_level=best_avg_success_by_level,
+                        at=f"iter {int(iteration)}",
+                    )
+
+                if level_changed and not bool(saved_best_level):
+                    save_level_checkpoint(
+                        algorithm=algorithm,
+                        run_paths=run_paths,
+                        level=int(episode_level),
+                        at=f"iter {int(iteration)}",
+                    )
+
+                if level_changed:
+                    bump_epsilon_to_cap(algorithm)
+                current_level = infer_current_level(env, default=episode_level)
+                _apply_level_entropy_coef(algorithm, env, int(current_level))
 
                 components_text = format_reward_components(info.get("reward_components"))
                 best_avg_for_level = best_avg_reward_by_level.get(int(episode_level))
@@ -244,21 +245,17 @@ def run_on_policy_training(
                 )
 
         if iteration % int(config.checkpoint_every_iterations) == 0:
-            checkpoint_path = run_paths.model_path(level=int(current_level), kind="check")
-            algorithm.save(str(checkpoint_path))
-            log_save_line(
-                kind="check",
+            save_level_checkpoint(
+                algorithm=algorithm,
+                run_paths=run_paths,
                 level=int(current_level),
                 at=f"iter {int(iteration)}",
-                path=checkpoint_path,
             )
-    checkpoint_path = run_paths.model_path(level=int(current_level), kind="check")
-    algorithm.save(str(checkpoint_path))
-    log_save_line(
-        kind="check",
+    save_level_checkpoint(
+        algorithm=algorithm,
+        run_paths=run_paths,
         level=int(current_level),
         at=f"iter {int(config.max_iterations)}",
-        path=checkpoint_path,
     )
 
     best_avg_reward = max(best_avg_reward_by_level.values()) if best_avg_reward_by_level else float("-inf")

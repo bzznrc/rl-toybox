@@ -1050,6 +1050,7 @@ def _build_track_geometry_once(
     inset_width_cap_ratio: float,
     inset_length_cap_ratio: float,
     fold_gap_px: float,
+    bend_smoothing_passes: int,
     complexity_min: float,
     complexity_max: float,
     use_complexity_filter: bool,
@@ -1345,7 +1346,8 @@ def _build_track_geometry_once(
     centerline = _resample_closed_polyline(dense_np, sample_count)
     has_fold_template = any(str(template_kind) in FOLD_TEMPLATE_CHOICES for template_kind, _amp in side_params.values())
     has_curved_template = any(str(template_kind) != "straight" for template_kind, _amp in side_params.values())
-    smooth_iterations = 7 if has_fold_template else 3 if has_curved_template else 0
+    extra_smoothing = max(0, int(bend_smoothing_passes))
+    smooth_iterations = (7 if has_fold_template else 3 if has_curved_template else 0) + int(extra_smoothing)
     if smooth_iterations > 0:
         pre_seg_vec, pre_seg_len, pre_track_len = _closed_segment_lengths(centerline)
         fixed_mask = None
@@ -1589,6 +1591,7 @@ def build_track_geometry(
     inset_width_cap_ratio: float,
     inset_length_cap_ratio: float,
     fold_gap_px: float,
+    bend_smoothing_passes: int,
     generation_max_attempts: int,
     complexity_min: float,
     complexity_max: float,
@@ -1617,6 +1620,7 @@ def build_track_geometry(
                 inset_width_cap_ratio=float(inset_width_cap_ratio),
                 inset_length_cap_ratio=float(inset_length_cap_ratio),
                 fold_gap_px=float(fold_gap_px),
+                bend_smoothing_passes=int(bend_smoothing_passes),
                 complexity_min=float(complexity_min),
                 complexity_max=float(complexity_max),
                 use_complexity_filter=bool(use_complexity_filter),
@@ -1644,6 +1648,7 @@ def build_track_geometry(
             inset_width_cap_ratio=float(inset_width_cap_ratio),
             inset_length_cap_ratio=float(inset_length_cap_ratio),
             fold_gap_px=float(fold_gap_px),
+            bend_smoothing_passes=int(bend_smoothing_passes),
             complexity_min=0.0,
             complexity_max=0.0,
             use_complexity_filter=False,

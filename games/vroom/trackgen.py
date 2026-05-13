@@ -36,6 +36,7 @@ class TrackGenConfig:
     inset_width_cap_ratio: float = 0.62
     inset_length_cap_ratio: float = 0.16
     fold_gap_px: float = 16.0
+    bend_smoothing_passes: int = 1
     generation_max_attempts: int = 50
     complexity_min: float = 0.0
     complexity_max: float = 0.0
@@ -180,6 +181,7 @@ def generate_track(
         inset_width_cap_ratio=float(cfg.inset_width_cap_ratio),
         inset_length_cap_ratio=float(cfg.inset_length_cap_ratio),
         fold_gap_px=float(cfg.fold_gap_px),
+        bend_smoothing_passes=int(cfg.bend_smoothing_passes),
         generation_max_attempts=int(cfg.generation_max_attempts),
         complexity_min=float(cfg.complexity_min),
         complexity_max=float(cfg.complexity_max),

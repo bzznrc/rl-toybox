@@ -19,16 +19,16 @@ Top-down one-lap racing with procedural closed-loop tracks and continuous `steer
 - Throttle: `W` or up arrow
 - Brake: `S` or down arrow
 - Coast: release throttle and brake
-- Rendered overlays: `X` toggles translucent route, edge, and car sensor ghosts during `play-user` and `play-ai`
+- Rendered overlays: `X` toggles translucent route, edge, and car-path sensor ghosts during `play-user` and `play-ai`
 
 ## Observation / Actions
 
 - Observation family: arcade / egocentric `SELF -> SENS -> FLAG`
 - Observation: `32` floats (`INPUT_FEATURE_NAMES`, exact order)
   - `SELF` (7): `self_lat_off self_spd_lat self_spd_fwd self_spd_delta self_yaw_rate self_head_err_sin self_head_err_cos`
-  - `SENS / ROUTE` (14): 3 speed-aware future centerline breadcrumbs plus near/far curve summaries
+  - `SENS / ROUTE` (15): 3 speed-aware future centerline probes, each with local position, tangent, and bend severity
   - `SENS / EDGE` (5): continuous road-boundary clearance rays
-  - `SENS / CAR` (4): continuous nearby-car clearances
+  - `SENS / CAR-PATH` (3): continuous left / forward / right path-clearance probes
   - `FLAG` (2): `flag_contact flag_off_track`
 - Actions: `Box(3)` (`ACTION_NAMES`, ordered)
   - `steer` in `[-1, 1]`
@@ -49,38 +49,39 @@ sens_route1_fwd
 sens_route1_lat
 sens_route1_tan_sin
 sens_route1_tan_cos
+sens_route1_bend
 sens_route2_fwd
 sens_route2_lat
 sens_route2_tan_sin
 sens_route2_tan_cos
+sens_route2_bend
 sens_route3_fwd
 sens_route3_lat
 sens_route3_tan_sin
 sens_route3_tan_cos
-sens_curve_near
-sens_curve_far
+sens_route3_bend
 sens_edge_fwd
 sens_edge_left_front
 sens_edge_right_front
 sens_edge_left
 sens_edge_right
-sens_car_fwd
 sens_car_left
+sens_car_fwd
 sens_car_right
-sens_car_back
 flag_contact
 flag_off_track
 ```
 
-The observation is intentionally vector-only and compact. `self_*` features encode car state in the local track frame. `sens_route*` samples future centerline points by track progress, which keeps lookahead meaningful on bendy, deformed, or folded playmat tracks where straight-line screen distance can point at the wrong road ribbon. Route breadcrumb lookaheads are speed-aware: low-speed recovery uses `45 / 90 / 180 px`, while high speed uses `75 / 135 / 270 px`. `sens_curve_near` and `sens_curve_far` summarize upcoming turn strength, while `sens_edge_*` expose continuous road clearance.
+The observation is intentionally vector-only and compact. `self_*` features encode car state in the local track frame. `sens_route*` samples future centerline points by track progress, which keeps lookahead meaningful on bendy, deformed, or folded playmat tracks where straight-line screen distance can point at the wrong road ribbon. Route probe lookaheads are speed-aware: low-speed recovery uses `45 / 90 / 180 px`, while high speed uses `75 / 135 / 270 px`. Each route probe also reports absolute local bend severity, so sharp S-curves stay visible even when left/right curvature cancels out over a longer window. `sens_edge_*` exposes continuous road clearance.
 
-`sens_car_*` values are continuous egocentric car clearances, not binary flags: `1.0` means no car is nearby in that sector, and `0.0` means touching or immediate collision risk. During contact, the relevant direction should stay near `0.0`, so `flag_contact` says contact is happening while `sens_car_*` gives the policy the directional escape signal.
+`sens_car_left`, `sens_car_fwd`, and `sens_car_right` are continuous egocentric path clearances, not binary flags: `1.0` means the path is clear, and `0.0` means touching or immediate collision risk. During contact, the relevant direction should stay near `0.0`, so `flag_contact` says contact is happening while `sens_car_*` gives the policy the directional escape signal.
 
 ## Environment Notes
 
 - Each race is exactly `1` lap.
 - A fresh smooth closed-loop track is generated at every reset.
 - Cars spawn across the start strip with randomized row/lane ordering.
+- Training curriculum can randomize the whole race start; all cars move to the same sampled start region without overlapping, while evaluation and human play keep the normal start-line behavior.
 - If any car completes the lap, the race ends immediately.
 - Episode length:
   - `train`: `1` race
@@ -92,7 +93,8 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 - Low-speed steering is mildly reduced, with at least `25%` authority at near-zero speed and full low-speed scaling gone by normal driving speed.
 - The policy and human runtime share the same continuous control interface.
 - `flag_contact` and `flag_off_track` are binary observations; contact direction comes from `sens_car_*`.
-- Ghost mode is visual-only and draws the 3 speed-aware route breadcrumbs with tangent markers, the 5 edge rays, and the 4 car-clearance rays.
+- `flag_off_track` and training track-coverage penalties use a projected centerline validity margin with hysteresis, so near-edge recovery is less noisy without widening the rendered or physical road.
+- Ghost mode is visual-only and draws the 3 speed-aware route probes with tangent and bend markers, the 5 edge rays, and the 3 car-path probes.
 
 ### Track Generation
 
@@ -106,10 +108,11 @@ The observation is intentionally vector-only and compact. `self_*` features enco
   - `s_curve`
   - `fold`
 - The left and right sides can sample `straight` or `bell`.
-- Track complexity is sampled from the current curriculum level. Each reset samples `70%` from the full level range and `30%` from the upper third of that range, so hard tracks show up often without adding extra level knobs.
+- Track complexity is sampled from the current curriculum level. Each reset samples `50%` from the full level range and `50%` from the upper third of that range, so hard tracks show up often without adding extra level knobs.
 - Complexity below `0.20` allows only `straight`; `0.20+` can add `bell` / `s_curve`; `0.45+` can add `fold`.
 - Folds are validated with centerline clearance (`track_width + fold_gap`) so road ribbons do not overlap.
 - Rounded corners and the start strip are built through the geometry-first pipeline in `games/vroom/track_geometry.py` and `games/vroom/trackgen.py`.
+- Generated centerlines keep the same template families but run a small deterministic smoothing pass over bend transitions for driveability across all curriculum levels.
 - Gameplay and rendering both follow the smooth analytical track geometry.
 - The rendered road uses a supersampled smooth polygon with consistent smooth edge margins.
 - The start mark is a single margin-colored line centered on the chosen side.
@@ -117,21 +120,22 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 ### Scripted Opponents
 
 - Opponents use a compact lane-keeping controller rather than a learned policy.
-- Scripted opponents use a curriculum max-speed cap from `0%` at level 1 to `100%` at level 5, then slow down through the bend/corner planner.
-- Each opponent samples fixed per-race `speed_mult` and `bend_coast_mult` personality values so traffic is slightly varied without extra curriculum knobs.
+- Scripted opponents use `opponent_speed_cap` as the curriculum max-speed knob, from `0%` at level 1 to `100%` at level 5.
+- Opponents use a bend-aware target speed: they drive near full allowed speed on straights, keep their lane through difficult bends, and brake when edge or steering demand gets high.
+- Each opponent samples fixed per-race `speed_mult` and `bend_caution_mult` personality values so traffic is slightly varied without extra curriculum knobs.
 - After contact or off-line disturbances, opponents blend back toward their assigned lane instead of snapping instantly.
 
 ## Rewards (Training)
 
 - `REWARD_WIN = +10.0` when the player wins
 - `PENALTY_LOSE = -5.0` when another car wins or timeout resolves against the player
-- Progress shaping: only new best route progress is rewarded, `clip(7.5 * max(0, Phi_now - Phi_best), 0.0, +0.20)` where `Phi = race_progress_norm`
-- Moving backward, or moving forward again over already visited route progress, gives no `P`
-- A completed player lap settles cumulative `P` to `PROGRESS_SCALE` (`7.5`)
-- Positive progress is multiplied by current track-footprint coverage, so projected progress off the road does not pay like clean racing progress
-- Track coverage penalty: `-0.0075 * (1 - coverage)` each training step
+- Progress shaping uses signed unwrapped route-progress deltas from spawn: forward motion adds `P`, backward motion subtracts `P`, and forward/back wiggle nets near zero.
+- A completed player lap from the current spawn point settles cumulative `P` to `PROGRESS_SCALE` (`7.5`)
+- Positive progress is multiplied by the virtual training-validity coverage, so clearly off-route progress does not pay like clean racing progress
+- Track coverage penalty: `-0.005 * (1 - coverage)` each training step, using the same projected centerline margin
 - `PENALTY_COLLISION = -0.02` each training step while the player car remains in contact
-- `PENALTY_STEP = -0.01` every training step
+- `PENALTY_STEP = -0.0075` every training step
+- No-progress episodes terminate as an existing loss if best unwrapped progress fails to improve by `0.01` for `240` steps.
 
 An episode counts as a success if the player wins the race set.
 
@@ -139,15 +143,16 @@ An episode counts as a success if the player wins the race set.
 
 - Shared 5-level curriculum progression from `core/curriculum.py`
 - Promotion settings live in `games/vroom/config.py` under `CURRICULUM_PROMOTION`
-- Promotion uses one rule: compare rolling AS over the last `100` level episodes with the level threshold. Solo levels use `0.80`; levels with additional cars use `0.60`.
+- Promotion uses one rule: compare rolling AS over the last `100` level episodes with the shared `0.60` threshold.
+- Training-only random starts decrease by level. When one triggers, the player and opponents spawn around the same sampled start region in different safe slots; direction is sampled within `+/-45` degrees of the local track tangent, speed starts between `0%` and `25%` of max speed, and laps are measured from the sampled spawn point.
 - Levels:
-  - Level 1: `1` car, opponent speed cap `0.0`, complexity `0.00-0.30`
-  - Level 2: `1` car, opponent speed cap `0.0`, complexity `0.20-0.50`
-  - Level 3: `2` cars, opponent speed cap `0.50`, complexity `0.40-0.70`
-  - Level 4: `3` cars, opponent speed cap `0.75`, complexity `0.50-0.80`
-  - Level 5: `4` cars, opponent speed cap `1.0`, complexity `0.60-0.90`
+  - Level 1: `1` car, opponent speed cap `0.0`, complexity `0.00-0.30`, random starts `80%`
+  - Level 2: `1` car, opponent speed cap `0.0`, complexity `0.20-0.50`, random starts `60%`
+  - Level 3: `2` cars, opponent speed cap `0.50`, complexity `0.40-0.70`, random starts `40%`
+  - Level 4: `3` cars, opponent speed cap `0.75`, complexity `0.50-0.80`, random starts `20%`
+  - Level 5: `4` cars, opponent speed cap `1.0`, complexity `0.60-0.90`, random starts `0%`
 
-Hard-track oversampling makes tougher tracks appear inside that same AS window, without adding a second promotion gate.
+Hard-track oversampling makes tougher tracks appear inside that same AS window, without adding a second promotion gate or per-band metrics.
 
 ## Run Commands
 

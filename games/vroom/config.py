@@ -20,6 +20,9 @@ MAX_EPISODE_STEPS = 1_200
 OFF_TRACK_MAX_SPEED_FACTOR = 0.50
 # Seconds to blend between on-track speed (1.0) and off-track speed factor.
 OFF_TRACK_SPEED_TRANSITION_SECONDS = 0.5
+# Virtual training-validity margin; this does not widen the road geometry or mask.
+TRACK_VALID_MARGIN_PX = 0.0
+TRACK_VALID_HYSTERESIS_PX = 4.0
 
 # TRACK GENERATION
 TRACK_WIDTH_PX = 90.0  # Supported: 80.0 or 90.0.
@@ -37,8 +40,9 @@ TRACK_LONG_SIDE_S_AMPLITUDE_MAX_PX = 60.0
 TRACK_LONG_SIDE_INSET_WIDTH_CAP_RATIO = 1.35
 TRACK_LONG_SIDE_INSET_LENGTH_CAP_RATIO = 0.24
 TRACK_FOLD_GAP_PX = 16.0
+TRACK_BEND_SMOOTHING_PASSES = 1
 TRACK_GENERATION_MAX_ATTEMPTS = 50
-TRACK_COMPLEXITY_HARD_SAMPLE_RATE = 0.30
+TRACK_COMPLEXITY_HARD_SAMPLE_RATE = 0.50
 
 
 # IO
@@ -52,21 +56,24 @@ INPUT_FEATURE_NAMES = [
     "self_head_err_sin",
     "self_head_err_cos",
 
-    # SENS / ROUTE: 14
+    # SENS / ROUTE: 3 probes x 5 = 15
     "sens_route1_fwd",
     "sens_route1_lat",
     "sens_route1_tan_sin",
     "sens_route1_tan_cos",
+    "sens_route1_bend",
+
     "sens_route2_fwd",
     "sens_route2_lat",
     "sens_route2_tan_sin",
     "sens_route2_tan_cos",
+    "sens_route2_bend",
+
     "sens_route3_fwd",
     "sens_route3_lat",
     "sens_route3_tan_sin",
     "sens_route3_tan_cos",
-    "sens_curve_near",
-    "sens_curve_far",
+    "sens_route3_bend",
 
     # SENS / EDGE: 5
     "sens_edge_fwd",
@@ -75,11 +82,10 @@ INPUT_FEATURE_NAMES = [
     "sens_edge_left",
     "sens_edge_right",
 
-    # SENS / CAR: 4
-    "sens_car_fwd",
+    # SENS / CAR-PATH: 3
     "sens_car_left",
+    "sens_car_fwd",
     "sens_car_right",
-    "sens_car_back",
 
     # FLAG: 2
     "flag_contact",
@@ -93,7 +99,7 @@ ACTION_NAMES = [
 OBS_DIM = 32
 ACT_DIM = 3
 assert len(INPUT_FEATURE_NAMES) == 32
-assert len(ACTION_NAMES) == ACT_DIM
+assert len(ACTION_NAMES) == 3
 assert OBS_DIM == 32
 assert ACT_DIM == 3
 
@@ -126,7 +132,9 @@ ROUTE_LOOKAHEAD_RANGES_PX = ((45.0, 75.0), (90.0, 135.0), (180.0, 270.0))
 SENS_CAR_RANGE_PX = 140.0
 SENS_CAR_SIDE_RANGE_PX = 100.0
 OPPONENT_SPEED_MULT_RANGE = (0.95, 1.05)
-OPPONENT_BEND_COAST_MULT_RANGE = (0.90, 1.10)
+OPPONENT_BEND_CAUTION_MULT_RANGE = (0.90, 1.10)
+OPPONENT_MIN_BEND_SPEED_FACTOR = 0.40
+OPPONENT_BRAKE_RESPONSE = 0.35
 
 
 # CURRICULUM
@@ -136,8 +144,7 @@ REWARD_ROLLING_WINDOW = 100
 
 CURRICULUM_PROMOTION = {
     "min_episodes_per_level": 100,
-    "success_threshold": 0.60,
-    "solo_success_threshold": 0.80,
+    "success_threshold": 0.80,
 }
 
 LEVEL_SETTINGS = {
@@ -145,26 +152,31 @@ LEVEL_SETTINGS = {
         "num_cars": 1,
         "opponent_speed_cap": 0.0,
         "track_complexity_range": (0.00, 0.30),
+        "random_start_prob": 0.80,
     },
     2: {
         "num_cars": 1,
         "opponent_speed_cap": 0.0,
         "track_complexity_range": (0.20, 0.50),
+        "random_start_prob": 0.60,
     },
     3: {
         "num_cars": 2,
         "opponent_speed_cap": 0.50,
         "track_complexity_range": (0.40, 0.70),
+        "random_start_prob": 0.40,
     },
     4: {
         "num_cars": 3,
         "opponent_speed_cap": 0.75,
         "track_complexity_range": (0.50, 0.80),
+        "random_start_prob": 0.20,
     },
     5: {
         "num_cars": 4,
         "opponent_speed_cap": 1.00,
         "track_complexity_range": (0.60, 0.90),
+        "random_start_prob": 0.00,
     },
 }
 
@@ -177,6 +189,9 @@ PROGRESS_SCALE = 7.5
 PROGRESS_CLIP = 0.20
 PENALTY_TRACK_COVERAGE = 0.005
 PENALTY_COLLISION = -0.02
+# End stuck/jiggle episodes using the existing loss outcome.
+NO_PROGRESS_TIMEOUT_STEPS = 240
+NO_PROGRESS_EPS_NORM = 0.01
 REWARD_COMPONENTS = {
     "outcome.reward_win": REWARD_WIN,
     "outcome.penalty_lose": PENALTY_LOSE,

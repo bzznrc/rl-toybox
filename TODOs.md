@@ -1,5 +1,5 @@
 # Bang
-- Support 2P, 4P and 4x2P (with additional IO for the ally)
+- Polish mode balance after Duel, Arena, and Team Arena have training runs.
 
 # Vroom
 - Add Mario Kart power-ups?

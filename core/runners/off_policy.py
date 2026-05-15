@@ -21,6 +21,8 @@ from core.runners.env_access import (
     curriculum_avg_success_for_level,
     extract_action_mask,
     infer_current_level,
+    reward_for_storage,
+    reward_scalar,
     safe_level,
 )
 from core.runners.level_saves import save_best_if_improved, save_level_checkpoint
@@ -101,7 +103,7 @@ def run_off_policy_training(
         transition = {
             "obs": obs,
             "action": action,
-            "reward": float(reward),
+            "reward": reward_for_storage(obs, reward, info),
             "next_obs": next_obs,
             "done": bool(done),
             "info": dict(info),
@@ -111,7 +113,7 @@ def run_off_policy_training(
         algorithm.observe(transition)
 
         total_steps += 1
-        episode_reward += float(reward)
+        episode_reward += reward_scalar(reward)
         episode_steps += 1
         obs = next_obs
 

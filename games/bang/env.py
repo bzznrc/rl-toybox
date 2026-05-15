@@ -23,7 +23,12 @@ from core.arcade_style import (
     COLOR_SAND,
     COLOR_SLATE_GRAY,
 )
-from core.curriculum import SharedCurriculum, advance_curriculum, build_curriculum_config
+from core.curriculum import (
+    SharedCurriculum,
+    advance_curriculum,
+    build_curriculum_config,
+    validate_curriculum_level_settings,
+)
 from core.envs.base import Env
 from core.ghost_overlay import update_ghost_overlay_toggle
 from core.io_schema import (
@@ -71,7 +76,11 @@ from games.bang.config import (
     ACTION_STOP_MOVE,
     AIM_RATE_PER_STEP,
     AIM_TOLERANCE_DEGREES,
+    BANG_MODE_CHOICES,
+    BANG_MODE_LABELS,
+    BANG_MODE_SETTINGS,
     CURRICULUM_PROMOTION,
+    DEFAULT_BANG_MODE,
     ENEMY_HIDDEN_URGENCY_FRAMES,
     ENEMY_MOVE_COMMIT_FRAMES,
     ENEMY_RECENT_POSITION_MEMORY,
@@ -119,67 +128,119 @@ from core.runtime import (
     rect_from_center,
     rotate_degrees,
 )
-from core.utils import resolve_play_level, validate_level_settings
+from core.utils import resolve_play_level
 
 
-ALL_PLAYER_ORDER = ("P1", "P2", "P3", "P4")
-SUPPORTED_PLAYER_COUNTS = (2, 3, 4)
-validate_level_settings(
+CONTROLLED_PLAYER_ID = "P1"
+ALL_PLAYER_ORDER = ("P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8")
+validate_curriculum_level_settings(
     min_level=MIN_LEVEL,
     max_level=MAX_LEVEL,
     level_settings=LEVEL_SETTINGS,
-    valid_player_counts=SUPPORTED_PLAYER_COUNTS,
 )
 
 
-def _resolve_player_order(num_players: int) -> tuple[str, ...]:
-    count = int(num_players)
-    if count not in SUPPORTED_PLAYER_COUNTS:
-        raise ValueError(f"num_players must be one of {SUPPORTED_PLAYER_COUNTS}, got {count}")
-    return ALL_PLAYER_ORDER[:count]
+@dataclass(frozen=True)
+class BangModeSpec:
+    key: str
+    label: str
+    player_order: tuple[str, ...]
+    team_by_player: dict[str, int]
+    controlled_team_size: int
+
+    @property
+    def team_order(self) -> tuple[int, ...]:
+        ordered: list[int] = []
+        for player_id in self.player_order:
+            team_id = int(self.team_by_player[str(player_id)])
+            if team_id not in ordered:
+                ordered.append(team_id)
+        return tuple(ordered)
+
+    @property
+    def score_id_by_team(self) -> dict[int, str]:
+        score_ids: dict[int, str] = {}
+        for player_id in self.player_order:
+            team_id = int(self.team_by_player[str(player_id)])
+            score_ids.setdefault(team_id, str(player_id))
+        return score_ids
+
+    @property
+    def controlled_player_order(self) -> tuple[str, ...]:
+        controlled: list[str] = []
+        for player_id in self.player_order:
+            if int(self.team_by_player[str(player_id)]) == 0:
+                controlled.append(str(player_id))
+        return tuple(controlled[: int(self.controlled_team_size)])
 
 
-def _num_players_for_level(level: int) -> int:
-    return int(LEVEL_SETTINGS[int(level)]["num_players"])
+def _build_bang_mode_spec(mode: str) -> BangModeSpec:
+    settings = dict(BANG_MODE_SETTINGS[str(mode)])
+    max_players = int(settings["max_players"])
+    team_sizes = [int(size) for size in list(settings["team_sizes"])]
+    if sum(team_sizes) != max_players:
+        raise ValueError(f"Bang mode '{mode}' team_sizes must sum to max_players.")
+    player_order = tuple(ALL_PLAYER_ORDER[:max_players])
+    team_by_player: dict[str, int] = {}
+    cursor = 0
+    for team_id, team_size in enumerate(team_sizes):
+        for _ in range(int(team_size)):
+            team_by_player[player_order[cursor]] = int(team_id)
+            cursor += 1
+    return BangModeSpec(
+        key=str(mode),
+        label=str(settings.get("display_name", BANG_MODE_LABELS[str(mode)])),
+        player_order=player_order,
+        team_by_player=team_by_player,
+        controlled_team_size=int(settings.get("controlled_team_size", 1)),
+    )
 
 
-PLAYER_STYLES = {
-    "P1": {
-        "render_fill": COLOR_DEEP_TEAL,
-        "render_outline": COLOR_AQUA,
-        "status_color": COLOR_DEEP_TEAL,
-        "scripted": False,
-    },
-    "P2": {
-        "render_fill": COLOR_BRICK_RED,
-        "render_outline": COLOR_CORAL,
-        "status_color": COLOR_BRICK_RED,
-        "scripted": True,
-    },
-    "P3": {
-        "render_fill": COLOR_NAVY,
-        "render_outline": COLOR_BLUE,
-        "status_color": COLOR_BLUE,
-        "scripted": True,
-    },
-    "P4": {
-        "render_fill": COLOR_DEEP_PURPLE,
-        "render_outline": COLOR_PURPLE,
-        "status_color": COLOR_PURPLE,
-        "scripted": True,
-    },
+BANG_MODE_SPECS = {
+    mode: _build_bang_mode_spec(mode)
+    for mode in BANG_MODE_CHOICES
+}
+
+for _level in range(int(MIN_LEVEL), int(MAX_LEVEL) + 1):
+    _level_settings = dict(LEVEL_SETTINGS[int(_level)])
+    _active_enemies = dict(_level_settings.get("active_enemies", {}))
+    _configured_modes = {str(mode) for mode in _active_enemies}
+    _expected_modes = set(BANG_MODE_CHOICES)
+    if _configured_modes != _expected_modes:
+        raise ValueError(
+            f"Bang LEVEL_SETTINGS[{int(_level)}]['active_enemies'] must define every Bang mode."
+        )
+    for _mode, _count in _active_enemies.items():
+        _max_enemies = sum(
+            1
+            for _player_id, _team_id in BANG_MODE_SPECS[str(_mode)].team_by_player.items()
+            if int(_team_id) != 0
+        )
+        if not (0 <= int(_count) <= int(_max_enemies)):
+            raise ValueError(
+                f"Bang LEVEL_SETTINGS[{int(_level)}]['active_enemies'][{str(_mode)!r}] must be 0..{int(_max_enemies)}."
+            )
+
+
+def _resolve_bang_mode(value: str | None) -> str:
+    mode_key = str(DEFAULT_BANG_MODE if value is None else value).strip().lower()
+    mode_key = mode_key.replace("-", "_").replace(" ", "_")
+    if mode_key not in BANG_MODE_CHOICES:
+        valid = ", ".join(BANG_MODE_CHOICES)
+        raise ValueError(f"Unsupported Bang mode '{value}'. Expected one of: {valid}.")
+    return mode_key
+
+
+TEAM_RENDER_STYLES = {
+    0: (COLOR_DEEP_TEAL, COLOR_AQUA),
+    1: (COLOR_BRICK_RED, COLOR_CORAL),
+    2: (COLOR_NAVY, COLOR_BLUE),
+    3: (COLOR_DEEP_PURPLE, COLOR_PURPLE),
 }
 SPAWN_AREA_LEFT = "left_column"
 SPAWN_AREA_RIGHT = "right_column"
 SPAWN_AREA_BOTTOM = "bottom_strip"
 SPAWN_AREA_TOP = "top_strip"
-SPAWN_AREA_ORDER = (
-    SPAWN_AREA_LEFT,
-    SPAWN_AREA_RIGHT,
-    SPAWN_AREA_BOTTOM,
-    SPAWN_AREA_TOP,
-)
-
 PLAYER_TARGET_POLICY = {
     "max_lost_frames": 40,
     "switch_distance_ratio": 0.8,
@@ -248,14 +309,24 @@ SCRIPTED_MOVE_OPTIONS = (
 class Actor:
     """A movable actor that can rotate and shoot projectiles."""
 
-    def __init__(self, position: Vec2, angle: float, team: str = "P1") -> None:
+    def __init__(
+        self,
+        position: Vec2,
+        angle: float,
+        player_id: str = "P1",
+        team_id: int = 0,
+        active: bool = True,
+    ) -> None:
         self.position = position
         self.angle = angle
         self.cooldown_frames = 0
         self.max_health = 1
         self.health = self.max_health
-        self.is_alive = True
-        self.team = team
+        self.is_active = bool(active)
+        self.is_alive = bool(active)
+        self.player_id = str(player_id)
+        self.team_id = int(team_id)
+        self.team = self.player_id
         self.vx = 0.0
         self.vy = 0.0
 
@@ -271,7 +342,7 @@ class Actor:
         return movement * PLAYER_MOVE_SPEED
 
     def shoot(self):
-        if self.cooldown_frames > 0 or not self.is_alive:
+        if self.cooldown_frames > 0 or not self.is_active or not self.is_alive:
             return None
 
         direction = heading_to_vector(self.angle)
@@ -279,11 +350,12 @@ class Actor:
         return {
             "pos": self.position + direction * 20,
             "velocity": direction * PROJECTILE_SPEED,
-            "owner": self.team,
+            "owner": self.player_id,
+            "owner_team": self.team_id,
         }
 
     def take_hit(self, damage: int = 1) -> bool:
-        if not self.is_alive:
+        if not self.is_active or not self.is_alive:
             return False
         self.health = max(0, self.health - int(damage))
         if self.health <= 0:
@@ -292,6 +364,8 @@ class Actor:
         return False
 
     def tick(self) -> None:
+        if not self.is_active:
+            return
         if self.cooldown_frames > 0:
             self.cooldown_frames -= 1
 
@@ -343,7 +417,7 @@ class Renderer:
 
         for player_id in self.game.player_order:
             actor = self.game.players_by_id[player_id]
-            if not actor.is_alive:
+            if not actor.is_active or not actor.is_alive:
                 continue
             fill_color, outline_color = self.game.player_render_colors.get(
                 player_id,
@@ -373,7 +447,7 @@ class Renderer:
         if not bool(self.game.show_ghost_overlay and self.game.show_game):
             return
         player = self.game.player
-        if player is None or not bool(player.is_alive):
+        if player is None or not bool(player.is_active and player.is_alive):
             return
         angles = (
             float(player.angle),
@@ -437,9 +511,10 @@ class Renderer:
         )
 
     def _draw_player_icon(self, player_id: str, center_x: float, center_y: float, size: float) -> None:
-        style = PLAYER_STYLES.get(player_id, {})
-        fill_color = style.get("render_fill", COLOR_DEEP_TEAL)
-        outline_color = style.get("render_outline", COLOR_AQUA)
+        fill_color, outline_color = self.game.player_render_colors.get(
+            player_id,
+            (COLOR_DEEP_TEAL, COLOR_AQUA),
+        )
         inset = status_icon_inset(float(CELL_INSET))
         marker_size = max(2.0, round(NN_CONTROL_MARKER_SIZE_PX * (size / max(1.0, float(TILE_SIZE)))))
         draw_status_square_icon(
@@ -488,9 +563,9 @@ class Renderer:
 
 
 class BaseGame:
-    """Top-down free-for-all arena game logic."""
+    """Top-down arena shooter with selectable solo and team modes."""
 
-    def __init__(self, level: int = 1, show_game: bool = True):
+    def __init__(self, level: int = 1, show_game: bool = True, bang_mode: str | None = None):
         self.width = SCREEN_WIDTH
         self.height = SCREEN_HEIGHT
         self.playable_height = float(self.height - BB_HEIGHT)
@@ -502,20 +577,21 @@ class BaseGame:
         self._prev_ghost_overlay_toggle_down = False
         self.frame_clock = ArcadeFrameClock()
 
-        initial_level = max(MIN_LEVEL, min(int(level), MAX_LEVEL))
-        initial_player_count = _num_players_for_level(initial_level)
-        self.player_order = _resolve_player_order(initial_player_count)
+        self.bang_mode = _resolve_bang_mode(bang_mode)
+        self.mode_spec = BANG_MODE_SPECS[self.bang_mode]
+        self.player_order = tuple(self.mode_spec.player_order)
+        self.team_by_player = dict(self.mode_spec.team_by_player)
+        self.team_order = tuple(self.mode_spec.team_order)
+        self.score_id_by_team = dict(self.mode_spec.score_id_by_team)
+        self.controlled_player_ids = tuple(self.mode_spec.controlled_player_order)
         self.player_render_colors: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {}
-        # Shots use the player's lighter accent color. This already includes reserved styles like P4.
-        self.player_projectile_colors = {
-            player_id: PLAYER_STYLES[player_id]["render_outline"]
-            for player_id in PLAYER_STYLES
-        }
+        self.player_projectile_colors: dict[str, tuple[int, int, int]] = {}
+        self.active_player_ids: tuple[str, ...] = tuple()
         self.match_tracker = MatchTracker[str](clock_duration_steps=int(MAX_EPISODE_STEPS))
         self.scores: dict[str, int] = self.match_tracker.scores
         self.win_history: list[str | None] = self.match_tracker.history
         self.player_control_modes: dict[str, str] = {}
-        self._set_player_count(initial_player_count)
+        self._set_bang_mode(self.bang_mode)
 
         self.players: list[Actor] = []
         self.players_by_id: dict[str, Actor] = {}
@@ -563,63 +639,106 @@ class BaseGame:
         level = max(MIN_LEVEL, min(self.level, MAX_LEVEL))
         self.level = level
         settings = LEVEL_SETTINGS[level]
-        self._set_player_count(_num_players_for_level(level))
+        self.active_player_ids = self._active_player_ids_for_level(level)
 
         self.num_obstacles = settings["num_obstacles"]
-        self.enemy_reposition_bias = float(settings["enemy_reposition_bias"])
+        self.enemy_movement = float(clip_unit(float(settings["enemy_movement"])))
+        self.enemy_repositioning = float(clip_unit(float(settings["enemy_repositioning"])))
         self.enemy_shot_error_choices = list(ENEMY_SHOT_ERROR_CHOICES)
         self.enemy_shoot_probability = settings["enemy_shoot_probability"]
 
-    def _set_player_count(self, num_players: int) -> None:
-        player_order = _resolve_player_order(num_players)
-        if player_order == self.player_order and self.scores:
+    def _enemy_player_order(self) -> tuple[str, ...]:
+        return tuple(
+            player_id
+            for player_id in self.player_order
+            if int(self.team_by_player[player_id]) != 0
+        )
+
+    def _active_enemy_count_for_level(self, level: int) -> int:
+        level_counts = dict(LEVEL_SETTINGS[int(level)]["active_enemies"])
+        max_count = len(self._enemy_player_order())
+        return max(0, min(int(max_count), int(level_counts[self.bang_mode])))
+
+    def _active_player_ids_for_level(self, level: int) -> tuple[str, ...]:
+        active_ids: list[str] = list(self.mode_spec.controlled_player_order)
+        active_ids.extend(self._enemy_player_order()[: self._active_enemy_count_for_level(level)])
+        active_set = set(active_ids)
+        return tuple(player_id for player_id in self.player_order if player_id in active_set)
+
+    def _set_bang_mode(self, bang_mode: str) -> None:
+        mode_key = _resolve_bang_mode(bang_mode)
+        mode_spec = BANG_MODE_SPECS[mode_key]
+        player_order = tuple(mode_spec.player_order)
+        score_id_by_team = dict(mode_spec.score_id_by_team)
+        if mode_key == self.bang_mode and player_order == self.player_order and self.scores:
             return
 
+        self.bang_mode = mode_key
+        self.mode_spec = mode_spec
         self.player_order = player_order
+        self.team_by_player = dict(mode_spec.team_by_player)
+        self.team_order = tuple(mode_spec.team_order)
+        self.score_id_by_team = score_id_by_team
+        self.controlled_player_ids = tuple(mode_spec.controlled_player_order)
         self.player_render_colors = {
-            player_id: (
-                PLAYER_STYLES[player_id]["render_fill"],
-                PLAYER_STYLES[player_id]["render_outline"],
-            )
+            player_id: TEAM_RENDER_STYLES[int(self.team_by_player[player_id])]
+            for player_id in self.player_order
+        }
+        self.player_projectile_colors = {
+            player_id: self.player_render_colors[player_id][1]
             for player_id in self.player_order
         }
         non_scripted_mode = self._non_scripted_control_mode()
         self.player_control_modes = {
             player_id: (
-                CONTROL_MODE_SCRIPTED
-                if PLAYER_STYLES[player_id]["scripted"]
-                else non_scripted_mode
+                non_scripted_mode
+                if player_id in self.controlled_player_ids
+                else CONTROL_MODE_SCRIPTED
             )
             for player_id in self.player_order
         }
-        self.match_tracker.set_competitors(self.player_order, preserve_existing=True)
+        self.match_tracker.set_competitors(
+            [score_id_by_team[team_id] for team_id in self.team_order],
+            preserve_existing=True,
+        )
         self.scores = self.match_tracker.scores
         self.win_history = self.match_tracker.history
-        for player_id in self.player_order:
-            setattr(self, f"{player_id}_score", self.scores[player_id])
+        for team_id in self.team_order:
+            score_id = score_id_by_team[int(team_id)]
+            setattr(self, f"{score_id}_score", self.scores[score_id])
 
     def reset(self) -> None:
         spawn_positions = self._spawn_positions_by_player()
 
         self.players_by_id = {}
+        inactive_position = Vec2(-float(TILE_SIZE) * 10.0, -float(TILE_SIZE) * 10.0)
         for player_id in self.player_order:
-            spawn_pos = spawn_positions[player_id]
+            is_active = player_id in self.active_player_ids
+            spawn_pos = spawn_positions.get(player_id, inactive_position)
             self.players_by_id[player_id] = Actor(
                 spawn_pos,
-                angle=self._sample_inner_facing_angle(spawn_pos),
-                team=player_id,
+                angle=self._sample_inner_facing_angle(spawn_pos) if is_active else 0.0,
+                player_id=player_id,
+                team_id=int(self.team_by_player[player_id]),
+                active=bool(is_active),
             )
 
         self.players = [self.players_by_id[player_id] for player_id in self.player_order]
-        self.player = self.players_by_id["P1"]
+        self.player = self.players_by_id[CONTROLLED_PLAYER_ID]
+        self.controlled_players = [
+            self.players_by_id[player_id]
+            for player_id in self.controlled_player_ids
+            if self.players_by_id[player_id].is_active
+        ]
         # Backward-compatible aliases for older callers.
-        self.enemy = self.players_by_id["P2"]
+        self.enemy = next(iter(self._alive_enemies(self.player)), self.players_by_id.get("P2"))
         self.enemy2 = self.players_by_id.get("P3")
         self.enemy3 = self.players_by_id.get("P4")
         self.scripted_players = [
             self.players_by_id[player_id]
             for player_id in self.player_order
-            if PLAYER_STYLES[player_id]["scripted"]
+            if self.player_control_modes.get(player_id) == CONTROL_MODE_SCRIPTED
+            and player_id in self.active_player_ids
         ]
 
         self.obstacles: list[Vec2] = []
@@ -629,11 +748,11 @@ class BaseGame:
         self.frames_since_last_shot = SHOOT_COOLDOWN_FRAMES
         self.last_seen_enemy_frame = -EVENT_TIMER_NORMALIZATION_FRAMES
         self.target_states = {
-            actor.team: TargetState()
+            actor.player_id: TargetState()
             for actor in self.players
         }
         self.scripted_move_states = {
-            actor.team: ScriptedMoveState()
+            actor.player_id: ScriptedMoveState()
             for actor in self.scripted_players
         }
         self._place_obstacles()
@@ -671,12 +790,6 @@ class BaseGame:
         top_padding = self.height * PLAYER_SPAWN_X_RATIO
         return min(self.height - BB_HEIGHT - TILE_SIZE / 2, top_edge_y + top_padding)
 
-    def _active_spawn_areas(self) -> tuple[str, ...]:
-        player_count = len(self.player_order)
-        if player_count <= 0:
-            return tuple()
-        return SPAWN_AREA_ORDER[: min(player_count, len(SPAWN_AREA_ORDER))]
-
     def _sample_spawn_position(self, area: str) -> Vec2:
         min_y, max_y = self._spawn_y_bounds()
         min_x, max_x = self._spawn_x_bounds()
@@ -691,13 +804,59 @@ class BaseGame:
             return Vec2(random.uniform(min_x, max_x), self._spawn_top_strip_y())
         raise ValueError(f"Unknown spawn area: {area}")
 
+    def _spawn_anchor_for_area(self, area: str) -> Vec2:
+        min_y, max_y = self._spawn_y_bounds()
+        min_x, max_x = self._spawn_x_bounds()
+        center_y = (float(min_y) + float(max_y)) * 0.5
+        center_x = (float(min_x) + float(max_x)) * 0.5
+        if area == SPAWN_AREA_LEFT:
+            return Vec2(self.width * PLAYER_SPAWN_X_RATIO, center_y)
+        if area == SPAWN_AREA_RIGHT:
+            return Vec2(self.width * ENEMY_SPAWN_X_RATIO, center_y)
+        if area == SPAWN_AREA_BOTTOM:
+            return Vec2(center_x, self._spawn_bottom_strip_y())
+        if area == SPAWN_AREA_TOP:
+            return Vec2(center_x, self._spawn_top_strip_y())
+        raise ValueError(f"Unknown spawn area: {area}")
+
+    def _clamp_spawn_position(self, position: Vec2) -> Vec2:
+        half = float(TILE_SIZE) * 0.5
+        return Vec2(
+            max(half, min(float(self.width) - half, float(position.x))),
+            max(half, min(float(self.height - BB_HEIGHT) - half, float(position.y))),
+        )
+
+    def _paired_spawn_position(self, area: str, slot_index: int) -> Vec2:
+        anchor = self._spawn_anchor_for_area(area)
+        offset = float(TILE_SIZE) * 1.35
+        jitter = random.uniform(-float(TILE_SIZE) * 0.35, float(TILE_SIZE) * 0.35)
+        side = -1.0 if int(slot_index) <= 0 else 1.0
+        if area in {SPAWN_AREA_LEFT, SPAWN_AREA_RIGHT}:
+            position = Vec2(anchor.x + jitter, anchor.y + side * offset)
+        else:
+            position = Vec2(anchor.x + side * offset, anchor.y + jitter)
+        return self._clamp_spawn_position(position)
+
     def _spawn_positions_by_player(self) -> dict[str, Vec2]:
-        area_order = list(self._active_spawn_areas())
-        random.shuffle(area_order)
+        area_by_team = {
+            0: SPAWN_AREA_LEFT,
+            1: SPAWN_AREA_RIGHT,
+            2: SPAWN_AREA_BOTTOM,
+            3: SPAWN_AREA_TOP,
+        }
         positions: dict[str, Vec2] = {}
-        for idx, player_id in enumerate(self.player_order):
-            area = area_order[idx % len(area_order)]
-            positions[player_id] = self._sample_spawn_position(area)
+        if self.bang_mode == "team_arena":
+            team_slot_counts: dict[int, int] = {}
+            for player_id in self.active_player_ids:
+                team_id = int(self.team_by_player[player_id])
+                slot_index = int(team_slot_counts.get(team_id, 0))
+                team_slot_counts[team_id] = slot_index + 1
+                positions[player_id] = self._paired_spawn_position(area_by_team[team_id], slot_index)
+            return positions
+
+        for player_id in self.active_player_ids:
+            team_id = int(self.team_by_player[player_id])
+            positions[player_id] = self._sample_spawn_position(area_by_team[team_id])
         return positions
 
     def _sample_inner_facing_angle(self, position: Vec2) -> float:
@@ -710,7 +869,7 @@ class BaseGame:
         return (base_angle + random.uniform(-90.0, 90.0)) % 360.0
 
     def _player_attempts_translation(self) -> bool:
-        if not self.player.is_alive:
+        if not self.player.is_active or not self.player.is_alive:
             return False
         return self.player.move_intent_x != 0 or self.player.move_intent_y != 0
 
@@ -728,30 +887,30 @@ class BaseGame:
     def _set_actor_aim_intent(actor: Actor, aim_intent: int) -> None:
         actor.aim_intent = max(-1, min(1, int(aim_intent)))
 
-    def _apply_action_to_player_intents(self, action_index: int) -> bool:
+    def _apply_action_to_actor_intents(self, actor: Actor, action_index: int) -> bool:
         if action_index == ACTION_MOVE_UP:
-            self._set_actor_move_intent(self.player, 0, 1)
+            self._set_actor_move_intent(actor, 0, 1)
             return False
         if action_index == ACTION_MOVE_DOWN:
-            self._set_actor_move_intent(self.player, 0, -1)
+            self._set_actor_move_intent(actor, 0, -1)
             return False
         if action_index == ACTION_MOVE_LEFT:
-            self._set_actor_move_intent(self.player, -1, 0)
+            self._set_actor_move_intent(actor, -1, 0)
             return False
         if action_index == ACTION_MOVE_RIGHT:
-            self._set_actor_move_intent(self.player, 1, 0)
+            self._set_actor_move_intent(actor, 1, 0)
             return False
         if action_index == ACTION_STOP_MOVE:
-            self._set_actor_move_intent(self.player, 0, 0)
+            self._set_actor_move_intent(actor, 0, 0)
             return False
         if action_index == ACTION_AIM_LEFT:
-            self._set_actor_aim_intent(self.player, -1)
+            self._set_actor_aim_intent(actor, -1)
             return False
         if action_index == ACTION_AIM_RIGHT:
-            self._set_actor_aim_intent(self.player, 1)
+            self._set_actor_aim_intent(actor, 1)
             return False
         if action_index == ACTION_SHOOT:
-            projectile = self.player.shoot()
+            projectile = actor.shoot()
             if projectile:
                 self.projectiles.append(projectile)
                 return True
@@ -787,26 +946,27 @@ class BaseGame:
             return ACTION_MOVE_RIGHT
         return ACTION_STOP_MOVE
 
-    def apply_player_action(self, action_index: int | None) -> None:
-        if not self.player.is_alive:
+    def apply_player_action(self, action_index: int | None, actor: Actor | None = None) -> None:
+        actor = self.player if actor is None else actor
+        if not actor.is_active or not actor.is_alive:
             self.frames_since_last_shot += 1
             return
 
-        control_mode = self.player_control_modes.get(self.player.team)
-        # Human and NN-controlled player aim are per-step (non-sticky).
+        control_mode = self.player_control_modes.get(actor.player_id)
+        # Human and NN-controlled actor aim are per-step (non-sticky).
         if control_mode in (CONTROL_MODE_HUMAN, CONTROL_MODE_NN):
-            self._set_actor_aim_intent(self.player, 0)
+            self._set_actor_aim_intent(actor, 0)
         if control_mode == CONTROL_MODE_HUMAN:
             # Match move_stop behavior when no WASD movement action is selected this frame.
-            self._set_actor_move_intent(self.player, 0, 0)
+            self._set_actor_move_intent(actor, 0, 0)
 
         shot_fired = False
         if action_index is not None:
             self.last_action_index = int(action_index)
-            shot_fired = self._apply_action_to_player_intents(self.last_action_index)
+            shot_fired = self._apply_action_to_actor_intents(actor, self.last_action_index)
 
-        movement = self.player.step_sticky_intents()
-        self._update_actor_position(self.player, movement)
+        movement = actor.step_sticky_intents()
+        self._update_actor_position(actor, movement)
 
         if shot_fired:
             self.frames_since_last_shot = 0
@@ -814,7 +974,7 @@ class BaseGame:
             self.frames_since_last_shot += 1
 
     def _update_actor_position(self, actor: Actor, movement: Vec2) -> None:
-        if not actor.is_alive:
+        if not actor.is_active or not actor.is_alive:
             actor.vx = 0.0
             actor.vy = 0.0
             return
@@ -828,7 +988,7 @@ class BaseGame:
             return
 
         for other in self.players:
-            if other is actor or not other.is_alive:
+            if other is actor or not other.is_active or not other.is_alive:
                 continue
             other_rect = rect_from_center(other.position, TILE_SIZE)
             if actor_rect.colliderect(other_rect):
@@ -841,7 +1001,7 @@ class BaseGame:
         actor.vy = float(actor.position.y - previous_position.y)
 
     def _would_collide(self, actor: Actor, movement: Vec2) -> bool:
-        if not actor.is_alive:
+        if not actor.is_active or not actor.is_alive:
             return True
 
         new_position = actor.position + movement
@@ -850,7 +1010,7 @@ class BaseGame:
             return True
 
         for other in self.players:
-            if other is actor or not other.is_alive:
+            if other is actor or not other.is_active or not other.is_alive:
                 continue
             other_rect = rect_from_center(other.position, TILE_SIZE)
             if actor_rect.colliderect(other_rect):
@@ -872,11 +1032,12 @@ class BaseGame:
             return True
         return self.obstacle_field.contains_point(float(x), float(y))
 
-    def _ray_distance(self, angle_degrees: float) -> float:
+    def _ray_distance(self, angle_degrees: float, actor: Actor | None = None) -> float:
+        actor = self.player if actor is None else actor
         radians = math.radians(float(angle_degrees))
         return normalized_ray_first_hit(
-            origin_x=float(self.player.position.x),
-            origin_y=float(self.player.position.y),
+            origin_x=float(actor.position.x),
+            origin_y=float(actor.position.y),
             dir_x=math.cos(radians),
             dir_y=math.sin(radians),
             max_distance=self._ray_max_range,
@@ -929,7 +1090,7 @@ class BaseGame:
             return False
         if any(tile == existing for existing in self.obstacles) or any(tile == existing for existing in pending_tiles):
             return False
-        if any(tile.distance(actor.position) < SAFE_RADIUS for actor in self.players if actor.is_alive):
+        if any(tile.distance(actor.position) < SAFE_RADIUS for actor in self.players if actor.is_active and actor.is_alive):
             return False
         return True
 
@@ -943,23 +1104,39 @@ class BaseGame:
         ]
 
     @staticmethod
-    def _move_vector_for_angle(angle_degrees: float) -> Vec2:
-        return rotate_degrees(Vec2(1, 0), angle_degrees) * PLAYER_MOVE_SPEED
+    def _move_vector_for_angle(angle_degrees: float, speed_scale: float = 1.0) -> Vec2:
+        return rotate_degrees(Vec2(1, 0), angle_degrees) * PLAYER_MOVE_SPEED * max(0.0, float(speed_scale))
 
     def _move_actor_in_direction(self, actor: Actor, angle_degrees: float) -> bool:
         previous_position = actor.position
-        movement = self._move_vector_for_angle(angle_degrees)
+        movement = self._move_vector_for_angle(angle_degrees, self.enemy_movement)
         self._update_actor_position(actor, movement)
         return length_squared(actor.position - previous_position) > 0
 
+    def _alive_enemies(self, actor: Actor) -> list[Actor]:
+        return [
+            other
+            for other in self.players
+            if other is not actor and other.is_active and other.is_alive and int(other.team_id) != int(actor.team_id)
+        ]
+
     def _alive_opponents(self, actor: Actor) -> list[Actor]:
-        return [other for other in self.players if other is not actor and other.is_alive]
+        return self._alive_enemies(actor)
+
+    def _alive_allies(self, actor: Actor) -> list[Actor]:
+        return [
+            other
+            for other in self.players
+            if other is not actor and other.is_active and other.is_alive and int(other.team_id) == int(actor.team_id)
+        ]
 
     def _resolve_alive_target(self, actor: Actor, target_id: str | None) -> Actor | None:
         if target_id is None:
             return None
         target = self.players_by_id.get(target_id)
-        if target is None or target is actor or not target.is_alive:
+        if target is None or target is actor or not target.is_active or not target.is_alive:
+            return None
+        if int(target.team_id) == int(actor.team_id):
             return None
         return target
 
@@ -999,7 +1176,7 @@ class BaseGame:
         policy: dict[str, float | int],
     ) -> None:
         previous_target_id = state.target_id
-        state.target_id = target.team if target is not None else None
+        state.target_id = target.player_id if target is not None else None
         state.target_lost_frames = 0
         state.target_switch_cooldown = (
             random.randint(
@@ -1018,7 +1195,7 @@ class BaseGame:
         policy: dict[str, float | int],
         cache_by_frame: bool,
     ) -> Actor | None:
-        state = self.target_states.setdefault(actor.team, TargetState())
+        state = self.target_states.setdefault(actor.player_id, TargetState())
         if cache_by_frame and state.last_update_frame == self.frame_count:
             return self._resolve_alive_target(actor, state.target_id)
         state.last_update_frame = self.frame_count
@@ -1027,7 +1204,7 @@ class BaseGame:
             self._set_target_state(actor, state, None, policy)
             return None
 
-        candidates = self._alive_opponents(actor)
+        candidates = self._alive_enemies(actor)
         if not candidates:
             self._set_target_state(actor, state, None, policy)
             return None
@@ -1093,7 +1270,7 @@ class BaseGame:
         )
 
     def _scripted_move_state(self, actor: Actor) -> ScriptedMoveState:
-        return self.scripted_move_states.setdefault(actor.team, ScriptedMoveState())
+        return self.scripted_move_states.setdefault(actor.player_id, ScriptedMoveState())
 
     @staticmethod
     def _turn_toward_angle(current_angle: float, target_angle: float, max_step_degrees: float) -> float:
@@ -1137,7 +1314,7 @@ class BaseGame:
         candidate_position = actor.position
         if option.angle_offset_degrees is not None:
             candidate_angle = (float(angle_to_target) + float(option.angle_offset_degrees)) % 360.0
-            movement = self._move_vector_for_angle(candidate_angle)
+            movement = self._move_vector_for_angle(candidate_angle, self.enemy_movement)
             if self._would_collide(actor, movement):
                 return None
             candidate_position = actor.position + movement
@@ -1151,7 +1328,7 @@ class BaseGame:
         score = 0.7 - min(1.25, float(distance_error))
 
         hidden_ratio = min(1.0, float(move_state.hidden_frames) / max(1.0, float(ENEMY_HIDDEN_URGENCY_FRAMES)))
-        reposition_urgency = 1.0 + float(self.enemy_reposition_bias) * float(hidden_ratio)
+        reposition_urgency = 1.0 + float(self.enemy_repositioning) * float(hidden_ratio)
 
         if candidate_has_los:
             score += 0.9
@@ -1223,7 +1400,7 @@ class BaseGame:
                 best_angle = candidate_angle
 
         move_state.planned_move_angle = best_angle
-        move_state.planned_target_id = target.team
+        move_state.planned_target_id = target.player_id
         move_state.commit_frames_remaining = (
             max(4, int(ENEMY_MOVE_COMMIT_FRAMES) - min(4, int(move_state.hidden_frames) // 6))
             if best_angle is not None
@@ -1247,10 +1424,13 @@ class BaseGame:
         return False
 
     def _step_scripted_movement(self, actor: Actor, target: Actor, angle_to_target: float) -> None:
+        if float(self.enemy_movement) <= 0.0:
+            return
+
         move_state = self._scripted_move_state(actor)
         has_los = self._has_clear_path_between(actor, target)
         move_state.hidden_frames = 0 if has_los else int(move_state.hidden_frames) + 1
-        target_changed = move_state.planned_target_id != target.team
+        target_changed = move_state.planned_target_id != target.player_id
 
         if target_changed or int(move_state.commit_frames_remaining) <= 0 or int(move_state.blocked_frames) > 0:
             self._plan_scripted_move(actor, target, angle_to_target, move_state)
@@ -1263,7 +1443,7 @@ class BaseGame:
         self._remember_scripted_position(actor, move_state)
 
     def _step_scripted_actor(self, actor: Actor) -> None:
-        if not actor.is_alive:
+        if not actor.is_active or not actor.is_alive:
             return
 
         target = self._select_target(
@@ -1304,8 +1484,19 @@ class BaseGame:
         for actor in self.scripted_players:
             self._step_scripted_actor(actor)
 
+    def _projectile_owner_team_id(self, projectile: dict[str, object]) -> int | None:
+        owner_team = projectile.get("owner_team")
+        if owner_team is not None:
+            try:
+                return int(owner_team)
+            except (TypeError, ValueError):
+                return None
+        owner_id = str(projectile.get("owner", ""))
+        team_id = self.team_by_player.get(owner_id)
+        return None if team_id is None else int(team_id)
+
     def _step_projectiles(self):
-        events = {"player_kills": 0, "player_killed_by": None}
+        events = {"player_kills": 0, "player_killed_by": None, "player_killed_by_team": None}
         next_projectiles = []
 
         for projectile in self.projectiles:
@@ -1315,9 +1506,12 @@ class BaseGame:
                 continue
 
             owner_id = str(projectile["owner"])
+            owner_team_id = self._projectile_owner_team_id(projectile)
             colliding_targets = []
             for target in self.players:
-                if not target.is_alive or target.team == owner_id:
+                if not target.is_active or not target.is_alive:
+                    continue
+                if owner_team_id is not None and int(target.team_id) == int(owner_team_id):
                     continue
                 target_rect = rect_from_center(target.position, TILE_SIZE)
                 if projectile_rect.colliderect(target_rect):
@@ -1326,10 +1520,20 @@ class BaseGame:
             if colliding_targets:
                 target = min(colliding_targets, key=lambda candidate: candidate.position.distance(projectile["pos"]))
                 eliminated = bool(target.take_hit(1))
-                if owner_id == self.player.team and eliminated:
+                if (
+                    owner_id in self.controlled_player_ids
+                    and owner_team_id == int(self.player.team_id)
+                    and int(target.team_id) != int(self.player.team_id)
+                    and eliminated
+                ):
                     events["player_kills"] += 1
-                if target is self.player and not self.player.is_alive:
+                if (
+                    target.player_id in self.controlled_player_ids
+                    and not target.is_alive
+                    and events["player_killed_by"] is None
+                ):
                     events["player_killed_by"] = owner_id
+                    events["player_killed_by_team"] = owner_team_id
                 continue
 
             next_projectiles.append(projectile)
@@ -1337,17 +1541,23 @@ class BaseGame:
         self.projectiles = next_projectiles
         return events
 
-    def _nearest_hostile_projectile(self) -> dict[str, object] | None:
-        hostile_projectiles = [p for p in self.projectiles if p["owner"] != self.player.team]
+    def _nearest_hostile_projectile(self, actor: Actor | None = None) -> dict[str, object] | None:
+        actor = self.player if actor is None else actor
+        hostile_projectiles = [
+            p
+            for p in self.projectiles
+            if self._projectile_owner_team_id(p) != int(actor.team_id)
+        ]
         if not hostile_projectiles:
             return None
         return min(
             hostile_projectiles,
-            key=lambda projectile: self.player.position.distance(projectile["pos"]),
+            key=lambda projectile: actor.position.distance(projectile["pos"]),
         )
 
-    def _projectile_in_trajectory(self, projectile: dict[str, object]) -> bool:
-        to_player = self.player.position - projectile["pos"]
+    def _projectile_in_trajectory(self, projectile: dict[str, object], actor: Actor | None = None) -> bool:
+        actor = self.player if actor is None else actor
+        to_player = actor.position - projectile["pos"]
         if length_squared(to_player) == 0:
             return True
         projectile_dir = projectile["velocity"].normalize()
@@ -1355,62 +1565,96 @@ class BaseGame:
 
     def is_player_in_projectile_trajectory(self) -> bool:
         for projectile in self.projectiles:
-            if projectile["owner"] == self.player.team:
+            if self._projectile_owner_team_id(projectile) == int(self.player.team_id):
                 continue
-            if self._projectile_in_trajectory(projectile):
+            if self._projectile_in_trajectory(projectile, self.player):
                 return True
         return False
 
-    def has_line_of_sight(self, target: Actor | None = None) -> bool:
+    def has_line_of_sight(self, target: Actor | None = None, actor: Actor | None = None) -> bool:
+        actor = self.player if actor is None else actor
         if target is None:
             target = self._get_player_target()
         if target is None:
             return False
-        return self._is_actor_aimed_at_target(self.player, target) and self._has_clear_path_between(self.player, target)
+        return self._is_actor_aimed_at_target(actor, target) and self._has_clear_path_between(actor, target)
 
-    def _nearest_alive_opponent_to_player(self) -> Actor | None:
-        opponents = [actor for actor in self.players if actor is not self.player and actor.is_alive]
+    def _nearest_alive_opponent_to_player(self, actor: Actor | None = None) -> Actor | None:
+        actor = self.player if actor is None else actor
+        opponents = self._alive_enemies(actor)
         if not opponents:
             return None
-        return min(opponents, key=lambda actor: self.player.position.distance(actor.position))
+        return min(opponents, key=lambda opponent: actor.position.distance(opponent.position))
 
-    def _ordered_player_observation_opponents(self) -> list[tuple[str, Actor, float]]:
+    def _ordered_player_observation_opponents(self, actor: Actor | None = None) -> list[tuple[str, Actor, float]]:
+        actor = self.player if actor is None else actor
         order_index = {player_id: idx for idx, player_id in enumerate(ALL_PLAYER_ORDER)}
         ordered_opponents: list[tuple[str, Actor, float]] = []
         for player_id in ALL_PLAYER_ORDER:
-            if player_id == self.player.team:
+            if player_id == actor.player_id:
                 continue
             opponent = self.players_by_id.get(player_id)
-            if opponent is None or not opponent.is_alive:
+            if opponent is None or not opponent.is_active or not opponent.is_alive:
                 continue
-            distance = float(self.player.position.distance(opponent.position))
+            if int(opponent.team_id) == int(actor.team_id):
+                continue
+            distance = float(actor.position.distance(opponent.position))
             ordered_opponents.append((player_id, opponent, distance))
         ordered_opponents.sort(key=lambda item: (float(item[2]), int(order_index[str(item[0])])))
         return ordered_opponents
 
-    def _engagement_potential(self) -> float:
-        target = self._nearest_alive_opponent_to_player()
+    def _nearest_alive_ally_to_player(self, actor: Actor | None = None) -> Actor | None:
+        actor = self.player if actor is None else actor
+        allies = self._alive_allies(actor)
+        if not allies:
+            return None
+        order_index = {player_id: idx for idx, player_id in enumerate(ALL_PLAYER_ORDER)}
+        return min(
+            allies,
+            key=lambda ally: (
+                float(actor.position.distance(ally.position)),
+                int(order_index.get(str(ally.player_id), 999)),
+            ),
+        )
+
+    def _primary_controlled_player(self) -> Actor:
+        for actor in self.controlled_players:
+            if actor.is_active:
+                return actor
+        return self.player
+
+    def _active_controlled_players(self) -> list[Actor]:
+        return [actor for actor in self.controlled_players if actor.is_active]
+
+    def _controlled_players_alive(self) -> bool:
+        return all(actor.is_alive for actor in self._active_controlled_players())
+
+    def _engagement_potential(self, actor: Actor | None = None) -> float:
+        actor = self._primary_controlled_player() if actor is None else actor
+        target = self._nearest_alive_opponent_to_player(actor)
         if target is None:
             return 0.0
         dist_scale = max(1.0, max(float(self.width), float(self.height - BB_HEIGHT)))
-        tgt_dist_norm = clip_unit(self.player.position.distance(target.position) / dist_scale)
-        tgt_in_los = 1.0 if self.has_line_of_sight(target) else 0.0
+        tgt_dist_norm = clip_unit(actor.position.distance(target.position) / dist_scale)
+        tgt_in_los = 1.0 if self.has_line_of_sight(target, actor=actor) else 0.0
         return float(tgt_in_los - tgt_dist_norm)
 
-    def _hazard_potential(self) -> float:
-        nearest_projectile = self._nearest_hostile_projectile()
+    def _hazard_potential(self, actor: Actor | None = None) -> float:
+        actor = self._primary_controlled_player() if actor is None else actor
+        nearest_projectile = self._nearest_hostile_projectile(actor)
         if nearest_projectile is None:
             haz_dist_norm = 1.0
             haz_in_traj = 0.0
         else:
             dist_scale = max(1.0, max(float(self.width), float(self.height - BB_HEIGHT)))
-            haz_dist_norm = clip_unit(self.player.position.distance(nearest_projectile["pos"]) / dist_scale)
-            haz_in_traj = 1.0 if self._projectile_in_trajectory(nearest_projectile) else 0.0
+            haz_dist_norm = clip_unit(actor.position.distance(nearest_projectile["pos"]) / dist_scale)
+            haz_in_traj = 1.0 if self._projectile_in_trajectory(nearest_projectile, actor) else 0.0
         return float(haz_dist_norm - 1.5 * haz_in_traj)
 
-    def get_state_vector(self) -> list[float]:
+    def get_state_vector(self, actor: Actor | None = None) -> list[float]:
+        actor = self._primary_controlled_player() if actor is None else actor
         dist_scale = max(1.0, max(float(self.width), float(self.height)))
-        nearest_projectile = self._nearest_hostile_projectile()
+        nearest_projectile = self._nearest_hostile_projectile(actor)
         if nearest_projectile is None:
             haz_tti_norm = 0.0
             haz_miss_norm = 0.0
@@ -1418,8 +1662,8 @@ class BaseGame:
         else:
             projectile_pos = nearest_projectile["pos"]
             projectile_vel = nearest_projectile["velocity"]
-            player_vel = Vec2(float(self.player.vx), float(self.player.vy))
-            rel_pos = projectile_pos - self.player.position
+            player_vel = Vec2(float(actor.vx), float(actor.vy))
+            rel_pos = projectile_pos - actor.position
             rel_vel = projectile_vel - player_vel
             rel_speed_sq = length_squared(rel_vel)
             rel_speed = math.sqrt(rel_speed_sq) if rel_speed_sq > 1e-8 else 0.0
@@ -1448,18 +1692,19 @@ class BaseGame:
             else:
                 miss_sign = 0.0
             haz_miss_norm = clip_signed((miss_sign * miss_distance) / dist_scale)
-            haz_in_traj = 1.0 if self._projectile_in_trajectory(nearest_projectile) else 0.0
+            haz_in_traj = 1.0 if self._projectile_in_trajectory(nearest_projectile, actor) else 0.0
 
-        sens_fwd = self._ray_distance(self.player.angle)
-        sens_left = self._ray_distance(self.player.angle - 90.0)
-        sens_right = self._ray_distance(self.player.angle + 90.0)
-        sens_back = self._ray_distance(self.player.angle + 180.0)
-        player_angle_radians = math.radians(self.player.angle)
+        sens_fwd = self._ray_distance(actor.angle, actor)
+        sens_left = self._ray_distance(actor.angle - 90.0, actor)
+        sens_right = self._ray_distance(actor.angle + 90.0, actor)
+        sens_back = self._ray_distance(actor.angle + 180.0, actor)
+        player_angle_radians = math.radians(actor.angle)
         player_angle_sin = float(math.sin(player_angle_radians))
         player_angle_cos = float(math.cos(player_angle_radians))
 
-        self_shot_cd_norm = clip_unit(float(self.player.cooldown_frames) / max(1, SHOOT_COOLDOWN_FRAMES))
-        ordered_opponents = self._ordered_player_observation_opponents()
+        self_shot_cd_norm = clip_unit(float(actor.cooldown_frames) / max(1, SHOOT_COOLDOWN_FRAMES))
+        ally = self._nearest_alive_ally_to_player(actor)
+        ordered_opponents = self._ordered_player_observation_opponents(actor)
         opp_near_dist_norm = (
             clip_unit(float(ordered_opponents[0][2]) / dist_scale)
             if ordered_opponents
@@ -1469,13 +1714,21 @@ class BaseGame:
         feature_values = {
             "self_ang_sin": player_angle_sin,
             "self_ang_cos": player_angle_cos,
-            "self_move_x": float(self.player.move_intent_x),
-            "self_move_y": float(self.player.move_intent_y),
+            "self_move_x": float(actor.move_intent_x),
+            "self_move_y": float(actor.move_intent_y),
             "self_shot_cd_norm": float(self_shot_cd_norm),
             "sens_fwd": float(sens_fwd),
             "sens_left": float(sens_left),
             "sens_right": float(sens_right),
             "sens_back": float(sens_back),
+            "ally_dx": 0.0,
+            "ally_dy": 0.0,
+            "ally_dist_norm": 0.0,
+            "ally_los": 0.0,
+            "ally_ang_sin": 0.0,
+            "ally_ang_cos": 0.0,
+            "ally_shot_cd_norm": 0.0,
+            "ally_active": 0.0,
             "opp1_dx": 0.0,
             "opp1_dy": 0.0,
             "opp1_los": 0.0,
@@ -1497,34 +1750,95 @@ class BaseGame:
             "haz_in_traj": float(haz_in_traj),
         }
 
+        if ally is not None:
+            to_ally = ally.position - actor.position
+            ego_dx = (player_angle_cos * float(to_ally.x)) + (player_angle_sin * float(to_ally.y))
+            ego_dy = (-player_angle_sin * float(to_ally.x)) + (player_angle_cos * float(to_ally.y))
+            ally_angle = math.degrees(math.atan2(to_ally.y, to_ally.x))
+            relative_angle = normalize_angle_degrees(ally_angle - float(actor.angle))
+            relative_angle_radians = math.radians(relative_angle)
+            feature_values["ally_dx"] = float(clip_signed(ego_dx / dist_scale))
+            feature_values["ally_dy"] = float(clip_signed(ego_dy / dist_scale))
+            feature_values["ally_dist_norm"] = float(clip_unit(actor.position.distance(ally.position) / dist_scale))
+            feature_values["ally_los"] = 1.0 if self._has_clear_path_between(actor, ally) else 0.0
+            feature_values["ally_ang_sin"] = float(math.sin(relative_angle_radians))
+            feature_values["ally_ang_cos"] = float(math.cos(relative_angle_radians))
+            feature_values["ally_shot_cd_norm"] = float(
+                clip_unit(float(ally.cooldown_frames) / max(1, SHOOT_COOLDOWN_FRAMES))
+            )
+            feature_values["ally_active"] = 1.0
+
         for slot_index, (_, opponent, _) in enumerate(ordered_opponents[:3], start=1):
-            to_opponent = opponent.position - self.player.position
+            to_opponent = opponent.position - actor.position
             ego_dx = (player_angle_cos * float(to_opponent.x)) + (player_angle_sin * float(to_opponent.y))
             ego_dy = (-player_angle_sin * float(to_opponent.x)) + (player_angle_cos * float(to_opponent.y))
             opponent_angle = math.degrees(math.atan2(to_opponent.y, to_opponent.x))
-            relative_angle = normalize_angle_degrees(opponent_angle - float(self.player.angle))
+            relative_angle = normalize_angle_degrees(opponent_angle - float(actor.angle))
             relative_angle_radians = math.radians(relative_angle)
 
             feature_values[f"opp{slot_index}_dx"] = float(clip_signed(ego_dx / dist_scale))
             feature_values[f"opp{slot_index}_dy"] = float(clip_signed(ego_dy / dist_scale))
-            feature_values[f"opp{slot_index}_los"] = 1.0 if self._has_clear_path_between(self.player, opponent) else 0.0
+            feature_values[f"opp{slot_index}_los"] = 1.0 if self._has_clear_path_between(actor, opponent) else 0.0
             feature_values[f"opp{slot_index}_ang_sin"] = float(math.sin(relative_angle_radians))
             feature_values[f"opp{slot_index}_ang_cos"] = float(math.cos(relative_angle_radians))
 
         return self._build_state_vector_from_features(feature_values)
+
+    def get_controlled_state_vectors(self) -> list[list[float]]:
+        return [self.get_state_vector(actor) for actor in self._active_controlled_players()]
 
     def _tick_players(self) -> None:
         for actor in self.players:
             actor.tick()
 
     def _last_alive_player(self) -> Actor | None:
-        alive_players = [actor for actor in self.players if actor.is_alive]
+        alive_players = [actor for actor in self.players if actor.is_active and actor.is_alive]
         if len(alive_players) == 1:
             return alive_players[0]
         return None
 
+    def _alive_team_ids(self) -> set[int]:
+        return {int(actor.team_id) for actor in self.players if actor.is_active and actor.is_alive}
+
+    def _active_enemy_players(self) -> list[Actor]:
+        return [
+            actor
+            for actor in self.players
+            if actor.is_active and int(actor.team_id) != int(self.player.team_id)
+        ]
+
+    def _active_enemies_defeated(self) -> bool:
+        return not any(actor.is_alive for actor in self._active_enemy_players())
+
+    def _winner_team_id(self) -> int | None:
+        alive_team_ids = self._alive_team_ids()
+        if len(alive_team_ids) == 1:
+            return next(iter(alive_team_ids))
+        return None
+
+    def _controlled_team_won(self) -> bool:
+        if not self._controlled_players_alive():
+            return False
+        return self._active_enemies_defeated()
+
     def is_player_last_alive(self) -> bool:
-        return self.player.is_alive and self._last_alive_player() is self.player
+        return self._controlled_team_won()
+
+    def _team_id_for_player_id(self, player_id: str | None) -> int | None:
+        if player_id is None:
+            return None
+        team_id = self.team_by_player.get(str(player_id))
+        return None if team_id is None else int(team_id)
+
+    def _score_id_for_team(self, team_id: int | None) -> str | None:
+        if team_id is None:
+            return None
+        return self.score_id_by_team.get(int(team_id))
+
+    def _increment_team_score(self, team_id: int | None) -> None:
+        score_id = self._score_id_for_team(team_id)
+        if score_id is not None:
+            self._increment_score(score_id)
 
     def _increment_score(self, player_id: str) -> None:
         if player_id not in self.scores:
@@ -1540,8 +1854,8 @@ class BaseGame:
 class HumanGame(BaseGame):
     """Human-play mode."""
 
-    def __init__(self, show_game: bool = True, level: int = 1):
-        super().__init__(level=int(level), show_game=show_game)
+    def __init__(self, show_game: bool = True, level: int = 1, bang_mode: str | None = None):
+        super().__init__(level=int(level), show_game=show_game, bang_mode=bang_mode)
 
     def play_step(self) -> None:
         self.frame_count += 1
@@ -1557,12 +1871,17 @@ class HumanGame(BaseGame):
 
         self.apply_player_action(action)
         self._step_scripted_players()
-        self._step_projectiles()
+        projectile_events = self._step_projectiles()
         self._tick_players()
 
-        winner = self._last_alive_player()
-        if winner is not None:
-            self._increment_score(winner.team)
+        player_defeated = not self.player.is_alive
+        enemies_defeated = self._active_enemies_defeated()
+        if player_defeated:
+            killer_team_id = projectile_events.get("player_killed_by_team")
+            self._increment_team_score(killer_team_id)
+            self.reset()
+        elif enemies_defeated:
+            self._increment_team_score(self.player.team_id)
             self.reset()
         elif self.frame_count >= MAX_EPISODE_STEPS:
             self._record_round_draw()
@@ -1578,24 +1897,62 @@ class TrainingGame(BaseGame):
     def _non_scripted_control_mode(self) -> str:
         return CONTROL_MODE_NN
 
-    def __init__(self, level: int = 1, show_game: bool = True, end_on_player_death: bool = True):
+    def __init__(
+        self,
+        level: int = 1,
+        show_game: bool = True,
+        end_on_player_death: bool = True,
+        bang_mode: str | None = None,
+    ):
         self.end_on_player_death = bool(end_on_player_death)
         self.player_loss_recorded = False
-        super().__init__(level=level, show_game=show_game)
+        super().__init__(level=level, show_game=show_game, bang_mode=bang_mode)
 
     def reset(self) -> None:
         super().reset()
         self.player_loss_recorded = False
 
-    def play_step(self, action: list[int]):
+    @staticmethod
+    def _action_index_from_value(action_value: object) -> int:
+        action_array = np.asarray(action_value)
+        if action_array.ndim == 0:
+            return int(action_array.item())
+        flat = action_array.reshape(-1)
+        if int(flat.size) == int(BANG_ACT_DIM):
+            return int(np.argmax(flat))
+        if int(flat.size) > 0:
+            return int(flat[0])
+        return ACTION_STOP_MOVE
+
+    def _controlled_action_indices(self, actions: object) -> list[int]:
+        action_array = np.asarray(actions)
+        controlled_count = len(self._active_controlled_players())
+        if controlled_count <= 1:
+            return [self._action_index_from_value(actions)]
+        if action_array.ndim >= 2:
+            values = [action_array[index] for index in range(min(controlled_count, int(action_array.shape[0])))]
+        else:
+            flat = action_array.reshape(-1)
+            if int(flat.size) == int(controlled_count):
+                values = [flat[index] for index in range(controlled_count)]
+            elif int(flat.size) == int(BANG_ACT_DIM):
+                values = [flat]
+            else:
+                values = [flat[index] for index in range(min(controlled_count, int(flat.size)))]
+        indices = [self._action_index_from_value(value) for value in values]
+        while len(indices) < controlled_count:
+            indices.append(ACTION_STOP_MOVE)
+        return indices[:controlled_count]
+
+    def play_step(self, action: object):
         self.frame_count += 1
-        action_index = action.index(1) if 1 in action else 0
         self.poll_events()
         self._reset_actor_velocities()
         phi_eng_prev = float(self._engagement_potential())
         phi_haz_prev = float(self._hazard_potential())
 
-        self.apply_player_action(action_index)
+        for actor, action_index in zip(self._active_controlled_players(), self._controlled_action_indices(action)):
+            self.apply_player_action(action_index, actor=actor)
         self._step_scripted_players()
         projectile_events = self._step_projectiles()
 
@@ -1641,20 +1998,19 @@ class TrainingGame(BaseGame):
             reward += kill_reward
             reward_breakdown["event.reward_kill"] = kill_reward
 
-        player_just_died = (not self.player.is_alive) and (not self.player_loss_recorded)
+        player_just_died = (not self._controlled_players_alive()) and (not self.player_loss_recorded)
         if player_just_died:
             self.player_loss_recorded = True
 
         done = False
         timed_out = False
-        winner = self._last_alive_player()
-        player_won = self.player.is_alive and winner is self.player
-        player_lost_match = (not self.player.is_alive) or (winner is not None and winner is not self.player)
-        if self.end_on_player_death and not self.player.is_alive:
+        player_defeated = not self._controlled_players_alive()
+        enemies_defeated = self._active_enemies_defeated()
+        player_won = bool((not player_defeated) and enemies_defeated)
+        player_lost_match = bool(player_defeated)
+        if player_defeated:
             done = True
         elif player_won:
-            done = True
-        elif (not self.end_on_player_death) and (winner is not None):
             done = True
         elif self.frame_count >= MAX_EPISODE_STEPS:
             done = True
@@ -1669,17 +2025,12 @@ class TrainingGame(BaseGame):
                 reward_breakdown["outcome.penalty_lose"] = float(PENALTY_LOSE)
 
         if done:
-            if self.end_on_player_death and not self.player.is_alive:
-                killer_id = projectile_events.get("player_killed_by")
-                if isinstance(killer_id, str) and killer_id in self.scores:
-                    self._increment_score(killer_id)
-                else:
-                    if winner is not None:
-                        self._increment_score(winner.team)
+            if player_defeated:
+                killer_team_id = projectile_events.get("player_killed_by_team")
+                self._increment_team_score(killer_team_id)
             else:
-                if winner is not None:
-                    self._increment_score(winner.team)
-            if timed_out and winner is None:
+                self._increment_team_score(self.player.team_id if player_won else None)
+            if timed_out:
                 self._record_round_draw()
 
         self.draw_frame()
@@ -1712,8 +2063,10 @@ class BangEnv(Env):
         *,
         level: int | None = None,
         end_on_player_death: bool | None = None,
+        bang_mode: str | None = None,
     ) -> None:
         self.mode = str(mode)
+        self.bang_mode = _resolve_bang_mode(bang_mode)
         show_game = bool(render)
         curriculum_config = build_curriculum_config(
             min_level=int(MIN_LEVEL),
@@ -1735,7 +2088,11 @@ class BangEnv(Env):
         self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
 
         if self.mode == "human":
-            self.game = HumanGame(show_game=show_game, level=int(self._current_level))
+            self.game = HumanGame(
+                show_game=show_game,
+                level=int(self._current_level),
+                bang_mode=self.bang_mode,
+            )
         else:
             level = int(self._current_level)
             if end_on_player_death is None:
@@ -1746,6 +2103,7 @@ class BangEnv(Env):
                 level=int(level),
                 show_game=show_game,
                 end_on_player_death=bool(end_on_player_death),
+                bang_mode=self.bang_mode,
             )
             self._apply_level_settings(int(self._current_level))
         self.game.ghost_overlay_allowed = bool(self.mode in {"human", "eval"})
@@ -1774,32 +2132,54 @@ class BangEnv(Env):
             raise RuntimeError(f"Bang observation expected {BangEnv.OBS_DIM} features, got {obs.shape[0]}")
         return obs
 
+    @staticmethod
+    def _obs_from_state_vectors(state_vectors: list[list[float]]) -> np.ndarray:
+        observations = [BangEnv._obs_from_state_vector(state_vector) for state_vector in state_vectors]
+        if not observations:
+            return np.zeros((0, int(BangEnv.OBS_DIM)), dtype=np.float32)
+        return np.stack(observations, axis=0).astype(np.float32, copy=False)
+
+    def _controlled_obs(self) -> np.ndarray:
+        return self._obs_from_state_vectors(self.game.get_controlled_state_vectors())
+
+    def _controlled_agent_ids(self) -> list[str]:
+        return [actor.player_id for actor in self.game._active_controlled_players()]
+
     def reset(self) -> np.ndarray:
         if self.mode == "train":
             self._apply_level_settings(int(self._current_level))
         self.game.reset()
         self._episode_reward_components.reset()
-        return self._obs_from_state_vector(self.game.get_state_vector())
+        if self.mode == "human":
+            return self._obs_from_state_vector(self.game.get_state_vector())
+        return self._controlled_obs()
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, object]]:
         if self.mode == "human":
             self.game.play_step()
             obs = self._obs_from_state_vector(self.game.get_state_vector())
-            return obs, 0.0, False, {"level": int(getattr(self.game, "level", 1)), "success": 0}
+            return obs, 0.0, False, {
+                "level": int(getattr(self.game, "level", 1)),
+                "bang_mode": str(self.bang_mode),
+                "success": 0,
+            }
 
-        action_idx = int(action)
-        reward, done, reward_breakdown = self.game.play_step(self._action_to_one_hot(action_idx))
+        reward, done, reward_breakdown = self.game.play_step(action)
         self._episode_reward_components.add_from_mapping(reward_breakdown, self.REWARD_COMPONENT_KEY_TO_CODE)
-        obs = self._obs_from_state_vector(self.game.get_state_vector())
+        obs = self._controlled_obs()
         episode_level = int(self._current_level) if self.mode == "train" else int(getattr(self.game, "level", 1))
         win = bool(done and self.game.is_player_last_alive())
         success = 1 if win else 0
+        controlled_agent_ids = self._controlled_agent_ids()
         info: dict[str, object] = {
             "reward_breakdown": reward_breakdown,
             "win": bool(win),
             "success": int(success) if done else 0,
             "level": int(episode_level),
+            "bang_mode": str(self.bang_mode),
             "level_changed": False,
+            "controlled_agent_ids": controlled_agent_ids,
+            "reward_vec": np.full((len(controlled_agent_ids),), float(reward), dtype=np.float32),
         }
         if done:
             info["reward_components"] = self._episode_reward_components.totals()

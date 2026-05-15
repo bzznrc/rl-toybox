@@ -31,7 +31,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 | Game | Role | Primary Family | Status |
 | --- | --- | --- | --- |
 | `snake` | Intro grid-control game | value-based | active |
-| `bang` | Flagship discrete-control arena game | value-based | active |
+| `bang` | Flagship discrete-control arena game with Duel / Arena / Team Arena modes | value-based | active |
 | `jump` | Traversal platformer | actor-critic | active |
 | `vroom` | Continuous-control racing game | actor-critic | active |
 | `flip` | Planning + self-play capstone | search + self-play | active |
@@ -114,7 +114,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 - Save artifacts under `runs/<game>/`.
 - Filenames keep the existing `<algo>_<net>_L<level>_<kind>.pth` convention.
 - Trained checkpoints and run metrics are ignored by git; each run subfolder is kept with a zero-byte `.gitkeep`.
-- Existing kept games preserve their run tags where practical so older runs stay discoverable.
+- Existing kept games preserve their run tags where practical so older runs stay discoverable. Shared-policy mode games such as Kick and Bang keep the model tag mode-neutral so the same checkpoint can be used across modes.
 - Run tags should stay compact and reflect the active model shape.
 
 ## 6) RL Family Layout
@@ -147,6 +147,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 ## 7) Special Areas
 
+- `bang` stays in-tree as one value-based shooter game id, with `duel`, `arena`, and `team_arena` combat modes sharing the same DQN IO shape. `team_arena` controls two friendly agents with one shared DQN policy. Mode defines the maximum format; `LEVEL_SETTINGS[level]["active_enemies"]` owns the per-mode active enemy ramp inside that format.
 - `kick` stays in-tree and runnable as the repo's single CTDE football game, with `3v3`, `5v5`, and `7v7` team-size modes.
 - `jump` sits on the shared actor-critic path as the repo's compact single-agent traversal showcase.
 - Its centralized-critic support lives on the shared actor-critic path plus game-provided central observation metadata.

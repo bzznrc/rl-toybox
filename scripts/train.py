@@ -13,6 +13,7 @@ from core.game import (
     build_algo_from_config,
     build_env_from_config,
     build_runner_from_config,
+    normalize_bang_mode,
     normalize_kick_team_size,
     parse_override_assignments,
     prepare_run,
@@ -36,6 +37,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=None, help="Normalized training step budget")
     parser.add_argument("--episodes", type=int, default=None, help="Normalized episode/game budget")
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
+    parser.add_argument(
+        "--mode",
+        type=normalize_bang_mode,
+        choices=["duel", "arena", "team_arena"],
+        default=None,
+        help="Bang mode: Duel, Arena, or Team Arena",
+    )
     parser.add_argument(
         "--team-size",
         type=normalize_kick_team_size,
@@ -88,6 +96,8 @@ def _build_train_overrides(args: argparse.Namespace) -> dict[str, object]:
         set_nested_override(overrides, "common.episodes", int(args.episodes))
     if args.seed is not None:
         set_nested_override(overrides, "common.seed", int(args.seed))
+    if args.mode is not None:
+        set_nested_override(overrides, "common.bang_mode", str(args.mode))
     if args.team_size is not None:
         set_nested_override(overrides, "common.team_size", int(args.team_size))
     if args.save_every is not None:
@@ -194,6 +204,9 @@ def main() -> None:
             "resume": resume_path if resume_path is not None else "scratch",
             "render": bool(dict(composed_config.get("common", {})).get("render", False)),
         }
+        if game_id == "bang":
+            bang_mode = dict(composed_config.get("common", {})).get("bang_mode")
+            run_context["bang_mode"] = str(bang_mode).replace("_", " ").title()
         if game_id == "kick":
             run_context["team_size"] = dict(composed_config.get("common", {})).get("team_size")
         log_run_context("train", run_context)

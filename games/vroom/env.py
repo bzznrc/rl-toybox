@@ -77,7 +77,10 @@ from games.vroom.config import (
     OBS_DIM as VROOM_OBS_DIM,
     OFF_TRACK_SURFACE_GRIP,
     OFF_TRACK_MAX_SPEED_FACTOR,
+    OFF_TRACK_PENALTY_MARGIN_PX,
     OFF_TRACK_SPEED_TRANSITION_SECONDS,
+    OFF_TRACK_TERMINATE_SEVERITY,
+    OFF_TRACK_TERMINATE_STEPS,
     NO_PROGRESS_EPS_NORM,
     NO_PROGRESS_TIMEOUT_STEPS,
     OPPONENT_BEND_CAUTION_MULT_RANGE,
@@ -85,12 +88,13 @@ from games.vroom.config import (
     OPPONENT_MIN_BEND_SPEED_FACTOR,
     OPPONENT_SPEED_MULT_RANGE,
     EDGE_PROBE_MAX_DISTANCE_PX,
-    PENALTY_COLLISION,
+    PENALTY_CONTACT,
     PENALTY_LOSE,
+    PENALTY_OFF_TRACK,
     PENALTY_STEP,
-    PENALTY_TRACK_COVERAGE,
     PROGRESS_CLIP,
     PROGRESS_SCALE,
+    RANDOM_START_MIN_REMAINING_PROGRESS_NORM,
     REWARD_WIN,
     ROUTE_LOOKAHEAD_RANGES_PX,
     SENS_CAR_RANGE_PX,
@@ -116,7 +120,6 @@ from games.vroom.config import (
     TRACK_SHORT_SIDE_TEMPLATE_CHOICES,
     TRACK_START_STRAIGHT_LEN_PX,
     TRACK_VALID_HYSTERESIS_PX,
-    TRACK_VALID_MARGIN_PX,
     TRACK_WIDTH_PX,
     TURN_THROTTLE_LOSS,
     WINDOW_TITLE,
@@ -175,6 +178,7 @@ class VroomEnv(Env):
     TRAINING_TOTAL_RACES = 1
     PLAY_TOTAL_RACES = 10
     REWARD_COMPONENT_ORDER = ("W", "L", "P", "T", "C", "S")
+    # Keep raw reward keys stable; compact T/C now mean off-track severity and contact duration.
     REWARD_COMPONENT_KEY_TO_CODE = {
         "outcome.reward_win": "W",
         "outcome.penalty_lose": "L",
@@ -255,8 +259,15 @@ class VroomEnv(Env):
         self.off_track_max_speed_factor = self._clamp(float(OFF_TRACK_MAX_SPEED_FACTOR), 0.05, 1.0)
         self.off_track_surface_grip = self._clamp(float(OFF_TRACK_SURFACE_GRIP), 0.05, 1.0)
         self.off_track_transition_seconds = max(0.0, float(OFF_TRACK_SPEED_TRANSITION_SECONDS))
-        self.track_valid_margin_px = max(0.0, float(TRACK_VALID_MARGIN_PX))
+        self.off_track_penalty_margin_px = max(1.0, float(OFF_TRACK_PENALTY_MARGIN_PX))
+        self.off_track_terminate_steps = max(1, int(OFF_TRACK_TERMINATE_STEPS))
+        self.off_track_terminate_severity = self._clamp(float(OFF_TRACK_TERMINATE_SEVERITY), 0.0, 1.0)
         self.track_valid_hysteresis_px = max(0.0, float(TRACK_VALID_HYSTERESIS_PX))
+        self.random_start_min_remaining_progress_norm = self._clamp(
+            float(RANDOM_START_MIN_REMAINING_PROGRESS_NORM),
+            0.0,
+            1.0,
+        )
         if self.off_track_transition_seconds <= 1e-6:
             self.off_track_blend_step = 1.0
         else:
@@ -389,10 +400,12 @@ class VroomEnv(Env):
         self.race_random_start_active = False
         self._player_soft_off_track = False
         self._prev_s_norm = 0.0
+        self._target_progress_norm = 1.0
         self._unwrapped_progress_norm = 0.0
         self._best_unwrapped_progress_norm = 0.0
         self._no_progress_anchor_norm = 0.0
         self._no_progress_steps = 0
+        self._hard_offtrack_steps = 0
         self._race_progress_reward_total = 0.0
         self._prev_player_forward_speed = 0.0
         self._episode_reward_components = RewardBreakdown(self.REWARD_COMPONENT_ORDER)
@@ -430,6 +443,19 @@ class VroomEnv(Env):
     @staticmethod
     def _lerp(low: float, high: float, t: float) -> float:
         return float(low) + (float(high) - float(low)) * float(t)
+
+    def _track_progress_norm_from_s(self, track: TrackGeometry, s_value: float) -> float:
+        if float(track.length) <= 1e-9:
+            return 0.0
+        progress_px = (float(s_value) - float(track.start_s)) % float(track.length)
+        return float(progress_px) / float(track.length)
+
+    def _remaining_progress_to_finish_norm(self, progress_norm: float) -> float:
+        progress = float(progress_norm) % 1.0
+        remaining = 1.0 - float(progress)
+        if float(remaining) <= 1e-9:
+            return 1.0
+        return self._clamp(float(remaining), 0.0, 1.0)
 
     @staticmethod
     def _normalize(dx: float, dy: float) -> tuple[float, float]:
@@ -554,28 +580,85 @@ class VroomEnv(Env):
                 on_count += 1
         return float(on_count) / float(max(1, total))
 
-    def _player_soft_valid_track_coverage_ratio(self) -> float:
+    def _car_offtrack_severity(self, car: RaceCar) -> float:
+        track = self._require_track_geometry()
+        coverage_severity = 1.0 - self._track_coverage_ratio(float(car.x), float(car.y))
+        proj = project_point_to_track(track, (float(car.x), float(car.y)))
+        safe_allowed = max(0.0, float(track.half_width) - float(self.car_radius) * 0.8)
+        offtrack_excess_px = max(0.0, abs(float(proj.lateral_offset)) - float(safe_allowed))
+        centerline_severity = self._clamp(
+            float(offtrack_excess_px) / float(self.off_track_penalty_margin_px),
+            0.0,
+            1.0,
+        )
+        return self._clamp(max(float(coverage_severity), float(centerline_severity)), 0.0, 1.0)
+
+    def _player_offtrack_severity(self) -> float:
         if not self.cars:
-            return 0.0
+            return 1.0
+        return self._car_offtrack_severity(self.cars[self.player_index])
+
+    def _car_finish_valid(self, car: RaceCar) -> bool:
+        if not self._is_on_track(float(car.x), float(car.y)):
+            return False
+        track = self._require_track_geometry()
+        proj = project_point_to_track(track, (float(car.x), float(car.y)))
+        safe_allowed = max(0.0, float(track.half_width) - float(self.car_radius) * 0.8)
+        return bool(abs(float(proj.lateral_offset)) <= float(safe_allowed))
+
+    def _player_soft_offtrack_flag(self, severity: float | None = None) -> bool:
+        offtrack_severity = self._player_offtrack_severity() if severity is None else float(severity)
+        lateral_flag = self._player_soft_lateral_flag()
+        if bool(lateral_flag):
+            self._player_soft_off_track = True
+        elif bool(self._player_soft_off_track):
+            self._player_soft_off_track = bool(float(offtrack_severity) > 0.0)
+        else:
+            self._player_soft_off_track = bool(float(offtrack_severity) > 1e-6)
+        return bool(self._player_soft_off_track)
+
+    def _player_valid_progress_step(self, offtrack_severity: float) -> tuple[float, float, bool]:
+        curr_s_norm = float(self._player_raw_progress_norm())
+        progress_delta = float(curr_s_norm) - float(self._prev_s_norm)
+        if float(progress_delta) < -0.5:
+            progress_delta += 1.0
+        elif float(progress_delta) > 0.5:
+            progress_delta -= 1.0
+        self._prev_s_norm = float(curr_s_norm)
+
+        progress_valid = bool(float(offtrack_severity) <= 1e-6)
+        clipped_delta = 0.0
+        if progress_valid:
+            clipped_delta = self._clamp(float(progress_delta), -float(PROGRESS_CLIP), float(PROGRESS_CLIP))
+            self._unwrapped_progress_norm += float(clipped_delta)
+
+        if self.cars:
+            track = self._require_track_geometry()
+            player = self.cars[self.player_index]
+            player.lap_progress = self._clamp(
+                float(self._unwrapped_progress_norm) * float(track.length),
+                0.0,
+                float(track.length),
+            )
+
+        return float(progress_delta), float(clipped_delta), bool(progress_valid)
+
+    def _player_soft_lateral_flag(self) -> bool:
+        if not self.cars:
+            return False
         player = self.cars[self.player_index]
         track = self._require_track_geometry()
         proj = project_point_to_track(track, (float(player.x), float(player.y)))
-        allowed = (
-            float(track.half_width)
-            - float(self.car_contact_radius) * 0.6
-            + float(self.track_valid_margin_px)
-        )
+        allowed = float(track.half_width) - float(self.car_radius) * 0.8
         on_threshold = max(0.0, float(allowed))
         off_threshold = max(0.0, float(allowed) - float(self.track_valid_hysteresis_px))
         abs_offset = abs(float(proj.lateral_offset))
         if bool(self._player_soft_off_track):
-            self._player_soft_off_track = bool(abs_offset > off_threshold)
-        else:
-            self._player_soft_off_track = bool(abs_offset > on_threshold)
-        return 0.0 if bool(self._player_soft_off_track) else 1.0
+            return bool(abs_offset > off_threshold)
+        return bool(abs_offset > on_threshold)
 
     def _update_off_track_state(self, car: RaceCar) -> None:
-        # Physics still uses the real road mask; the soft margin is only for training validity.
+        # Physics still uses the real road mask; learning validity is handled separately.
         coverage = self._track_coverage_ratio(float(car.x), float(car.y))
         if bool(car.off_track):
             if coverage >= float(self.off_track_exit_ratio):
@@ -722,10 +805,10 @@ class VroomEnv(Env):
         self,
         x: float,
         y: float,
-        placements: list[tuple[RaceCar, float, float, float, float, float]],
+        placements: list[tuple[RaceCar, float, float, float, float, float, float]],
     ) -> bool:
         min_distance = max(1.0, 2.15 * float(self.car_contact_radius))
-        for _other, other_x, other_y, _heading, _speed, _lateral in placements:
+        for _other, other_x, other_y, _heading, _speed, _lateral, _progress in placements:
             if self._distance(float(x), float(y), float(other_x), float(other_y)) < float(min_distance):
                 return False
         return True
@@ -750,10 +833,14 @@ class VroomEnv(Env):
 
         for _ in range(24):
             base_s = random.uniform(0.0, float(track.length))
-            placements: list[tuple[RaceCar, float, float, float, float, float]] = []
+            placements: list[tuple[RaceCar, float, float, float, float, float, float]] = []
             for idx, car in enumerate(self.cars):
                 slot = int(slots[idx % len(slots)])
                 sample_s = float(base_s) - float(slot) * float(longitudinal_spacing)
+                progress_norm = self._track_progress_norm_from_s(track, float(sample_s))
+                remaining_norm = self._remaining_progress_to_finish_norm(float(progress_norm))
+                if float(remaining_norm) < float(self.random_start_min_remaining_progress_norm):
+                    break
                 lateral = float(lane_offsets[idx % len(lane_offsets)])
                 (center_x, center_y), (tan_x, tan_y), (norm_x, norm_y) = sample_track_at_s(track, sample_s)
                 x = float(center_x) + float(norm_x) * float(lateral)
@@ -766,9 +853,11 @@ class VroomEnv(Env):
                 tangent_heading = math.degrees(math.atan2(float(tan_y), float(tan_x)))
                 heading = self._normalize_degrees(float(tangent_heading) + random.uniform(-45.0, 45.0))
                 speed = random.uniform(0.0, 0.25 * float(self.max_speed))
-                placements.append((car, float(x), float(y), float(heading), float(speed), float(lateral)))
+                placements.append(
+                    (car, float(x), float(y), float(heading), float(speed), float(lateral), float(progress_norm))
+                )
             else:
-                for car, x, y, heading, speed, lateral in placements:
+                for car, x, y, heading, speed, lateral, _progress_norm in placements:
                     heading_rad = math.radians(float(heading))
                     car.x = float(x)
                     car.y = float(y)
@@ -896,7 +985,6 @@ class VroomEnv(Env):
             return
         lap_length = float(track.length)
         arm_threshold = 0.70 * lap_length
-        seam_window = max(float(track.half_width) * 0.9, 0.05 * lap_length)
         for idx, car in enumerate(self.cars):
             if car.finished:
                 continue
@@ -915,30 +1003,26 @@ class VroomEnv(Env):
                 wrapped_delta += lap_length
 
             is_forward = wrapped_delta > 0.0
-            on_track_now = self._track_coverage_ratio(car.x, car.y) >= float(self.off_track_exit_ratio)
+            if int(idx) == int(self.player_index):
+                on_track_now = self._car_finish_valid(car)
+            else:
+                on_track_now = self._track_coverage_ratio(car.x, car.y) >= float(self.off_track_exit_ratio)
             crossed_arm_threshold_forward = prev_s < arm_threshold <= curr_s and is_forward
             if (not car.lap_armed) and on_track_now and crossed_arm_threshold_forward:
                 car.lap_armed = True
 
             crossed_start_forward = (
-                prev_s >= (lap_length - seam_window)
-                and curr_s <= seam_window
+                curr_s < prev_s
                 and is_forward
             )
             car.lap_progress = self._clamp(float(car.lap_progress) + float(wrapped_delta), 0.0, float(lap_length))
 
-            random_finish = bool(
-                bool(self.race_random_start_active)
-                and float(car.lap_progress) >= float(lap_length)
-                and on_track_now
-            )
             canonical_finish = bool(
-                (not bool(self.race_random_start_active))
+                on_track_now
                 and crossed_start_forward
-                and bool(car.lap_armed)
-                and on_track_now
+                and (bool(car.lap_armed) or bool(self.race_random_start_active))
             )
-            if random_finish or canonical_finish:
+            if canonical_finish:
                 car.finished = True
                 car.lap_armed = False
                 car.lap_progress = lap_length
@@ -980,10 +1064,16 @@ class VroomEnv(Env):
         self.steps = 0
         self._player_soft_off_track = False
         self._prev_s_norm = float(self._player_raw_progress_norm())
+        self._target_progress_norm = (
+            self._remaining_progress_to_finish_norm(float(self._prev_s_norm))
+            if bool(self.race_random_start_active)
+            else 1.0
+        )
         self._unwrapped_progress_norm = 0.0
         self._best_unwrapped_progress_norm = 0.0
         self._no_progress_anchor_norm = 0.0
         self._no_progress_steps = 0
+        self._hard_offtrack_steps = 0
         self._race_progress_reward_total = 0.0
         self._prev_player_forward_speed = 0.0
         self._player_contact_memory_steps = 0
@@ -1477,7 +1567,7 @@ class VroomEnv(Env):
             "sens_car_fwd": float(car_values[1]),
             "sens_car_right": float(car_values[2]),
             "flag_contact": 1.0 if bool(player.in_contact) or int(self._player_contact_memory_steps) > 0 else 0.0,
-            "flag_off_track": 0.0 if self._player_soft_valid_track_coverage_ratio() >= 1.0 else 1.0,
+            "flag_off_track": 1.0 if self._player_soft_offtrack_flag() else 0.0,
         }
         feature_values.update(route_values)
         obs = np.asarray(ordered_feature_vector(self.INPUT_FEATURE_NAMES, feature_values), dtype=np.float32)
@@ -1544,51 +1634,64 @@ class VroomEnv(Env):
         episode_level = int(self._current_level)
         episode_success = 0
         stuck_no_progress = False
+        hard_offtrack_timeout = False
+        player = self.cars[self.player_index]
+        offtrack_severity = float(self._player_offtrack_severity())
+        _progress_delta, clipped_progress_delta, progress_valid = self._player_valid_progress_step(
+            float(offtrack_severity)
+        )
         if self.mode != "human":
             reward += float(PENALTY_STEP)
             reward_breakdown["step.penalty_step"] = float(PENALTY_STEP)
 
-            player = self.cars[self.player_index]
-            track_coverage = float(self._player_soft_valid_track_coverage_ratio())
-            curr_s_norm = float(self._player_raw_progress_norm())
-            progress_delta = float(curr_s_norm) - float(self._prev_s_norm)
-            if float(progress_delta) < -0.5:
-                progress_delta += 1.0
-            elif float(progress_delta) > 0.5:
-                progress_delta -= 1.0
-            self._unwrapped_progress_norm += float(progress_delta)
-            clipped_delta = self._clamp(float(progress_delta), -float(PROGRESS_CLIP), float(PROGRESS_CLIP))
-            progress_reward = float(PROGRESS_SCALE) * float(clipped_delta)
+            progress_reward = 0.0
+            if bool(progress_valid):
+                progress_reward = float(PROGRESS_SCALE) * float(clipped_progress_delta)
             if float(progress_reward) > 0.0:
-                progress_reward *= float(track_coverage)
                 progress_reward = min(
                     float(progress_reward),
                     max(0.0, float(PROGRESS_SCALE) - float(self._race_progress_reward_total)),
                 )
-            self._prev_s_norm = float(curr_s_norm)
             reward += progress_reward
             reward_breakdown["progress.shape"] = progress_reward
             self._race_progress_reward_total += float(progress_reward)
 
-            track_penalty = -float(PENALTY_TRACK_COVERAGE) * (1.0 - float(track_coverage))
-            reward += track_penalty
-            reward_breakdown["track.penalty_coverage"] = track_penalty
+            offtrack_penalty = float(PENALTY_OFF_TRACK) * float(offtrack_severity)
+            reward += offtrack_penalty
+            reward_breakdown["track.penalty_coverage"] = offtrack_penalty
 
             if bool(player.in_contact):
-                reward += float(PENALTY_COLLISION)
-                reward_breakdown["event.penalty_collision"] = float(PENALTY_COLLISION)
+                reward += float(PENALTY_CONTACT)
+                reward_breakdown["event.penalty_collision"] = float(PENALTY_CONTACT)
 
-            if self.winner_index is None:
+            if float(offtrack_severity) >= float(self.off_track_terminate_severity):
+                self._hard_offtrack_steps += 1
+            else:
+                self._hard_offtrack_steps = 0
+            hard_offtrack_timeout = bool(
+                int(self._hard_offtrack_steps) >= int(self.off_track_terminate_steps)
+            )
+
+            if self.winner_index is None and not bool(hard_offtrack_timeout):
                 stuck_no_progress = bool(self._update_no_progress_guard())
 
         timed_out = bool((self.winner_index is None) and (self.steps >= self.max_steps))
-        race_finished = bool((self.winner_index is not None) or timed_out or stuck_no_progress)
+        race_finished = bool(
+            (self.winner_index is not None)
+            or timed_out
+            or stuck_no_progress
+            or hard_offtrack_timeout
+        )
         if race_finished:
             race_winner = int(self.winner_index) if self.winner_index is not None else None
             if self.mode != "human":
                 player_won = race_winner == self.player_index
                 if player_won:
-                    progress_top_up = max(0.0, float(PROGRESS_SCALE) - float(self._race_progress_reward_total))
+                    progress_target_reward = float(PROGRESS_SCALE) * float(self._target_progress_norm)
+                    progress_top_up = max(
+                        0.0,
+                        float(progress_target_reward) - float(self._race_progress_reward_total),
+                    )
                     reward += float(progress_top_up)
                     reward_breakdown["progress.shape"] += float(progress_top_up)
                     self._race_progress_reward_total += float(progress_top_up)

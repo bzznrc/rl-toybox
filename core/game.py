@@ -777,6 +777,26 @@ def normalize_kick_team_size(value: object | None) -> int:
     raise ValueError(f"Unsupported Kick team size '{value}'. Expected {valid}.")
 
 
+def normalize_bang_mode(value: object | None) -> str:
+    from games.bang.config import BANG_MODE_CHOICES, BANG_MODE_LABELS, DEFAULT_BANG_MODE
+
+    choices = tuple(str(mode).strip().lower() for mode in BANG_MODE_CHOICES)
+    if value is None:
+        return str(DEFAULT_BANG_MODE)
+
+    raw_value = str(value).strip().lower()
+    compact = raw_value.replace(" ", "").replace("-", "").replace("_", "").replace(".", "")
+    accepted: dict[str, str] = {}
+    for mode in choices:
+        label = str(dict(BANG_MODE_LABELS).get(mode, mode)).strip().lower()
+        accepted[str(mode).replace("_", "")] = str(mode)
+        accepted[label.replace(" ", "").replace("-", "").replace("_", "").replace(".", "")] = str(mode)
+    if compact in accepted:
+        return accepted[compact]
+    valid = ", ".join(str(dict(BANG_MODE_LABELS).get(mode, mode)) for mode in choices)
+    raise ValueError(f"Unsupported Bang mode '{value}'. Expected {valid}.")
+
+
 def _runtime_uses_gpu(device: str) -> bool:
     normalized = _normalize_device(device)
     if normalized == "cuda":
@@ -1031,6 +1051,8 @@ def compose_run_config(
     common["headless"] = bool(common.get("headless", False))
     if bool(common["headless"]):
         common["render"] = False
+    if spec.game_id == "bang":
+        common["bang_mode"] = normalize_bang_mode(common.get("bang_mode"))
     if spec.game_id == "kick":
         common["team_size"] = normalize_kick_team_size(common.get("team_size", 3))
     composed["common"] = common
@@ -1044,7 +1066,8 @@ def compose_run_config(
     run_block.setdefault("train", {})
     run_block.setdefault("paths", {})
     if not str(run_block.get("name", "")).strip():
-        run_block["name"] = _derive_run_name(spec, algo_spec, composed)
+        run_name = _derive_run_name(spec, algo_spec, composed)
+        run_block["name"] = run_name
     composed["run"] = run_block
     return composed
 
@@ -1127,6 +1150,8 @@ def build_env_from_config(
     if bool(common.get("headless", False)):
         resolved_render = False
     env_kwargs: dict[str, object] = {}
+    if game_id == "bang" and common.get("bang_mode") is not None:
+        env_kwargs["bang_mode"] = normalize_bang_mode(common["bang_mode"])
     if game_id == "kick" and common.get("team_size") is not None:
         env_kwargs["team_size"] = normalize_kick_team_size(common["team_size"])
     return spec.make_env(mode=resolved_mode, render=bool(resolved_render), level=level, **env_kwargs)
@@ -1254,6 +1279,12 @@ def resolve_current_level(env: object, *, default: int = 1) -> int:
         return max(1, int(default))
 
 
+def _set_env_current_level(env: object, level: int) -> None:
+    """Keep shared level bookkeeping aligned before game-specific hooks run."""
+    if hasattr(env, "_current_level"):
+        setattr(env, "_current_level", int(level))
+
+
 def resume_level_bounds(env: object) -> tuple[int, int]:
     curriculum = getattr(env, "_curriculum", None)
     if curriculum is None:
@@ -1323,14 +1354,14 @@ def apply_training_start_level(env: object, level: int) -> int:
             if hasattr(curriculum, "_consecutive_passes"):
                 setattr(curriculum, "_consecutive_passes", 0)
 
+    _set_env_current_level(env, int(level_value))
     apply_level = getattr(env, "_apply_level_change", None)
     if not callable(apply_level):
         apply_level = getattr(env, "_apply_level_settings", None)
     if callable(apply_level):
         apply_level(int(level_value))
+        _set_env_current_level(env, int(level_value))
     else:
-        if hasattr(env, "_current_level"):
-            setattr(env, "_current_level", int(level_value))
         game = getattr(env, "game", None)
         if game is not None and hasattr(game, "level"):
             setattr(game, "level", int(level_value))
@@ -1413,6 +1444,7 @@ __all__ = [
     "compose_run_config",
     "get_algo_spec",
     "get_game_spec",
+    "normalize_bang_mode",
     "normalize_kick_team_size",
     "parse_override_assignments",
     "prepare_run",

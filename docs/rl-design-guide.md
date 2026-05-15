@@ -139,7 +139,7 @@ For board self-play, the action mask stays outside the observation.
 ### Current repo examples
 
 - `snake`: `self_*`, `sens_*`, `tgt_*`
-- `bang`: `self_*`, `sens_*`, `opp_*`, `haz_*`
+- `bang`: `self_*`, `sens_*`, `ally_*`, `opp_*`, `haz_*`
 - `jump`: `self_*`, `sens_*`, `land_*`, `opp_*`, `flag_*`
 - `vroom`: `self_*`, `sens_*`, `flag_*`
 - `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`
@@ -169,6 +169,16 @@ For board self-play, the action mask stays outside the observation.
 - Promote using success metrics when dense shaping could distort reward totals.
 - Keep per-level knobs in clearly named config tables.
 
+### Mode as Max Format, Curriculum as Active Pressure
+
+Games such as Kick and Bang may expose selectable modes while keeping one shared IO and network shape. In that pattern, mode defines the maximum/target format, and curriculum can activate fewer opposing players or lower scripted pressure early in training.
+
+When the active-player count is curriculum-dependent and mode-dependent, keep that mapping inside the primary per-level settings table as a per-level mapping. Kick uses `LEVEL_SCRIPTED_SETTINGS[level]["right_players"]`; Bang uses `LEVEL_SETTINGS[level]["active_enemies"]`. Do not maintain a separate parallel table for those counts.
+
+When a mode has multiple friendly controlled players, use a shared-policy shape: one observation/action row per controlled friendly, one shared network applied independently to each row, and per-agent replay samples in the same buffer. Do not solve early curriculum levels by adding a scripted ally for the learner.
+
+Missing or inactive entities should be zero-padded in observations and excluded from targeting, collisions, hazards, and reward events. The final most general policy is usually trained on the max mode, while simpler modes remain subset cases of the same observation/action contract.
+
 ## 8) Game README Contract
 
 ### Canonical game order
@@ -187,13 +197,14 @@ When docs enumerate the active lineup, use:
 Each active `games/<game>/README.md` must use this top-level heading order:
 
 1. `Clip`
-2. `Algorithm / Network`
-3. `Controls (Human)`
-4. `Observation / Actions`
-5. `Environment Notes`
-6. `Rewards (Training)`
-7. `Curriculum (Train)`
-8. `Run Commands`
+2. Optional mode / board section for games with public selectors
+3. `Algorithm / Network`
+4. `Controls (Human)`
+5. `Observation / Actions`
+6. `Environment Notes`
+7. `Rewards (Training)`
+8. `Curriculum (Train)`
+9. `Run Commands`
 
 Games with no staged progression should still keep the same section structure and state that the curriculum is fixed.
 

@@ -20,9 +20,13 @@ MAX_EPISODE_STEPS = 1_200
 OFF_TRACK_MAX_SPEED_FACTOR = 0.50
 # Seconds to blend between on-track speed (1.0) and off-track speed factor.
 OFF_TRACK_SPEED_TRANSITION_SECONDS = 0.5
-# Virtual training-validity margin; this does not widen the road geometry or mask.
-TRACK_VALID_MARGIN_PX = 0.0
+# Direct training penalty and loss thresholds for leaving the road.
+OFF_TRACK_PENALTY_MARGIN_PX = 24.0
+OFF_TRACK_TERMINATE_STEPS = 45
+OFF_TRACK_TERMINATE_SEVERITY = 0.75
+# Soft observation-flag hysteresis; this does not widen the road geometry or mask.
 TRACK_VALID_HYSTERESIS_PX = 4.0
+RANDOM_START_MIN_REMAINING_PROGRESS_NORM = 0.25
 
 # TRACK GENERATION
 TRACK_WIDTH_PX = 90.0  # Supported: 80.0 or 90.0.
@@ -187,8 +191,8 @@ PENALTY_LOSE = -5.0
 PENALTY_STEP = -0.0075
 PROGRESS_SCALE = 7.5
 PROGRESS_CLIP = 0.20
-PENALTY_TRACK_COVERAGE = 0.005
-PENALTY_COLLISION = -0.02
+PENALTY_OFF_TRACK = -0.02
+PENALTY_CONTACT = -0.005
 # End stuck/jiggle episodes using the existing loss outcome.
 NO_PROGRESS_TIMEOUT_STEPS = 240
 NO_PROGRESS_EPS_NORM = 0.01
@@ -196,8 +200,9 @@ REWARD_COMPONENTS = {
     "outcome.reward_win": REWARD_WIN,
     "outcome.penalty_lose": PENALTY_LOSE,
     "progress.scale": PROGRESS_SCALE,
-    "track.penalty_coverage": PENALTY_TRACK_COVERAGE,
-    "event.penalty_collision": PENALTY_COLLISION,
+    # Existing reward-breakdown keys stay stable; T/C now mean off-track/contact duration.
+    "track.penalty_coverage": PENALTY_OFF_TRACK,
+    "event.penalty_collision": PENALTY_CONTACT,
     "step.penalty_step": PENALTY_STEP,
 }
 
@@ -206,7 +211,16 @@ REWARD_COMPONENTS = {
 DEFAULT_MODEL_CONFIG = {
     "hidden_sizes": [64, 64],
 }
-ALGO_CONFIG_OVERRIDES = {}
+ALGO_CONFIG_OVERRIDES = {
+    "sac": {
+        "learning_rate": 1e-4,
+        "gamma": 0.995,
+        "batch_size": 512,
+        "replay_size": 750_000,
+        "init_alpha": 0.10,
+        "target_entropy": -1.5,
+    },
+}
 DEFAULT_TRAIN_CONFIG = {
     "budget": 9_000_000,
     "checkpoint_every": 100_000,

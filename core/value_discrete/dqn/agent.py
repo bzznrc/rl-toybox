@@ -110,6 +110,24 @@ class DQNAlgorithm(Algorithm):
         normalized = [self._normalize_action_mask(mask) for mask in action_masks]
         return np.stack(normalized, axis=0).astype(np.bool_, copy=False)
 
+    def _normalize_action_mask_batch(self, action_mask: object | None, batch_size: int) -> np.ndarray:
+        if action_mask is None:
+            return np.ones((int(batch_size), int(self.config.action_dim)), dtype=np.bool_)
+        mask_array = np.asarray(action_mask, dtype=np.bool_)
+        if mask_array.ndim == 1:
+            return np.stack(
+                [self._normalize_action_mask(mask_array) for _ in range(int(batch_size))],
+                axis=0,
+            ).astype(np.bool_, copy=False)
+        if int(mask_array.shape[0]) != int(batch_size):
+            raise ValueError(
+                f"DQN action mask batch expected {int(batch_size)} rows, got {int(mask_array.shape[0])}."
+            )
+        return np.stack(
+            [self._normalize_action_mask(mask_array[index]) for index in range(int(batch_size))],
+            axis=0,
+        ).astype(np.bool_, copy=False)
+
     @staticmethod
     def _masked_q_values(q_values: torch.Tensor, action_mask: np.ndarray) -> torch.Tensor:
         mask_tensor = torch.as_tensor(action_mask, dtype=torch.bool, device=q_values.device)
@@ -117,7 +135,30 @@ class DQNAlgorithm(Algorithm):
             mask_tensor = mask_tensor.unsqueeze(0)
         return q_values.masked_fill(~mask_tensor, float(-1e9))
 
-    def act(self, obs: np.ndarray, explore: bool, action_mask: np.ndarray | None = None) -> int:
+    def act(self, obs: np.ndarray, explore: bool, action_mask: np.ndarray | None = None) -> int | np.ndarray:
+        obs_array = np.asarray(obs, dtype=np.float32)
+        if obs_array.ndim == 2:
+            batch_size = int(obs_array.shape[0])
+            mask_batch = self._normalize_action_mask_batch(action_mask, batch_size)
+            actions: list[int] = []
+            greedy_rows: list[int] = []
+            for row_index in range(batch_size):
+                valid_actions = np.flatnonzero(mask_batch[row_index])
+                if explore and random.random() < self.epsilon:
+                    actions.append(int(random.choice(valid_actions.tolist())) if valid_actions.size > 0 else 0)
+                else:
+                    actions.append(0)
+                    greedy_rows.append(row_index)
+            if greedy_rows:
+                with torch.no_grad():
+                    obs_tensor = torch.as_tensor(obs_array[greedy_rows], dtype=torch.float32, device=self.device)
+                    q_values = self.online_model(obs_tensor)
+                    masked_q_values = self._masked_q_values(q_values, mask_batch[greedy_rows])
+                    greedy_actions = torch.argmax(masked_q_values, dim=1).detach().cpu().numpy()
+                for row_index, action in zip(greedy_rows, greedy_actions):
+                    actions[int(row_index)] = int(action)
+            return np.asarray(actions, dtype=np.int64)
+
         valid_mask = self._normalize_action_mask(action_mask)
         valid_actions = np.flatnonzero(valid_mask)
         if explore and random.random() < self.epsilon:
@@ -126,29 +167,94 @@ class DQNAlgorithm(Algorithm):
             return int(random.choice(valid_actions.tolist()))
 
         with torch.no_grad():
-            obs_tensor = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
+            obs_tensor = torch.as_tensor(obs_array.reshape(1, -1), dtype=torch.float32, device=self.device)
             q_values = self.online_model(obs_tensor)
             masked_q_values = self._masked_q_values(q_values, valid_mask)
             action = int(torch.argmax(masked_q_values, dim=1).item())
         return action
 
-    def observe(self, transition: dict[str, Any]) -> None:
+    def _add_replay_transition(
+        self,
+        obs: object,
+        action: object,
+        reward: object,
+        next_obs: object,
+        done: object,
+        next_action_mask: object | None,
+    ) -> None:
         self.replay.add(
             (
-                np.asarray(transition["obs"], dtype=np.float32),
-                int(transition["action"]),
-                float(transition["reward"]),
-                np.asarray(transition["next_obs"], dtype=np.float32),
-                bool(transition["done"]),
+                np.asarray(obs, dtype=np.float32),
+                int(action),
+                float(reward),
+                np.asarray(next_obs, dtype=np.float32),
+                bool(done),
                 (
-                    self._normalize_action_mask(transition.get("next_action_mask"))
-                    if transition.get("next_action_mask") is not None
+                    self._normalize_action_mask(next_action_mask)
+                    if next_action_mask is not None
                     else None
                 ),
             )
         )
         self.total_env_steps += 1
         self.epsilon = float(self._exploration.advance_step())
+
+    def observe(self, transition: dict[str, Any]) -> None:
+        obs_array = np.asarray(transition["obs"], dtype=np.float32)
+        if obs_array.ndim != 2:
+            self._add_replay_transition(
+                transition["obs"],
+                transition["action"],
+                transition["reward"],
+                transition["next_obs"],
+                transition["done"],
+                transition.get("next_action_mask"),
+            )
+            return
+
+        batch_size = int(obs_array.shape[0])
+        next_obs_array = np.asarray(transition["next_obs"], dtype=np.float32)
+        if next_obs_array.ndim == 1:
+            next_obs_array = np.repeat(next_obs_array.reshape(1, -1), batch_size, axis=0)
+        if int(next_obs_array.shape[0]) != batch_size:
+            raise ValueError(f"DQN next_obs batch expected {batch_size} rows, got {int(next_obs_array.shape[0])}.")
+
+        action_array = np.asarray(transition["action"]).reshape(-1)
+        if int(action_array.size) == 1 and batch_size > 1:
+            action_array = np.repeat(action_array, batch_size)
+        if int(action_array.size) != batch_size:
+            raise ValueError(f"DQN action batch expected {batch_size} values, got {int(action_array.size)}.")
+
+        reward_array = np.asarray(transition["reward"], dtype=np.float32).reshape(-1)
+        if int(reward_array.size) == 1 and batch_size > 1:
+            reward_array = np.repeat(reward_array, batch_size)
+        if int(reward_array.size) != batch_size:
+            raise ValueError(f"DQN reward batch expected {batch_size} values, got {int(reward_array.size)}.")
+
+        next_action_mask_raw = transition.get("next_action_mask")
+        next_action_masks = (
+            [None] * batch_size
+            if next_action_mask_raw is None
+            else list(self._normalize_action_mask_batch(next_action_mask_raw, batch_size))
+        )
+        agent_active_mask = np.asarray(
+            transition.get("agent_active_mask", np.ones((batch_size,), dtype=np.bool_)),
+            dtype=np.bool_,
+        ).reshape(-1)
+        if int(agent_active_mask.size) == 1 and batch_size > 1:
+            agent_active_mask = np.repeat(agent_active_mask, batch_size)
+
+        for index in range(batch_size):
+            if int(agent_active_mask.size) == batch_size and not bool(agent_active_mask[index]):
+                continue
+            self._add_replay_transition(
+                obs_array[index],
+                action_array[index],
+                reward_array[index],
+                next_obs_array[index],
+                transition["done"],
+                next_action_masks[index],
+            )
 
     def on_episode_end(self, avg_reward: float) -> dict[str, float | int | str] | None:
         bump = self._exploration.on_episode_end(avg_reward)

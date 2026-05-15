@@ -15,6 +15,7 @@ from core.game import (
     apply_seed_from_config,
     build_algo_from_config,
     build_env_from_config,
+    normalize_bang_mode,
     normalize_kick_team_size,
     parse_override_assignments,
     prepare_run,
@@ -79,6 +80,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=None, help="Global random seed")
     parser.add_argument(
+        "--mode",
+        type=normalize_bang_mode,
+        choices=["duel", "arena", "team_arena"],
+        default=None,
+        help="Bang mode: Duel, Arena, or Team Arena",
+    )
+    parser.add_argument(
         "--team-size",
         type=normalize_kick_team_size,
         choices=[3, 5, 7],
@@ -108,9 +116,18 @@ def _missing_model_message(
     algo_id: str,
     run_name: str,
     level: int,
+    bang_mode: object | None,
     team_size: object | None,
     original_error: Exception,
 ) -> str:
+    if str(game_id).strip().lower() == "bang":
+        mode = normalize_bang_mode(bang_mode)
+        mode_label = str(mode).replace("_", " ").title()
+        return (
+            f"No trained Bang model was found for level {int(level)} "
+            f"({algo_id}_{run_name}_L{int(level)}). The selected mode is {mode_label}. "
+            f"Train it first with: python -m scripts.train --game bang --mode {mode} --level {int(level)}"
+        )
     if str(game_id).strip().lower() != "kick":
         return str(original_error)
     size = normalize_kick_team_size(team_size)
@@ -129,6 +146,8 @@ def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
     set_nested_override(overrides, "common.headless", False)
     if args.seed is not None:
         set_nested_override(overrides, "common.seed", int(args.seed))
+    if args.mode is not None:
+        set_nested_override(overrides, "common.bang_mode", str(args.mode))
     if args.team_size is not None:
         set_nested_override(overrides, "common.team_size", int(args.team_size))
     if args.checkpoint:
@@ -245,6 +264,7 @@ def main() -> None:
                     algo_id=algo_id,
                     run_name=str(dict(composed_config.get("run", {})).get("name", "")),
                     level=int(level),
+                    bang_mode=dict(composed_config.get("common", {})).get("bang_mode"),
                     team_size=dict(composed_config.get("common", {})).get("team_size"),
                     original_error=exc,
                 )
@@ -289,6 +309,9 @@ def main() -> None:
             "model": model_path,
             "output": output_path,
         }
+        if game_id == "bang":
+            bang_mode = dict(composed_config.get("common", {})).get("bang_mode")
+            run_context["bang_mode"] = str(bang_mode).replace("_", " ").title()
         if game_id == "kick":
             run_context["team_size"] = dict(composed_config.get("common", {})).get("team_size")
         log_run_context("capture-demo-ai", run_context)

@@ -7,6 +7,7 @@ from core.utils import env_flag
 
 
 # RUNTIME
+GAME_ID = "bang"
 WINDOW_TITLE = "Bang AI"
 USE_GPU = env_flag("BANG_USE_GPU", False)
 SHOW_GHOST_OVERLAY = env_flag("BANG_SHOW_GHOST_OVERLAY", False)
@@ -40,15 +41,30 @@ PROJECTILE_HITBOX_SIZE = 10
 
 # IO
 INPUT_FEATURE_NAMES = [
+    # SELF: 5
     "self_ang_sin",
     "self_ang_cos",
     "self_move_x",
     "self_move_y",
     "self_shot_cd_norm",
+
+    # SENS: 4
     "sens_fwd",
     "sens_left",
     "sens_right",
     "sens_back",
+
+    # ALLY: 8
+    "ally_dx",
+    "ally_dy",
+    "ally_dist_norm",
+    "ally_los",
+    "ally_ang_sin",
+    "ally_ang_cos",
+    "ally_shot_cd_norm",
+    "ally_active",
+
+    # OPP: 3 nearest active enemies x 5 = 15
     "opp1_dx",
     "opp1_dy",
     "opp1_los",
@@ -64,7 +80,11 @@ INPUT_FEATURE_NAMES = [
     "opp3_los",
     "opp3_ang_sin",
     "opp3_ang_cos",
+
+    # SUMMARY: 1
     "opp_near_dist_norm",
+
+    # HAZ: 3
     "haz_tti_norm",
     "haz_miss_norm",
     "haz_in_traj",
@@ -79,8 +99,12 @@ ACTION_NAMES = [
     "aim_right",
     "shoot",
 ]
-OBS_DIM = len(INPUT_FEATURE_NAMES)
-ACT_DIM = len(ACTION_NAMES)
+OBS_DIM = 36
+ACT_DIM = 8
+assert len(INPUT_FEATURE_NAMES) == 36
+assert len(ACTION_NAMES) == 8
+assert OBS_DIM == 36
+assert ACT_DIM == 8
 
 ACTION_MOVE_UP = 0
 ACTION_MOVE_DOWN = 1
@@ -94,6 +118,32 @@ ACTION_SHOOT = 7
 
 # GAME
 DEFAULT_ALGO = "dqn"
+BANG_MODE_CHOICES = ("duel", "arena", "team_arena")
+DEFAULT_BANG_MODE = "team_arena"
+BANG_MODE_SETTINGS = {
+    "duel": {
+        "display_name": "Duel",
+        "max_players": 2,
+        "team_sizes": [1, 1],
+        "controlled_team_size": 1,
+    },
+    "arena": {
+        "display_name": "Arena",
+        "max_players": 4,
+        "team_sizes": [1, 1, 1, 1],
+        "controlled_team_size": 1,
+    },
+    "team_arena": {
+        "display_name": "Team Arena",
+        "max_players": 8,
+        "team_sizes": [2, 2, 2, 2],
+        "controlled_team_size": 2,
+    },
+}
+BANG_MODE_LABELS = {
+    mode: str(settings["display_name"])
+    for mode, settings in BANG_MODE_SETTINGS.items()
+}
 
 
 # CURRICULUM
@@ -108,33 +158,58 @@ CURRICULUM_PROMOTION = {
 
 LEVEL_SETTINGS = {
     1: {
-        "num_players": 2,
+        "active_enemies": {
+            "duel": 1,
+            "arena": 1,
+            "team_arena": 1,
+        },
         "num_obstacles": 0,
-        "enemy_reposition_bias": 0.0,
+        "enemy_movement": 0.0,
+        "enemy_repositioning": 0.0,
         "enemy_shoot_probability": 0.0,
     },
     2: {
-        "num_players": 2,
+        "active_enemies": {
+            "duel": 1,
+            "arena": 1,
+            "team_arena": 2,
+        },
         "num_obstacles": 4,
-        "enemy_reposition_bias": 0.25,
+        "enemy_movement": 0.25,
+        "enemy_repositioning": 0.25,
         "enemy_shoot_probability": 0.025,
     },
     3: {
-        "num_players": 2,
+        "active_enemies": {
+            "duel": 1,
+            "arena": 2,
+            "team_arena": 3,
+        },
         "num_obstacles": 8,
-        "enemy_reposition_bias": 0.50,
+        "enemy_movement": 0.50,
+        "enemy_repositioning": 0.50,
         "enemy_shoot_probability": 0.05,
     },
     4: {
-        "num_players": 3,
+        "active_enemies": {
+            "duel": 1,
+            "arena": 3,
+            "team_arena": 4,
+        },
         "num_obstacles": 10,
-        "enemy_reposition_bias": 0.75,
+        "enemy_movement": 0.75,
+        "enemy_repositioning": 0.75,
         "enemy_shoot_probability": 0.075,
     },
     5: {
-        "num_players": 4,
+        "active_enemies": {
+            "duel": 1,
+            "arena": 3,
+            "team_arena": 6,
+        },
         "num_obstacles": 12,
-        "enemy_reposition_bias": 1.00,
+        "enemy_movement": 1.00,
+        "enemy_repositioning": 1.00,
         "enemy_shoot_probability": 0.10,
     },
 }
@@ -165,24 +240,24 @@ DEFAULT_MODEL_CONFIG = {
 }
 ALGO_CONFIG_OVERRIDES = {
     "dqn": {
-    "batch_size": 256,
-    "replay_size": 500_000,
-    "target_sync_every": 10_000,
-    "weight_decay": 1e-5,
-    "exploration": build_exploration_config(
-        1.0,
-        0.05,
-        2_500_000,
-        patience_episodes=150,
-        min_improvement=0.10,
-        eps_bump_cap=0.35,
-        bump_cooldown_steps=1_250_000,
-    ),
-    "prioritized_replay": True,
-    "per_alpha": 0.6,
-    "per_beta_start": 0.4,
-    "per_beta_frames": 10_000_000,
-    "per_epsilon": 1e-4,
+        "batch_size": 256,
+        "replay_size": 500_000,
+        "target_sync_every": 10_000,
+        "weight_decay": 1e-5,
+        "exploration": build_exploration_config(
+            1.0,
+            0.05,
+            2_500_000,
+            patience_episodes=150,
+            min_improvement=0.10,
+            eps_bump_cap=0.35,
+            bump_cooldown_steps=1_250_000,
+        ),
+        "prioritized_replay": True,
+        "per_alpha": 0.6,
+        "per_beta_start": 0.4,
+        "per_beta_frames": 10_000_000,
+        "per_epsilon": 1e-4,
     }
 }
 DEFAULT_TRAIN_CONFIG = {

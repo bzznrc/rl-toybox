@@ -9,7 +9,7 @@ The launch configs mirror the canonical CLI flow:
 
 ## How It Is Organized
 
-There is one canonical launch flow for non-Kick active games:
+There is one canonical launch flow for active games without game-specific selectors:
 
 - `Run - Train`
 - `Run - Play User`
@@ -18,12 +18,18 @@ There is one canonical launch flow for non-Kick active games:
 
 The shared flow covers:
 - `snake`
-- `bang`
 - `jump`
 - `vroom`
 - `flip`
 
-Kick has its own launch flow because it is the only active game with a game-specific selector:
+Bang has its own launch flow because it has a mode selector:
+
+- `Bang - Train`
+- `Bang - Play User`
+- `Bang - Play AI`
+- `Bang - Capture Demo`
+
+Kick has its own launch flow because it has a team-size selector:
 
 - `Kick - Train`
 - `Kick - Play User`
@@ -31,11 +37,13 @@ Kick has its own launch flow because it is the only active game with a game-spec
 - `Kick - Capture Demo`
 
 `flip` is fixed-mode. It can use the shared non-Kick launch configs safely because the CLI clamps fixed-mode games to `L1` and does not create a curriculum.
+`bang` uses the additional `bangMode` selector for `Duel`, `Arena`, or `Team Arena`.
 `kick` uses the additional `kickTeamSize` selector for `3 vs. 3`, `5 vs. 5`, or `7 vs. 7`.
 
 ## Levels And Modes
 
 - The `trainLevel` and `playLevel` inputs expose `L1` through `L5`.
+- The `bangMode` input appears only in the Bang launch configs and exposes Bang's `Duel`, `Arena`, and `Team Arena` modes.
 - The `kickTeamSize` input appears only in the Kick launch configs and exposes Kick's `3 vs. 3`, `5 vs. 5`, and `7 vs. 7` modes.
 - Training defaults to `L1`.
 - `play-user`, `play-ai`, and `capture-demo` default to `L5`.

@@ -78,11 +78,12 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 
 ## Environment Notes
 
-- Each race is exactly `1` lap.
+- The finish goal is always the canonical start/finish line.
+- Normal starts require one full valid lap; training random starts create shorter segments from the sampled spawn point to that canonical finish line.
 - A fresh smooth closed-loop track is generated at every reset.
 - Cars spawn across the start strip with randomized row/lane ordering.
 - Training curriculum can randomize the whole race start; all cars move to the same sampled start region without overlapping, while evaluation and human play keep the normal start-line behavior.
-- If any car completes the lap, the race ends immediately.
+- If an opponent reaches the canonical finish or the player reaches it with valid on-track progress, the race ends immediately.
 - Episode length:
   - `train`: `1` race
   - `eval` / `human`: `10` races per set
@@ -93,7 +94,7 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 - Low-speed steering is mildly reduced, with at least `25%` authority at near-zero speed and full low-speed scaling gone by normal driving speed.
 - The policy and human runtime share the same continuous control interface.
 - `flag_contact` and `flag_off_track` are binary observations; contact direction comes from `sens_car_*`.
-- `flag_off_track` and training track-coverage penalties use a projected centerline validity margin with hysteresis, so near-edge recovery is less noisy without widening the rendered or physical road.
+- `flag_off_track` follows the off-track severity signal with simple hysteresis, without widening the rendered or physical road.
 - Ghost mode is visual-only and draws the 3 speed-aware route probes with tangent and bend markers, the 5 edge rays, and the 3 car-path probes.
 
 ### Track Generation
@@ -113,9 +114,9 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 - Folds are validated with centerline clearance (`track_width + fold_gap`) so road ribbons do not overlap.
 - Rounded corners and the start strip are built through the geometry-first pipeline in `games/vroom/track_geometry.py` and `games/vroom/trackgen.py`.
 - Generated centerlines keep the same template families but run a small deterministic smoothing pass over bend transitions for driveability across all curriculum levels.
-- Gameplay and rendering both follow the smooth analytical track geometry.
-- The rendered road uses a supersampled smooth polygon with consistent smooth edge margins.
-- The start mark is a single margin-colored line centered on the chosen side.
+- Gameplay, validity, and collision use the same raster road mask; rendered road antialiasing is clipped to that mask.
+- Boundary and start/finish paint is clipped to the same mask, so the visible road shape does not extend beyond the playable road.
+- The start/finish mark is a white band beginning at the canonical logical start and painted from the same track geometry.
 
 ### Scripted Opponents
 
@@ -129,13 +130,13 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 
 - `REWARD_WIN = +10.0` when the player wins
 - `PENALTY_LOSE = -5.0` when another car wins or timeout resolves against the player
-- Progress shaping uses signed unwrapped route-progress deltas from spawn: forward motion adds `P`, backward motion subtracts `P`, and forward/back wiggle nets near zero.
-- A completed player lap from the current spawn point settles cumulative `P` to `PROGRESS_SCALE` (`7.5`)
-- Positive progress is multiplied by the virtual training-validity coverage, so clearly off-route progress does not pay like clean racing progress
-- Track coverage penalty: `-0.005 * (1 - coverage)` each training step, using the same projected centerline margin
-- `PENALTY_COLLISION = -0.02` each training step while the player car remains in contact
+- Progress shaping uses signed unwrapped valid route-progress deltas from spawn: on-track forward motion adds `P`, on-track backward motion subtracts `P`, and off-track motion gives zero `P`.
+- A normal-start player win requires one valid full lap and settles cumulative `P` near `PROGRESS_SCALE` (`7.5`); random-start wins use the shorter valid distance from spawn to the canonical finish and can earn proportionally less `P`.
+- `PENALTY_OFF_TRACK = -0.02` scaled by continuous off-track severity each training step; edge grazing is small, fully leaving the road reaches the full penalty.
+- Sustained hard off-track driving for `45` steps terminates as the existing loss outcome.
+- `PENALTY_CONTACT = -0.005` each training step while the player car remains in contact; brief bumps are not punished as a separate event.
 - `PENALTY_STEP = -0.0075` every training step
-- No-progress episodes terminate as an existing loss if best unwrapped progress fails to improve by `0.01` for `240` steps.
+- No-progress episodes terminate as an existing loss if best valid unwrapped progress fails to improve by `0.01` for `240` steps.
 
 An episode counts as a success if the player wins the race set.
 
@@ -143,8 +144,8 @@ An episode counts as a success if the player wins the race set.
 
 - Shared 5-level curriculum progression from `core/curriculum.py`
 - Promotion settings live in `games/vroom/config.py` under `CURRICULUM_PROMOTION`
-- Promotion uses one rule: compare rolling AS over the last `100` level episodes with the shared `0.60` threshold.
-- Training-only random starts decrease by level. When one triggers, the player and opponents spawn around the same sampled start region in different safe slots; direction is sampled within `+/-45` degrees of the local track tangent, speed starts between `0%` and `25%` of max speed, and laps are measured from the sampled spawn point.
+- Promotion uses one rule: compare rolling AS over the last `100` level episodes with the shared `0.80` threshold.
+- Training-only random starts decrease by level. When one triggers, the player and opponents spawn around the same sampled start region in different safe slots; direction is sampled within `+/-45` degrees of the local track tangent, speed starts between `0%` and `25%` of max speed, and positions with less than `25%` remaining progress to the canonical finish are rejected.
 - Levels:
   - Level 1: `1` car, opponent speed cap `0.0`, complexity `0.00-0.30`, random starts `80%`
   - Level 2: `1` car, opponent speed cap `0.0`, complexity `0.20-0.50`, random starts `60%`
@@ -167,4 +168,4 @@ python -m scripts.play_user --game vroom
 
 When `--level` is omitted, `train` starts at `L1` and `play-user` / `play-ai` default to `L5`.
 
-See `games/vroom/config.py` for the physics parameters, track-generation settings, curriculum knobs, and training defaults. Vroom's game-wide net size lives in `DEFAULT_MODEL_CONFIG["hidden_sizes"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.
+See `games/vroom/config.py` for the physics parameters, track-generation settings, curriculum knobs, and training defaults. Vroom's game-wide net size lives in `DEFAULT_MODEL_CONFIG["hidden_sizes"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`. Vroom also uses conservative SAC overrides for stability on long procedural tracks.

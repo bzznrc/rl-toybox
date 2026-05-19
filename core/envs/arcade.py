@@ -15,6 +15,20 @@ class ArcadeEnvMixin:
     window_controller: ArcadeWindowController
     window: object | None
 
+    def _init_arcade_timing(
+        self,
+        *,
+        render: bool,
+        render_fps: int | float = 60,
+        training_fps: int | float = 0,
+        eval_step_delay_seconds: float = 0.0,
+    ) -> None:
+        self.show_game = bool(render)
+        self.render_fps = float(render_fps)
+        self.training_fps = float(training_fps)
+        self.eval_step_delay_seconds = max(0.0, float(eval_step_delay_seconds))
+        self.frame_clock = ArcadeFrameClock()
+
     def _init_arcade_runtime(
         self,
         *,
@@ -28,11 +42,12 @@ class ArcadeEnvMixin:
         training_fps: int | float = 0,
         eval_step_delay_seconds: float = 0.0,
     ) -> None:
-        self.show_game = bool(render)
-        self.render_fps = float(render_fps)
-        self.training_fps = float(training_fps)
-        self.eval_step_delay_seconds = max(0.0, float(eval_step_delay_seconds))
-        self.frame_clock = ArcadeFrameClock()
+        self._init_arcade_timing(
+            render=bool(render),
+            render_fps=render_fps,
+            training_fps=training_fps,
+            eval_step_delay_seconds=eval_step_delay_seconds,
+        )
         self.window_controller = ArcadeWindowController(
             int(width),
             int(height),
@@ -56,4 +71,3 @@ class ArcadeEnvMixin:
         if controller is not None:
             controller.close()
         self.window = None
-

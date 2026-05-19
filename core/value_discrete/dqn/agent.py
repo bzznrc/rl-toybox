@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from core.algorithms.base import Algorithm
+from core.algorithms.base import Algorithm, normalize_action_mask, normalize_action_mask_batch
 from core.algorithms.exploration import EpsilonController, ExplorationConfig, resolve_exploration_config
 from core.value_discrete.dqn.networks import build_q_network
 from core.value_discrete.dqn.replay import (
@@ -93,16 +93,10 @@ class DQNAlgorithm(Algorithm):
         self.epsilon = float(self._exploration.epsilon)
 
     def _normalize_action_mask(self, action_mask: object | None) -> np.ndarray:
-        action_dim = int(self.config.action_dim)
-        if action_mask is None:
-            return np.ones((action_dim,), dtype=np.bool_)
-
-        mask_array = np.asarray(action_mask, dtype=np.bool_).reshape(-1)
-        if int(mask_array.size) != action_dim:
-            raise ValueError(f"DQN action mask expected {action_dim} values, got {int(mask_array.size)}.")
-        if int(mask_array.sum()) <= 0:
-            mask_array = np.ones((action_dim,), dtype=np.bool_)
-        return mask_array.astype(np.bool_, copy=False)
+        try:
+            return normalize_action_mask(action_mask, int(self.config.action_dim))
+        except ValueError as exc:
+            raise ValueError(str(exc).replace("Action mask", "DQN action mask")) from exc
 
     def _normalize_next_action_masks(self, action_masks: tuple[object | None, ...]) -> np.ndarray:
         if not action_masks:
@@ -111,22 +105,15 @@ class DQNAlgorithm(Algorithm):
         return np.stack(normalized, axis=0).astype(np.bool_, copy=False)
 
     def _normalize_action_mask_batch(self, action_mask: object | None, batch_size: int) -> np.ndarray:
-        if action_mask is None:
-            return np.ones((int(batch_size), int(self.config.action_dim)), dtype=np.bool_)
-        mask_array = np.asarray(action_mask, dtype=np.bool_)
-        if mask_array.ndim == 1:
-            return np.stack(
-                [self._normalize_action_mask(mask_array) for _ in range(int(batch_size))],
-                axis=0,
-            ).astype(np.bool_, copy=False)
-        if int(mask_array.shape[0]) != int(batch_size):
-            raise ValueError(
-                f"DQN action mask batch expected {int(batch_size)} rows, got {int(mask_array.shape[0])}."
+        try:
+            return normalize_action_mask_batch(
+                action_mask,
+                int(self.config.action_dim),
+                batch_size=int(batch_size),
+                allow_scalar_broadcast=False,
             )
-        return np.stack(
-            [self._normalize_action_mask(mask_array[index]) for index in range(int(batch_size))],
-            axis=0,
-        ).astype(np.bool_, copy=False)
+        except ValueError as exc:
+            raise ValueError(str(exc).replace("Action mask", "DQN action mask")) from exc
 
     @staticmethod
     def _masked_q_values(q_values: torch.Tensor, action_mask: np.ndarray) -> torch.Tensor:

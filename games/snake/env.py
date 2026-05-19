@@ -24,6 +24,7 @@ from core.curriculum import (
     build_curriculum_config,
     validate_curriculum_level_settings,
 )
+from core.envs.arcade import ArcadeEnvMixin
 from core.envs.base import Env
 from core.ghost_overlay import update_ghost_overlay_toggle
 from core.io_schema import clip_signed, clip_unit, normalize_last_action, ordered_feature_vector, signed_potential_shaping
@@ -71,7 +72,6 @@ from games.snake.config import (
     WINDOW_TITLE,
     WRAP_AROUND,
 )
-from core.runtime import ArcadeFrameClock, ArcadeWindowController
 from core.utils import resolve_play_level
 
 
@@ -95,26 +95,25 @@ class Point:
     y: float
 
 
-class BaseSnakeGame:
+class BaseSnakeGame(ArcadeEnvMixin):
     """Shared world state and rendering for Snake."""
 
     def __init__(self, show_game: bool = True) -> None:
         self.width = SCREEN_WIDTH
         self.height = SCREEN_HEIGHT
-        self.show_game = bool(show_game)
         self.show_ghost_overlay = bool(SHOW_GHOST_OVERLAY)
         self.ghost_overlay_allowed = True
         self._prev_ghost_overlay_toggle_down = False
-        self.frame_clock = ArcadeFrameClock()
-        self.window_controller = ArcadeWindowController(
-            self.width,
-            self.height,
-            WINDOW_TITLE,
-            enabled=self.show_game,
+        self._init_arcade_runtime(
+            width=self.width,
+            height=self.height,
+            title=WINDOW_TITLE,
+            render=bool(show_game),
             queue_input_events=False,
             vsync=False,
+            render_fps=FPS,
+            training_fps=TRAINING_FPS,
         )
-        self.window = self.window_controller.window
 
         self.direction = Direction.RIGHT
         self.head = Point(0, 0)
@@ -130,8 +129,7 @@ class BaseSnakeGame:
         self.reset()
 
     def close(self) -> None:
-        self.window_controller.close()
-        self.window = None
+        super().close()
 
     def poll_events(self) -> None:
         self.window_controller.poll_events_or_raise()
@@ -508,7 +506,7 @@ class HumanSnakeGame(BaseSnakeGame):
             self.snake.pop()
 
         self.draw_frame()
-        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+        self._tick_arcade_frame()
         return False, self.score
 
     def _has_collision(self) -> bool:
@@ -698,7 +696,7 @@ class TrainingSnakeGame(BaseSnakeGame):
             self._prev_tgt_manhattan_norm = None
 
         self.draw_frame()
-        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+        self._tick_arcade_frame()
         self.last_reward_breakdown = reward_breakdown
 
         return reward, False, self.score

@@ -17,14 +17,13 @@ from core.game import (
     build_env_from_config,
     normalize_bang_mode,
     normalize_kick_team_size,
-    parse_override_assignments,
     prepare_run,
     resolve_play_model_path,
-    set_nested_override,
 )
 from core.logging_utils import configure_logging, log_key_values, log_run_context
 from core.runners.eval import reset_eval_policy_state, select_eval_action
 from core.utils import PROJECT_ROOT
+from scripts import build_common_overrides, missing_model_message, normalize_choice
 
 
 CAPTURE_DURATION_SECONDS = 15
@@ -63,10 +62,6 @@ def _shared_arcade_palette_colors() -> tuple[tuple[int, int, int], ...]:
 SHARED_ARCADE_PALETTE_COLORS = _shared_arcade_palette_colors()
 
 
-def _normalize_choice(value: str) -> str:
-    return str(value).strip().lower()
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture a short rendered AI demo")
     parser.add_argument("--game", required=True, help="Game id")
@@ -74,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         default="best",
-        type=_normalize_choice,
+        type=normalize_choice,
         choices=["best", "check"],
         help="Model artifact to load",
     )
@@ -110,49 +105,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _missing_model_message(
-    *,
-    game_id: str,
-    algo_id: str,
-    run_name: str,
-    level: int,
-    bang_mode: object | None,
-    team_size: object | None,
-    original_error: Exception,
-) -> str:
-    if str(game_id).strip().lower() == "bang":
-        mode = normalize_bang_mode(bang_mode)
-        mode_label = str(mode).replace("_", " ").title()
-        return (
-            f"No trained Bang model was found for level {int(level)} "
-            f"({algo_id}_{run_name}_L{int(level)}). The selected mode is {mode_label}. "
-            f"Train it first with: python -m scripts.train --game bang --mode {mode} --level {int(level)}"
-        )
-    if str(game_id).strip().lower() != "kick":
-        return str(original_error)
-    size = normalize_kick_team_size(team_size)
-    return (
-        f"No trained Kick model was found for level {int(level)} "
-        f"({algo_id}_{run_name}_L{int(level)}). The selected mode is {size} vs. {size}. "
-        f"Train the shared Kick model first with: "
-        f"python -m scripts.train --game kick --team-size {size} --level {int(level)}"
-    )
-
-
 def _build_eval_overrides(args: argparse.Namespace) -> dict[str, object]:
-    overrides = parse_override_assignments(args.set_values)
-    set_nested_override(overrides, "common.mode", "eval")
-    set_nested_override(overrides, "common.render", True)
-    set_nested_override(overrides, "common.headless", False)
-    if args.seed is not None:
-        set_nested_override(overrides, "common.seed", int(args.seed))
-    if args.mode is not None:
-        set_nested_override(overrides, "common.bang_mode", str(args.mode))
-    if args.team_size is not None:
-        set_nested_override(overrides, "common.team_size", int(args.team_size))
-    if args.checkpoint:
-        set_nested_override(overrides, "common.checkpoint_path", str(Path(args.checkpoint)))
-    return overrides
+    return build_common_overrides(
+        args,
+        mode="eval",
+        render=True,
+        headless=False,
+        include_checkpoint=True,
+    )
 
 
 def _draw_current_frame(env: object) -> None:
@@ -259,7 +219,7 @@ def main() -> None:
             model_path = resolve_play_model_path(run_paths, str(args.model).strip().lower(), int(level))
         except FileNotFoundError as exc:
             raise FileNotFoundError(
-                _missing_model_message(
+                missing_model_message(
                     game_id=game_id,
                     algo_id=algo_id,
                     run_name=str(dict(composed_config.get("run", {})).get("name", "")),

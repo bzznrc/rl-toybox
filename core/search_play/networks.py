@@ -5,16 +5,17 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from core.algorithms.base import build_mlp
+
 
 class PolicyValueMLP(nn.Module):
     def __init__(self, input_size: int, hidden_sizes: list[int], policy_size: int) -> None:
         super().__init__()
-        layers: list[nn.Module] = []
-        in_features = int(input_size)
-        for hidden_size in hidden_sizes:
-            layers.extend([nn.Linear(in_features, int(hidden_size)), nn.ReLU()])
-            in_features = int(hidden_size)
-        self.trunk = nn.Sequential(*layers)
+        self.trunk, in_features = build_mlp(
+            int(input_size),
+            [int(size) for size in hidden_sizes],
+            activation=nn.ReLU,
+        )
         self.policy_head = nn.Linear(in_features, int(policy_size))
         self.value_head = nn.Linear(in_features, 1)
 

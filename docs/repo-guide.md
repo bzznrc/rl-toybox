@@ -1,9 +1,9 @@
 # Repository Architecture
 
-This document defines the current repo structure, the active game ladder, and the shared RL family layout.
+This document describes the repo structure, the active game lineup, and the shared RL family layout.
 
 Cross-game RL and environment design rules are in [rl-design-guide.md](./rl-design-guide.md).
-Per-game snapshots live in `games/<game>/README.md`.
+Per-game details live in `games/<game>/README.md`.
 
 ## Table of Contents
 
@@ -14,7 +14,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 - [5) Model Saving and Run Naming](#5-model-saving-and-run-naming)
 - [6) RL Family Layout](#6-rl-family-layout)
 - [7) Special Areas](#7-special-areas)
-- [8) Checklist for New Changes](#8-checklist-for-new-changes)
+- [8) Change Checklist](#8-change-checklist)
 
 ## 1) Repo-Wide Goals
 
@@ -39,36 +39,19 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 ## 3) Repository Layout and Shared Responsibilities
 
-### Folder layout
+### Folder Layout
 
-- `games/<game_name>/`
-- `env.py`: game-specific environment logic
-- `config.py`: declarative game knobs, including game-owned model defaults, algo-specific overrides, train defaults, and any non-default spec metadata
-- `README.md`: current implementation snapshot
-- `core/shared_config.py`
-- shared runtime/window defaults such as FPS, geometry, tile sizing, and common marker sizing
-- `core/game.py`
-- active lineup registry
-- shared metadata/spec building used by CLI entrypoints
-- run-name builders and train-config builders
-- `core/algorithms/`
-- thin shared interface/factory layer plus exploration scheduling helpers
-- `core/value_discrete/`
-- shared tabular/linear-Q and DQN-family infrastructure
-- home for value-based helpers such as Double DQN, PER, dueling heads, and action masking support
-- `core/actor_critic/`
-- shared PPO/A2C/recurrent PPO/SAC infrastructure
-- target home for shared rollout, policy, critic, centralized-critic, and continuous-control helpers
-- `core/search_play/`
-- compact MCTS, self-play training, and policy/value helpers for `flip`
-- `core/io/`, `core/runners/`, and `core/logging_utils.py`
-- shared run IO, training loops, and logging behavior
-- `core/runners/env_access.py`
-- shared runner accessors for action masks, centralized state, reward storage, policy-state reset, and curriculum success stats
-- `core/envs/arcade.py`
-- opt-in Arcade mixin for common window setup, frame pacing, and close behavior
-- `core/ghost_overlay.py` and `core/ray_viz.py`
-- shared translucent observation/debug overlay primitives, including the standard `X` toggle path and ray drawing
+- `games/<game_name>/`: game-specific environment logic, declarative config, and the game README.
+- `core/game.py`: active lineup registry, compatibility checks, config composition, run names, and run preparation.
+- `core/shared_config.py`: shared runtime/window defaults such as FPS, geometry, tile sizing, and common marker sizing.
+- `core/algorithms/`: the shared algorithm interface, cross-family helpers, and exploration scheduling helpers.
+- `core/value_discrete/`: tabular/linear-Q and DQN-family infrastructure, including Double DQN, PER, dueling heads, and action masking support.
+- `core/actor_critic/`: PPO, A2C-style updates, recurrent PPO, SAC, rollout machinery, and centralized-critic support.
+- `core/search_play/`: compact MCTS, self-play training, replay, and policy/value helpers for `flip`.
+- `core/envs/`: base environment contracts, spaces, and the Arcade runtime mixin.
+- `core/io/`, `core/runners/`, and `core/logging_utils.py`: run IO, training loops, evaluation loops, and logging behavior.
+- `core/runners/env_access.py`: shared runner accessors for action masks, centralized state, reward storage, policy-state reset, and curriculum success stats.
+- `core/ghost_overlay.py` and `core/ray_viz.py`: shared observation/debug overlay primitives, including the standard `X` toggle path and ray drawing.
 
 ### Ownership boundaries
 
@@ -77,7 +60,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 - Shared runtime/window constants belong in `core/shared_config.py`.
 - Game-specific env logic stays under `games/<game>/`.
 - Game configs should stay declarative and focused on `ENV`, `IO`, `CURRICULUM`, `REWARDS`, and `TRAINING`, keeping local overrides only when a game genuinely differs from the shared defaults.
-- Avoid introducing large new abstractions until a second pass actually needs them.
+- Add shared abstractions only when at least two concrete call sites need the same behavior.
 
 ### Shared visual language
 
@@ -86,7 +69,7 @@ Per-game snapshots live in `games/<game>/README.md`.
 - Allowed scale variants should stay simple and explicit:
   - `2x` for larger composite cells or overlays, such as Jump's grid-style patch visuals.
   - `0.5x` for small gameplay markers and compact UI accents.
-- New visuals should prefer these square components plus the shared palette in `core/arcade_style.py` instead of introducing separate visual systems.
+- Visuals should use these square components plus the shared palette in `core/arcade_style.py`.
 - Observation ghosts should use light-neutral 50% alpha overlays and the shared `X` toggle, so rays, SENS probes, and role/area guides behave consistently across games.
 
 ## 4) Logging Framework
@@ -112,10 +95,10 @@ Per-game snapshots live in `games/<game>/README.md`.
 ## 5) Model Saving and Run Naming
 
 - Save artifacts under `runs/<game>/`.
-- Filenames keep the existing `<algo>_<net>_L<level>_<kind>.pth` convention.
-- Trained checkpoints and run metrics are ignored by git; each run subfolder is kept with a zero-byte `.gitkeep`.
-- Existing kept games preserve their run tags where practical so older runs stay discoverable. Shared-policy mode games such as Kick and Bang keep the model tag mode-neutral so the same checkpoint can be used across modes.
-- Run tags should stay compact and reflect the active model shape.
+- Filenames use the `<algo>_<net>_L<level>_<kind>.pth` convention.
+- Trained checkpoints and run metrics are ignored by git; each run subfolder includes a zero-byte `.gitkeep`.
+- Shared-policy mode games such as Kick and Bang keep the model tag mode-neutral so the same checkpoint can be used across modes.
+- Run tags are compact and reflect the active model shape.
 
 ## 6) RL Family Layout
 
@@ -147,15 +130,14 @@ Per-game snapshots live in `games/<game>/README.md`.
 
 ## 7) Special Areas
 
-- `bang` stays in-tree as one value-based shooter game id, with `duel`, `arena`, and `team_arena` combat modes sharing the same DQN IO shape. `team_arena` controls two friendly agents with one shared DQN policy. Mode defines the maximum format; `LEVEL_SETTINGS[level]["active_enemies"]` owns the per-mode active enemy ramp inside that format.
-- `kick` stays in-tree and runnable as the repo's single CTDE football game, with `3v3`, `5v5`, and `7v7` team-size modes.
+- `bang` is one value-based shooter game id, with `duel`, `arena`, and `team_arena` combat modes sharing the same DQN IO shape. `team_arena` controls two friendly agents with one shared DQN policy. Mode defines the maximum format; `LEVEL_SETTINGS[level]["active_enemies"]` owns the per-mode active enemy ramp inside that format.
+- `kick` is the repo's CTDE football game, with `3v3`, `5v5`, and `7v7` team-size modes.
 - `jump` sits on the shared actor-critic path as the repo's compact single-agent traversal showcase.
-- Its centralized-critic support lives on the shared actor-critic path plus game-provided central observation metadata.
 - `vroom` sits on the actor-critic and continuous-control branch with SAC-oriented defaults.
 
-## 8) Checklist for New Changes
+## 8) Change Checklist
 
-Before merging:
+Use this checklist when changing repo structure, game contracts, or shared systems:
 
 - [ ] Active lineup references still use the canonical order from section 2.
 - [ ] Shared RL code is placed under the right `core/<family>/` area.

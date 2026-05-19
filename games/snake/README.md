@@ -1,6 +1,6 @@
 # Snake
 
-Classic grid Snake with a small obstacle curriculum, compact observations, and lightweight shaping rewards. It is the simplest entry point in the repo and the easiest environment to inspect end to end.
+Classic grid Snake with a small obstacle curriculum, compact observations, and lightweight shaping rewards. It is the simplest entry point in the repo.
 
 ## Clip
 
@@ -44,7 +44,7 @@ Classic grid Snake with a small obstacle curriculum, compact observations, and l
 - Progress shaping: `clip(1.0 * (Phi_next - Phi_prev), -0.05, +0.05)` where `Phi = -dist_food_norm - 0.5 * hunger_norm`
 - `PENALTY_STEP = -0.01` every training step
 
-`tgt_manhattan_norm` is normalized Manhattan head-to-food distance. When wrap-around is enabled it uses the shortest wrapped path. `self_hunger_norm` is `clamp(steps_since_food / FOOD_TIMEOUT_STEPS, 0, 1)`, so `0.0` means food was just eaten and `1.0` means the snake is about to starve. IO is unchanged.
+`tgt_manhattan_norm` is normalized Manhattan head-to-food distance. When wrap-around is enabled it uses the shortest wrapped path. `self_hunger_norm` is `clamp(steps_since_food / FOOD_TIMEOUT_STEPS, 0, 1)`, so `0.0` means food was just eaten and `1.0` means the snake is about to starve.
 
 ## Curriculum (Train)
 

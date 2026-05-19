@@ -12,11 +12,10 @@ from core.game import (
     compose_run_config,
     normalize_bang_mode,
     normalize_kick_team_size,
-    parse_override_assignments,
-    set_nested_override,
 )
 from core.io.runs import resolve_run_paths
 from core.logging_utils import configure_logging, log_run_context
+from scripts import build_common_overrides
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,17 +54,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def _build_play_overrides(args: argparse.Namespace) -> dict[str, object]:
-    overrides = parse_override_assignments(args.set_values)
-    set_nested_override(overrides, "common.mode", "play")
-    set_nested_override(overrides, "common.render", not bool(args.headless))
-    set_nested_override(overrides, "common.headless", bool(args.headless))
-    if args.seed is not None:
-        set_nested_override(overrides, "common.seed", int(args.seed))
-    if args.mode is not None:
-        set_nested_override(overrides, "common.bang_mode", str(args.mode))
-    if args.team_size is not None:
-        set_nested_override(overrides, "common.team_size", int(args.team_size))
-    return overrides
+    return build_common_overrides(
+        args,
+        mode="play",
+        render=not bool(args.headless),
+        headless=bool(args.headless),
+        include_checkpoint=False,
+    )
 
 
 def _attach_play_user_ai_opponent(env: object, composed_config: dict[str, object], *, level: int) -> str | None:

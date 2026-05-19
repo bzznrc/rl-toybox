@@ -1,6 +1,6 @@
 # Bang
 
-Top-down arena shooter focused on movement, aiming, line of sight, and timing shots under pressure. `bang` is one public game id with selectable combat modes, all using the same 36-input / 8-action DQN shape.
+Top-down arena shooter focused on movement, aiming, line of sight, and timing shots under pressure. `bang` is one public game id with selectable combat modes. All modes use the same 36-input / 8-action DQN shape.
 
 ## Clip
 
@@ -14,7 +14,7 @@ Top-down arena shooter focused on movement, aiming, line of sight, and timing sh
 - `team_arena` (`Team Arena`): `2v2v2v2`, four teams of two, with two RL-controlled friendly players sharing one DQN policy
 - Default mode: `team_arena`
 
-Mode defines the maximum/target layout. Curriculum controls how many enemies from that layout are active during training. The actor network, observation order, action space, model size, rewards, and DQN algorithm stay shared across all modes.
+Mode defines the maximum layout. Curriculum controls how many enemies from that layout are active during training. The observation order, action space, model size, rewards, and DQN algorithm are shared across all modes.
 
 `Team Arena` is the recommended training mode for a general Bang policy because it exposes the full ally/enemy/team structure. `Duel` and `Arena` are simpler subset cases of the same 36-input contract.
 
@@ -24,7 +24,7 @@ Mode defines the maximum/target layout. Curriculum controls how many enemies fro
 - IO: `obs=36`, `act=8`
 - Default Q-network: `36 -> 64 -> 64 -> 8`
 - Default model config: `{"hidden_sizes": [64, 64]}`
-- Runtime shape: double-Q, dueling head, prioritized replay
+- DQN features: double-Q, dueling head, prioritized replay
 - Controlled-agent shape: `Duel` and `Arena` emit one observation/action; `Team Arena` emits two observations/actions and stores both as per-agent samples in the same DQN replay buffer.
 
 ## Controls (Human)
@@ -153,6 +153,6 @@ rl-toybox-play-user --game bang --mode team_arena
 
 Without installation, use the same `--mode` values with `python -m scripts.train`, `python -m scripts.play_ai`, and `python -m scripts.play_user`.
 
-When `--mode` is omitted, Bang defaults to `team_arena`. When `--level` is omitted, `train` starts at `L1` and `play-user` / `play-ai` default to `L5`. Like Kick, Bang uses one shared model tag across modes, such as `dqn_64_64_L5_best.pth`.
+When `--mode` is omitted, Bang defaults to `team_arena`. When `--level` is omitted, `train` starts at `L1` and `play-user` / `play-ai` default to `L5`. Bang uses one shared model tag across modes, such as `dqn_64_64_L5_best.pth`.
 
 See `games/bang/config.py` for the game constants, modes, rewards, curriculum settings, and training defaults. Bang's game-wide net size lives in `DEFAULT_MODEL_CONFIG["hidden_sizes"]`, its DQN-specific extras live in `ALGO_CONFIG_OVERRIDES["dqn"]`, and its default training stop budget lives in `DEFAULT_TRAIN_CONFIG["budget"]`.

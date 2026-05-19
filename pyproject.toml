@@ -12,6 +12,8 @@ dependencies = [
   "arcade>=3.3.3",
   "torch>=2.2",
   "numpy>=1.24",
+  "pillow>=10",
+  "pyglet>=2.0",
 ]
 
 [project.scripts]

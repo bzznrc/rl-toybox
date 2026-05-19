@@ -14,7 +14,7 @@ from torch.distributions import Categorical, Normal
 from core.actor_critic.metrics import explained_variance
 from core.actor_critic.ppo.networks import ActorCritic, RecurrentActorCritic, RecurrentState
 from core.actor_critic.ppo.rollout import RolloutBuffer
-from core.algorithms.base import Algorithm
+from core.algorithms.base import Algorithm, normalize_action_mask_batch
 from core.io.checkpoint import load_torch_checkpoint, save_torch_checkpoint
 
 
@@ -180,34 +180,14 @@ class PPOAlgorithm(Algorithm):
         if not self._is_discrete:
             raise ValueError("PPO action masks are only supported for discrete action policies.")
 
-        mask_array = np.asarray(action_mask, dtype=np.bool_)
-        action_dim = int(self.config.action_dim)
-
-        if mask_array.ndim == 1:
-            if int(mask_array.size) == 1 and int(batch_size) > 1:
-                mask_array = np.full((int(batch_size), action_dim), bool(mask_array.item()), dtype=np.bool_)
-            else:
-                mask_array = mask_array.reshape(1, -1)
-        if mask_array.ndim != 2:
-            raise ValueError(f"PPO action mask expected ndim 1 or 2, got {mask_array.ndim}.")
-
-        if int(mask_array.shape[0]) == 1 and int(batch_size) > 1:
-            mask_array = np.repeat(mask_array, int(batch_size), axis=0)
-        if int(mask_array.shape[0]) != int(batch_size):
-            raise ValueError(
-                f"PPO action mask expected batch size {int(batch_size)}, got {int(mask_array.shape[0])}."
+        try:
+            return normalize_action_mask_batch(
+                action_mask,
+                int(self.config.action_dim),
+                batch_size=int(batch_size),
             )
-        if int(mask_array.shape[1]) != int(action_dim):
-            raise ValueError(
-                f"PPO action mask expected action dim {int(action_dim)}, got {int(mask_array.shape[1])}."
-            )
-
-        # Guarantee a valid categorical distribution for every row.
-        valid_counts = mask_array.sum(axis=1)
-        if np.any(valid_counts <= 0):
-            mask_array = mask_array.copy()
-            mask_array[valid_counts <= 0, :] = True
-        return mask_array.astype(np.bool_, copy=False)
+        except ValueError as exc:
+            raise ValueError(str(exc).replace("Action mask", "PPO action mask")) from exc
 
     @staticmethod
     def _masked_logits(logits: torch.Tensor, action_mask: np.ndarray | None) -> torch.Tensor:

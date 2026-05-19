@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
-from core.algorithms.base import Algorithm
+from core.algorithms.base import Algorithm, normalize_action_mask
 from core.io.checkpoint import load_torch_checkpoint, save_torch_checkpoint
 from core.search_play.interfaces import MCTSConfig, ReplaySample
 from core.search_play.mcts import run_mcts
@@ -79,24 +79,20 @@ class SearchPlayAlgorithm(Algorithm):
         self.training_steps = 0
 
     def _normalize_action_mask(self, action_mask: object | None, obs: np.ndarray) -> np.ndarray:
-        if action_mask is None:
-            return action_mask_from_observation(
-                np.asarray(obs, dtype=np.float32),
-                int(self.config.board_rows),
-                int(self.config.board_cols),
+        fallback = action_mask_from_observation(
+            np.asarray(obs, dtype=np.float32),
+            int(self.config.board_rows),
+            int(self.config.board_cols),
+        )
+        try:
+            return normalize_action_mask(
+                action_mask,
+                int(self.action_dim),
+                fallback_mask=fallback,
+                empty_is_all_valid=False,
             )
-        mask = np.asarray(action_mask, dtype=np.bool_).reshape(-1)
-        if int(mask.size) != int(self.action_dim):
-            raise ValueError(
-                f"Search-play action mask expected {self.action_dim} values, got {int(mask.size)}."
-            )
-        if int(mask.sum()) <= 0:
-            return action_mask_from_observation(
-                np.asarray(obs, dtype=np.float32),
-                int(self.config.board_rows),
-                int(self.config.board_cols),
-            )
-        return mask.astype(np.bool_, copy=False)
+        except ValueError as exc:
+            raise ValueError(str(exc).replace("Action mask", "Search-play action mask")) from exc
 
     def _policy_value(self, observation: np.ndarray) -> tuple[np.ndarray, float]:
         obs_tensor = torch.as_tensor(observation, dtype=torch.float32, device=self.device)

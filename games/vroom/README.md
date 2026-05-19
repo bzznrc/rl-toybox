@@ -1,6 +1,6 @@
 # Vroom
 
-Top-down one-lap racing with procedural closed-loop tracks and continuous `steer / throttle / brake` control. `vroom` is the main continuous-control game in the repo and the smallest environment here that still feels like a proper racing game.
+Top-down one-lap racing with procedural closed-loop tracks and continuous `steer / throttle / brake` control. `vroom` is the repo's main continuous-control game.
 
 ## Clip
 
@@ -100,7 +100,7 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 ### Track Generation
 
 - Tracks use one geometry-first deformed-loop generator.
-- The lowest-complexity track is still the plain rounded rectangle.
+- The lowest-complexity track is a plain rounded rectangle.
 - Higher complexity progressively deforms the top and bottom long sides inward, up to playmat/intestine-like folds.
 - Track width is `90 px`.
 - Each long side independently samples one of:
@@ -133,10 +133,10 @@ The observation is intentionally vector-only and compact. `self_*` features enco
 - Progress shaping uses signed unwrapped valid route-progress deltas from spawn: on-track forward motion adds `P`, on-track backward motion subtracts `P`, and off-track motion gives zero `P`.
 - A normal-start player win requires one valid full lap and settles cumulative `P` near `PROGRESS_SCALE` (`7.5`); random-start wins use the shorter valid distance from spawn to the canonical finish and can earn proportionally less `P`.
 - `PENALTY_OFF_TRACK = -0.02` scaled by continuous off-track severity each training step; edge grazing is small, fully leaving the road reaches the full penalty.
-- Sustained hard off-track driving for `45` steps terminates as the existing loss outcome.
+- Sustained hard off-track driving for `45` steps terminates as a loss.
 - `PENALTY_CONTACT = -0.005` each training step while the player car remains in contact; brief bumps are not punished as a separate event.
 - `PENALTY_STEP = -0.0075` every training step
-- No-progress episodes terminate as an existing loss if best valid unwrapped progress fails to improve by `0.01` for `240` steps.
+- No-progress episodes terminate as a loss if best valid unwrapped progress fails to improve by `0.01` for `240` steps.
 
 An episode counts as a success if the player wins the race set.
 

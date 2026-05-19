@@ -7,6 +7,8 @@ from typing import TypeAlias
 import torch
 import torch.nn as nn
 
+from core.algorithms.base import build_mlp as build_shared_mlp
+
 
 RecurrentState: TypeAlias = torch.Tensor | tuple[torch.Tensor, torch.Tensor]
 
@@ -33,12 +35,7 @@ def _init_recurrent(module: nn.GRU | nn.LSTM) -> None:
 
 
 def build_mlp(input_dim: int, hidden_sizes: list[int]) -> tuple[nn.Sequential, int]:
-    layers: list[nn.Module] = []
-    in_features = int(input_dim)
-    for hidden in hidden_sizes:
-        layers.extend([nn.Linear(in_features, int(hidden)), nn.Tanh()])
-        in_features = int(hidden)
-    return nn.Sequential(*layers), in_features
+    return build_shared_mlp(int(input_dim), [int(size) for size in hidden_sizes], activation=nn.Tanh)
 
 
 class ActorCritic(nn.Module):

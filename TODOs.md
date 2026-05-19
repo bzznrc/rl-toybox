@@ -1,8 +1,13 @@
-# Bang
-- Polish mode balance after Duel, Arena, and Team Arena have training runs.
+# TODOs
 
-# Vroom
-- Add Mario Kart power-ups?
+## Bang
 
-# Jump
-- Make more interesting somehow?
+- Review mode balance after Duel, Arena, and Team Arena training runs.
+
+## Vroom
+
+- Explore item or power-up mechanics.
+
+## Jump
+
+- Explore a stronger traversal hook.

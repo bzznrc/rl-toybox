@@ -25,6 +25,7 @@ from core.curriculum import (
     build_curriculum_config,
     validate_curriculum_level_settings,
 )
+from core.envs.arcade import ArcadeEnvMixin
 from core.envs.base import Env
 from core.io_schema import clip_signed, ordered_feature_vector
 from core.match_tracker import MatchTracker
@@ -41,7 +42,6 @@ from core.primitives import (
     status_icon_size,
 )
 from core.rewards import RewardBreakdown
-from core.runtime import ArcadeFrameClock, ArcadeWindowController
 from core.shared_config import (
     BB_HEIGHT,
     CELL_INSET,
@@ -200,7 +200,7 @@ class ScriptedJob:
     preferred_player: KickPlayer | None = None
 
 
-class KickEnv(Env):
+class KickEnv(ArcadeEnvMixin, Env):
     """Top-down football environment with a scalable centralized critic signal."""
 
     ACTION_STAY = 0
@@ -303,14 +303,15 @@ class KickEnv(Env):
         self._last_episode_level = int(self._current_level)
         self._last_episode_success = 0
 
-        self.frame_clock = ArcadeFrameClock()
-        self.window_controller = ArcadeWindowController(
-            SCREEN_WIDTH,
-            SCREEN_HEIGHT,
-            WINDOW_TITLE,
-            enabled=self.show_game,
+        self._init_arcade_runtime(
+            width=SCREEN_WIDTH,
+            height=SCREEN_HEIGHT,
+            title=WINDOW_TITLE,
+            render=bool(render),
             queue_input_events=False,
             vsync=False,
+            render_fps=FPS,
+            training_fps=TRAINING_FPS,
         )
 
         self.pitch_top = 0.0
@@ -2475,7 +2476,7 @@ class KickEnv(Env):
                     reward_breakdown[key] = float(reward_breakdown.get(key, 0.0) + float(value))
                 self._episode_reward_components.add_from_mapping(frame_breakdown, self.REWARD_COMPONENT_KEY_TO_CODE)
             self.render()
-            self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+            self._tick_arcade_frame()
             if self.done:
                 break
 
@@ -2519,4 +2520,4 @@ class KickEnv(Env):
         return self._obs(), float(reward), bool(done), info
 
     def close(self) -> None:
-        self.window_controller.close()
+        super().close()

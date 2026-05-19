@@ -80,7 +80,7 @@ Compact side-view micro-platformer built around short procedural runs, timing wi
   - `2 jump`
   - `3 move_stop`
 
-- `SENS` is a compact symmetric route sensor: five local ground slots from left to right plus three forward gap probes. The `X` ghost overlay mirrors these current probes rather than the old patch grid.
+- `SENS` is a compact symmetric route sensor: five local ground slots from left to right plus three forward gap probes. The `X` ghost overlay mirrors these probes.
 - `LAND` tracks the next route platform, current gap, and nearest relevant moving platform including its travel phase.
 - `OPP` tracks the two closest relevant enemies; the first enemy also includes velocity and time-to-impact.
 - `HAZ` separates route-level and same-lane forward enemy threat.
@@ -106,13 +106,13 @@ Compact side-view micro-platformer built around short procedural runs, timing wi
 - The route starts on the baseline, can move up through the higher lanes, and always returns to a flat baseline goal stretch at the end.
 - Every inter-platform transition is validated against the same movement envelope used by the player controller.
 - Some gaps are widened into moving-platform transitions. Those gaps are intentionally too wide for a direct crossing, but a horizontally moving support platform exposes a normal reachable jump at each end of its travel.
-- Moving platforms are simple in v1:
+- Moving platforms are simple and deterministic:
   - horizontal only
   - fixed-speed
   - deterministic per seed
   - solid for landing, standing, and jumping
 - Hazards are gaps and simple walker enemies.
-- Enemies are one type only in v1:
+- Enemies use one compact walker type:
   - a Bang-sized single-tile walker that patrols the full usable length of one platform, reverses at the edges, and only kills on side contact
 - The player is a Bang-sized single-tile block with persistent horizontal velocity.
 - Top-face contact on an enemy defeats it; side contact still fails the run.
@@ -129,7 +129,7 @@ An episode counts as a success when the player reaches the flag.
 - `combat.reward_stomp = +1.00` per stomp, capped at `+5.00` in a single step
 - Progress shaping rewards only new furthest progress and penalizes backward steps, capped at `+/-0.10` per step, with `PROGRESS_SCALE = 2.5`
 - `PENALTY_STALL = -0.005` only when progress is effectively flat for the step
-- There is no generic step penalty; the pressure comes from new-progress reward, moving backward, standing still, timeout failure, and the finish bonus
+- The reward has no generic step penalty. Pressure comes from new-progress reward, moving backward, standing still, timeout failure, and the finish bonus.
 
 ## Curriculum (Train)
 
@@ -141,7 +141,7 @@ An episode counts as a success when the player reaches the flag.
   - `enemy_frequency`
   - `moving_platform_frequency`
 - Episode time budget is derived automatically from `length_tiles`.
-- The ramp starts with a flat single-lane tutorial, then reintroduces regular gaps, enemies, extra lanes, and moving platforms before the unchanged `L5`.
+- The ramp starts with a flat single-lane tutorial, then adds regular gaps, enemies, extra lanes, and moving platforms.
 - Levels:
   - Level 1: `length_tiles=48`, `lane_count=1`, `enemy_frequency=0.0`, `moving_platform_frequency=0.0`
   - Level 2: `length_tiles=64`, `lane_count=1`, `enemy_frequency=0.25`, `moving_platform_frequency=0.0`

@@ -1,10 +1,17 @@
 # Kick
 
-`kick` is the repo's single football environment. It supports `3v3`, `5v5`, and `7v7` modes under one public game id, with the same simplified design in every mode: no roles, no goalkeeper slots, no stamina, no map anchors, no shot-quality flag, and one semantic `kick` action. There is no separate 7v7 football game id.
+`kick` is the repo's football environment. It supports `3v3`, `5v5`, and `7v7` modes under one public game id, with the same simplified design in every mode: no fixed roles, no goalkeeper slots, no stamina, no map anchors, no shot-quality flag, and one semantic `kick` action.
 
 ## Clip
 
 ![Kick Demo](../../media/kick-demo.gif)
+
+## Team Sizes
+
+- Game id: `kick`
+- Team sizes: `3v3`, `5v5`, `7v7`
+- Default team size: `3v3`
+- RIGHT player count scales by curriculum level up to the selected team size.
 
 ## Algorithm / Network
 
@@ -113,7 +120,7 @@ Temporary jobs are recomputed from live state whenever the level reaction cadenc
 - Defense: `stopper`, `cover_center`, `cover_side`, `extra_cover`, `mark_space`
 - Loose ball: `chaser`, `support_a`, `safety`, `extra_support`
 
-These are temporary jobs, not roles. The planner builds live job targets and soft shape anchors from the ball, owner, goals, teammates, and opponents, assigns scripted players greedily by distance, blends each job with its anchor, then applies teammate separation, mild opponent avoidance, and small possession-style variation (`direct`, `wide_upper`, `wide_lower`, `patient`).
+These jobs are temporary behavior assignments. The planner builds live job targets and soft shape anchors from the ball, owner, goals, teammates, and opponents, assigns scripted players greedily by distance, blends each job with its anchor, then applies teammate separation, mild opponent avoidance, and small possession-style variation (`direct`, `wide_upper`, `wide_lower`, `patient`).
 
 ### Kick
 
@@ -171,15 +178,14 @@ Reward terms:
 - `B`: bounded ball-support shaping for one useful non-carrier support runner near the ball
 - `TS`: team-shape anti-clumping penalty across LEFT players
 
-There is no role-zone reward, map-anchor reward, explicit pass bonus, turnover penalty, stamina reward / penalty, goalkeeper exception, or shot-quality reward.
+Excluded reward terms: role-zone rewards, map-anchor rewards, explicit pass bonuses, turnover penalties, stamina rewards or penalties, goalkeeper exceptions, and shot-quality rewards.
 
 ## Curriculum (Train)
 
 - Shared 5-level curriculum progression from `core/curriculum.py`.
 - `LEVEL_SCRIPTED_SETTINGS` is the single curriculum source of truth.
 - Each level owns the scripted knobs plus `right_players`, where `right_players` maps team size to active RIGHT count.
-- The env expands that table into the per-team-size structure required by the shared curriculum code; it is not a second place to tune curriculum.
-- There is no separate difficulty object, enum, or easy / medium / hard branch.
+- The env derives the per-team-size structure required by the shared curriculum code from that table.
 - LEFT always uses the selected team size and level-5 scripted knobs for idle human-mode teammates.
 - RIGHT scales by level up to the selected team size.
 

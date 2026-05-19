@@ -30,6 +30,7 @@ from core.curriculum import (
     build_curriculum_config,
     validate_curriculum_level_settings,
 )
+from core.envs.arcade import ArcadeEnvMixin
 from core.envs.base import Env
 from core.ghost_overlay import ghost_color, update_ghost_overlay_toggle
 from core.io_schema import (
@@ -51,7 +52,6 @@ from core.primitives import (
 )
 from core.ray_viz import draw_player_rays
 from core.rewards import RewardBreakdown
-from core.runtime import ArcadeFrameClock, ArcadeWindowController
 from core.shared_config import (
     BB_HEIGHT,
     CELL_INSET,
@@ -168,7 +168,7 @@ class RaceCar:
     finished: bool = False
 
 
-class VroomEnv(Env):
+class VroomEnv(ArcadeEnvMixin, Env):
     INPUT_FEATURE_NAMES = tuple(VROOM_INPUT_FEATURE_NAMES)
     ACTION_NAMES = tuple(VROOM_ACTION_NAMES)
     OBS_DIM = int(VROOM_OBS_DIM)
@@ -190,15 +190,15 @@ class VroomEnv(Env):
 
     def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
         self.mode = str(mode)
-        self.show_game = bool(render)
-        self.frame_clock = ArcadeFrameClock()
-        self.window_controller = ArcadeWindowController(
-            SCREEN_WIDTH,
-            SCREEN_HEIGHT,
-            WINDOW_TITLE,
-            enabled=self.show_game,
+        self._init_arcade_runtime(
+            width=SCREEN_WIDTH,
+            height=SCREEN_HEIGHT,
+            title=WINDOW_TITLE,
+            render=bool(render),
             queue_input_events=False,
             vsync=False,
+            render_fps=FPS,
+            training_fps=0,
         )
 
         self.track_bottom = float(SCREEN_HEIGHT - BB_HEIGHT)
@@ -1707,7 +1707,7 @@ class VroomEnv(Env):
 
         if self.show_game:
             self.render()
-            self.frame_clock.tick(FPS)
+            self._tick_arcade_frame()
 
         info = {
             "win": bool(self.last_race_winner == self.player_index) if race_finished else False,
@@ -1871,4 +1871,4 @@ class VroomEnv(Env):
         return time.perf_counter() - draw_t0
 
     def close(self) -> None:
-        self.window_controller.close()
+        super().close()

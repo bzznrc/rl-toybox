@@ -1,9 +1,9 @@
 # RL Design Guide
 
-This document defines cross-game RL/environment design practices.
+This document defines cross-game RL and environment design practices.
 It is intentionally game-agnostic.
 
-Current implementation snapshots are owned by each `games/<game>/README.md`.
+Game details are owned by each `games/<game>/README.md`.
 
 ## Table of Contents
 
@@ -15,7 +15,7 @@ Current implementation snapshots are owned by each `games/<game>/README.md`.
 - [6) Reward Framework](#6-reward-framework)
 - [7) Curriculum Framework](#7-curriculum-framework)
 - [8) Game README Contract](#8-game-readme-contract)
-- [9) Checklist for Environment Changes](#9-checklist-for-environment-changes)
+- [9) Environment Change Checklist](#9-environment-change-checklist)
 
 ## 1) Runtime Contract
 
@@ -28,8 +28,7 @@ Current implementation snapshots are owned by each `games/<game>/README.md`.
 
 ### Frame pacing
 
-- Use `ArcadeFrameClock.tick(...)` when a game renders in real time.
-- New rendered games should use `ArcadeEnvMixin` for window setup, frame pacing, and close behavior unless they need a documented exception.
+- Use `ArcadeEnvMixin` for Arcade window setup, frame pacing, and close behavior.
 - Keep render FPS and training FPS separate.
 - `TRAINING_FPS=0` means max-throughput training.
 - Use explicit eval/play step-delay knobs when a game advances one full decision per rendered frame and the default FPS would make play unreadable.
@@ -55,8 +54,8 @@ Current implementation snapshots are owned by each `games/<game>/README.md`.
   - `1x` is the default and should be the starting point for most gameplay-facing objects.
   - `2x` is acceptable for larger composite cells or overlays such as Jump's grid-style patches.
   - `0.5x` is acceptable for small gameplay markers and compact UI accents.
-- Prefer composing visuals from these square units instead of introducing unrelated bespoke shapes or gradients.
-- Prefer the shared palette from `core/arcade_style.py`; new visuals should read as arrangements of standard blocks plus palette colors, not as independent art systems.
+- Compose visuals from these square units instead of unrelated bespoke shapes or gradients.
+- Use the shared palette from `core/arcade_style.py`; visuals should read as arrangements of standard blocks plus palette colors.
 - When outlines are used, keep their thickness intentional relative to the standard block and avoid decorative inner grid noise unless it carries gameplay meaning.
 - Optional observation ghosts use `X` as the standard rendered-mode toggle. Sensor rays, SENS grids, route probes, and role/area guides should use the shared light-neutral ghost color at roughly 50% alpha through `core.ghost_overlay`.
 
@@ -83,16 +82,16 @@ If a game needs extra sections, keep them clearly game-owned and place them deli
   - shared screen, playfield, and world geometry
   - shared tile sizing helpers
   - common marker sizing
-- Per-game `config.py` files should import those defaults instead of redefining them, unless a game truly needs an override.
-- Keep future placeholder configs lightweight rather than speculative.
+- Per-game `config.py` files should import those defaults instead of redefining them unless a game needs an override.
+- Keep placeholder configs lightweight and concrete.
 - Treat `config.py` as the per-game source of truth for `INPUT_FEATURE_NAMES`, `ACTION_NAMES`, observation/action dimensions, default network sizes, and the default training stop budget in `DEFAULT_TRAIN_CONFIG["budget"]`.
 - The standard active-game training/config template is `DEFAULT_ALGO`, `DEFAULT_MODEL_CONFIG`, `ALGO_CONFIG_OVERRIDES`, and `DEFAULT_TRAIN_CONFIG`.
 - Put cross-algo model fundamentals such as `hidden_sizes` and `critic_hidden_sizes` in `DEFAULT_MODEL_CONFIG`.
 - Use `ALGO_CONFIG_OVERRIDES[algo_id]` only for true algo-specific deltas such as PPO entropy, DQN replay/exploration settings, or search-play simulations.
-- `DEFAULT_TRAIN_CONFIG["budget"]` is the common stop knob across active games; its unit is total environment steps for value-based and actor-critic families, and self-play games for search-play. It should still apply when a game is launched with a non-default compatible algo.
+- `DEFAULT_TRAIN_CONFIG["budget"]` is the common stop knob across active games. Its unit is total environment steps for value-based and actor-critic families, and self-play games for search-play.
 - Runner-specific train keys such as `rollout_steps`, `train_after_steps`, or `updates_per_game` should only affect runners that actually use them.
 - When a game needs non-default action-space bounds, capability flags, env metadata, or default algo/train config, keep them in `config.py` and let `core/game.py` build the shared spec directly from `config.py` + `env.py`.
-- Active games should not rely on a hidden post-config pair-override layer. Shared family defaults may supply the baseline, but `config.py` is the final default layer before explicit user overrides.
+- Shared family defaults supply the baseline, and each game's `config.py` is the final default layer before explicit user overrides.
 
 ## 4) Observation Taxonomy
 
@@ -150,7 +149,7 @@ For board self-play, the action mask stays outside the observation.
 - Prefer discrete actions unless continuous control is core to the game.
 - Keep action names explicit and verb-oriented.
 - When action masking exists, apply it consistently in training, evaluation, and policy scoring.
-- `vroom` and future continuous-control games are allowed to break the discrete-default rule when the control problem truly needs it.
+- `vroom` and other continuous-control games can use continuous actions when the control problem needs them.
 
 ## 6) Reward Framework
 
@@ -163,9 +162,9 @@ For board self-play, the action mask stays outside the observation.
 ## 7) Curriculum Framework
 
 - Prefer a smooth shared 5-level curriculum for curriculum-based games.
-- Use the previous anchor points as `L1 -> L1`, `L2 -> L3`, and `L3 -> L5`, then add bridge levels at `L2` and `L4`.
-- Preserve prior top-end difficulty at the new `L5`; the goal is smoother interpolation, not a broader or harder overall ladder.
-- fixed-mode board games such as `flip` use a documented fixed `L1` slot instead of staged curriculum levels.
+- Use five clear levels from `L1` to `L5`, with smooth bridges between the easiest, middle, and hardest settings.
+- Keep `L5` as the top-end target for each staged game.
+- Fixed-mode board games such as `flip` use a documented fixed `L1` slot instead of staged curriculum levels.
 - Promote using success metrics when dense shaping could distort reward totals.
 - Keep per-level knobs in clearly named config tables.
 
@@ -173,9 +172,9 @@ For board self-play, the action mask stays outside the observation.
 
 Games such as Kick and Bang may expose selectable modes while keeping one shared IO and network shape. In that pattern, mode defines the maximum/target format, and curriculum can activate fewer opposing players or lower scripted pressure early in training.
 
-When the active-player count is curriculum-dependent and mode-dependent, keep that mapping inside the primary per-level settings table as a per-level mapping. Kick uses `LEVEL_SCRIPTED_SETTINGS[level]["right_players"]`; Bang uses `LEVEL_SETTINGS[level]["active_enemies"]`. Do not maintain a separate parallel table for those counts.
+When the active-player count is curriculum-dependent and mode-dependent, keep that mapping inside the primary per-level settings table as a per-level mapping. Kick uses `LEVEL_SCRIPTED_SETTINGS[level]["right_players"]`; Bang uses `LEVEL_SETTINGS[level]["active_enemies"]`.
 
-When a mode has multiple friendly controlled players, use a shared-policy shape: one observation/action row per controlled friendly, one shared network applied independently to each row, and per-agent replay samples in the same buffer. Do not solve early curriculum levels by adding a scripted ally for the learner.
+When a mode has multiple friendly controlled players, use a shared-policy shape: one observation/action row per controlled friendly, one shared network applied independently to each row, and per-agent replay samples in the same buffer.
 
 Missing or inactive entities should be zero-padded in observations and excluded from targeting, collisions, hazards, and reward events. The final most general policy is usually trained on the max mode, while simpler modes remain subset cases of the same observation/action contract.
 
@@ -197,7 +196,7 @@ When docs enumerate the active lineup, use:
 Each active `games/<game>/README.md` must use this top-level heading order:
 
 1. `Clip`
-2. Optional mode / board section for games with public selectors
+2. Optional mode, team-size, or board section for games with public selectors or fixed boards
 3. `Algorithm / Network`
 4. `Controls (Human)`
 5. `Observation / Actions`
@@ -211,11 +210,11 @@ Games with no staged progression should still keep the same section structure an
 ### Config mirroring
 
 - Each game README should copy observation/action dimensions, ordered feature names, and default network sizes from that game's `config.py`.
-- Root-level summaries should also defer to per-game `config.py` rather than re-stating older values from memory.
+- Root-level summaries should mirror per-game `config.py`.
 
-## 9) Checklist for Environment Changes
+## 9) Environment Change Checklist
 
-Before merging environment changes:
+Use this checklist when changing environment behavior:
 
 - [ ] Config ownership remains clean.
 - [ ] Observation ordering and naming stay intentional.
@@ -223,4 +222,4 @@ Before merging environment changes:
 - [ ] Action masking is consistent when used.
 - [ ] README and docs still describe the implemented game accurately.
 
-For code changes that intentionally move away from this guide, ask first, then update the guide in the same approved change so future work follows the new rule instead of the old one.
+When the contract changes, update this guide and the affected game README together.

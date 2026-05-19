@@ -15,13 +15,13 @@ from core.game import (
     build_runner_from_config,
     normalize_bang_mode,
     normalize_kick_team_size,
-    parse_override_assignments,
     prepare_run,
     resolve_best_resume_level,
     resolve_resume_path,
     set_nested_override,
 )
 from core.logging_utils import configure_logging, log_key_values, log_run_context
+from scripts import build_common_overrides
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,25 +85,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def _build_train_overrides(args: argparse.Namespace) -> dict[str, object]:
-    overrides = parse_override_assignments(args.set_values)
     render_enabled = bool(args.render) and not bool(args.headless)
-    set_nested_override(overrides, "common.mode", "train")
-    set_nested_override(overrides, "common.render", bool(render_enabled))
-    set_nested_override(overrides, "common.headless", bool(args.headless or not render_enabled))
+    overrides = build_common_overrides(
+        args,
+        mode="train",
+        render=bool(render_enabled),
+        headless=bool(args.headless or not render_enabled),
+        include_checkpoint=True,
+    )
     if args.steps is not None:
         set_nested_override(overrides, "common.total_steps", int(args.steps))
     if args.episodes is not None:
         set_nested_override(overrides, "common.episodes", int(args.episodes))
-    if args.seed is not None:
-        set_nested_override(overrides, "common.seed", int(args.seed))
-    if args.mode is not None:
-        set_nested_override(overrides, "common.bang_mode", str(args.mode))
-    if args.team_size is not None:
-        set_nested_override(overrides, "common.team_size", int(args.team_size))
     if args.save_every is not None:
         set_nested_override(overrides, "common.save_every", int(args.save_every))
-    if args.checkpoint:
-        set_nested_override(overrides, "common.checkpoint_path", str(Path(args.checkpoint)))
     return overrides
 
 

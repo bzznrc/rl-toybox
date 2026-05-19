@@ -7,18 +7,18 @@ import copy
 import torch
 import torch.nn as nn
 
+from core.algorithms.base import build_mlp
+
 
 class MLPQNetwork(nn.Module):
     def __init__(self, input_size: int, hidden_sizes: list[int], output_size: int):
         super().__init__()
-        layers: list[nn.Module] = []
-        in_features = int(input_size)
-        for hidden in hidden_sizes:
-            layers.append(nn.Linear(in_features, int(hidden)))
-            layers.append(nn.ReLU())
-            in_features = int(hidden)
-        layers.append(nn.Linear(in_features, int(output_size)))
-        self.network = nn.Sequential(*layers)
+        self.network, _ = build_mlp(
+            int(input_size),
+            [int(size) for size in hidden_sizes],
+            activation=nn.ReLU,
+            output_dim=int(output_size),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 1:
@@ -32,13 +32,11 @@ class MLPQNetwork(nn.Module):
 class DuelingQNetwork(nn.Module):
     def __init__(self, input_size: int, hidden_sizes: list[int], output_size: int):
         super().__init__()
-        layers: list[nn.Module] = []
-        in_features = int(input_size)
-        for hidden in hidden_sizes:
-            layers.extend([nn.Linear(in_features, int(hidden)), nn.GELU()])
-            in_features = int(hidden)
-
-        self.feature_extractor = nn.Sequential(*layers)
+        self.feature_extractor, in_features = build_mlp(
+            int(input_size),
+            [int(size) for size in hidden_sizes],
+            activation=nn.GELU,
+        )
         self.value_head = nn.Linear(in_features, 1)
         self.advantage_head = nn.Linear(in_features, int(output_size))
 

@@ -24,6 +24,7 @@ from core.curriculum import (
     build_curriculum_config,
     validate_curriculum_level_settings,
 )
+from core.envs.arcade import ArcadeEnvMixin
 from core.envs.base import Env
 from core.ghost_overlay import draw_ghost_line, draw_ghost_rect, ghost_color, update_ghost_overlay_toggle
 from core.io_schema import clip_signed, clip_unit, ordered_feature_vector
@@ -40,7 +41,7 @@ from core.primitives import (
     status_icon_size,
 )
 from core.rewards import RewardBreakdown
-from core.runtime import ArcadeFrameClock, ArcadeWindowController, Rect, TextCache
+from core.runtime import Rect, TextCache
 from core.utils import resolve_play_level
 from games.jump import config
 
@@ -163,7 +164,7 @@ class MovingPlatform:
         )
 
 
-class JumpEnv(Env):
+class JumpEnv(ArcadeEnvMixin, Env):
     INPUT_FEATURE_NAMES = tuple(config.INPUT_FEATURE_NAMES)
     ACTION_NAMES = tuple(config.ACTION_NAMES)
     OBS_DIM = int(config.OBS_DIM)
@@ -179,17 +180,16 @@ class JumpEnv(Env):
 
     def __init__(self, mode: str = "train", render: bool = False, level: int | None = None) -> None:
         self.mode = str(mode)
-        self.show_game = bool(render)
-        self.frame_clock = ArcadeFrameClock()
-        self.window_controller = ArcadeWindowController(
-            config.SCREEN_WIDTH,
-            config.SCREEN_HEIGHT,
-            config.WINDOW_TITLE,
-            enabled=self.show_game,
+        self._init_arcade_runtime(
+            width=config.SCREEN_WIDTH,
+            height=config.SCREEN_HEIGHT,
+            title=config.WINDOW_TITLE,
+            render=bool(render),
             queue_input_events=False,
             vsync=False,
+            render_fps=config.FPS,
+            training_fps=config.TRAINING_FPS,
         )
-        self.window = self.window_controller.window
         self._text_cache = TextCache(max_entries=256)
 
         curriculum_config = build_curriculum_config(
@@ -1789,7 +1789,7 @@ class JumpEnv(Env):
             self._episode_reward_components.add_from_mapping(reward_breakdown, self.REWARD_COMPONENT_KEY_TO_CODE)
 
         self.render()
-        self.frame_clock.tick(config.FPS if self.show_game else config.TRAINING_FPS)
+        self._tick_arcade_frame()
 
         obs = self._compute_obs()
         info: dict[str, object] = {
@@ -1830,5 +1830,4 @@ class JumpEnv(Env):
         self.window_controller.flip()
 
     def close(self) -> None:
-        self.window_controller.close()
-        self.window = None
+        super().close()

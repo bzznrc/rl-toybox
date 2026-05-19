@@ -1,13 +1,14 @@
 # rl-toybox
 
-`rl-toybox` is a compact reinforcement-learning playground built around short arcade-style games, one shared composition path, shared runtime/rendering/training infrastructure, and small, inspectable environments. The repo is organized so each game can stand on its own while still reusing common configuration, evaluation, algorithm, and runtime code.
+`rl-toybox` is a compact reinforcement-learning playground built around short arcade-style games. Each game is small enough to inspect end to end, while shared code handles configuration, training, evaluation, rendering, logging, and model artifacts.
 
 ## Repo Layout
 
 - `core/value_discrete/` contains the shared value-based stack used by `snake` and `bang`.
 - `core/actor_critic/` contains the shared PPO/SAC stack plus centralized-critic support used by `jump`, `vroom`, and `kick`.
 - `core/search_play/` contains the compact MCTS, policy/value, and self-play stack used by `flip`.
-- `core/algorithms/` contains the shared algorithm factory and thin common interfaces used by the composition layer.
+- `core/algorithms/` contains the shared algorithm interface and cross-family helpers.
+- `core/envs/` contains the base environment contract and the Arcade runtime mixin.
 - `core/shared_config.py` contains the shared runtime/window defaults used across the active games.
 - `core/game.py` owns the active game registry, compatibility checks, config composition, and shared run preparation.
 - `games/<name>/` contains each game's environment, configuration, and game-specific README.
@@ -86,14 +87,27 @@ Training prints compact single-line progress records. `Ep:` lines show environme
 | `flip` | Planning + self-play capstone | search + self-play | Fixed 6x6 disc-flipping game using MCTS, self-play, legal placement masking, and a small policy/value network | [games/flip/README.md](games/flip/README.md) |
 | `kick` | Scalable multi-agent football | actor-critic / CTDE | Shared-policy football environment for `3v3`, `5v5`, and `7v7` modes with one semantic `kick` action and a 128-input coach critic | [games/kick/README.md](games/kick/README.md) |
 
+## Suggested Learning Path
+
+This repo is intentionally a compact toybox, not a complete RL zoo.
+
+| Step | Game | Focus | What to Look For |
+| --- | --- | --- | --- |
+| 1 | `snake` | Q-learning / value methods | Smallest environment, discrete actions, reward shaping |
+| 2 | `bang` | DQN-style value control | Replay, richer observations, arcade combat dynamics |
+| 3 | `jump` | PPO / on-policy actor-critic | Policy gradients, advantage estimation, traversal/platforming |
+| 4 | `vroom` | SAC / continuous control | Continuous actions, entropy, smooth control |
+| 5 | `flip` | MCTS + self-play | Planning, legal actions, policy/value search |
+| 6 | `kick` | Multi-agent CTDE | Shared policy, centralized critic, cooperative agents |
+
 ## Observation Taxonomy
 
 - Arcade / egocentric control: `SELF -> SENS -> TGT/LAND/OPP -> HAZ -> FLAG`
-- Team / CTDE control: `SELF -> TGT -> LAND -> ALLY -> OPP`, with advanced games optionally adding `MAP -> FLAG`
+- Team / CTDE control: `SELF -> TGT -> LAND -> ALLY -> OPP`, with optional `MAP` or `FLAG` blocks when a game needs them
 - Board self-play / search: `BOARD` only; legal moves stay outside the observation via action masking
 - Blocks can be omitted when they do not apply. Compact canonical prefixes are `self_`, `sens_`, `tgt_`, `land_`, `ally_`, `opp_`, `map_`, `haz_`, `flag_`, and `board_`.
 
-Current active examples:
+Active examples:
 
 - `snake`: `self_*`, `sens_*`, `tgt_*`
 - `bang`: `self_*`, `sens_*`, `ally_*`, `opp*_*`, `haz_*`
@@ -102,9 +116,9 @@ Current active examples:
 - `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`
 - `flip`: `board_r*_c*`
 
-Per-game `config.py` owns the exact observation/action names, order, dimensions, model defaults, and training stop budget. The standard active-game template is `DEFAULT_ALGO`, `DEFAULT_MODEL_CONFIG`, `ALGO_CONFIG_OVERRIDES`, and `DEFAULT_TRAIN_CONFIG`. Change `DEFAULT_MODEL_CONFIG["hidden_sizes"]` to set one game-wide network size across supported models, and use `DEFAULT_MODEL_CONFIG["critic_hidden_sizes"]` when a game has a separate critic shape. Only use `ALGO_CONFIG_OVERRIDES[algo_id]` for true algo-specific deltas such as PPO entropy, DQN replay settings, or search-play simulations. Change `DEFAULT_TRAIN_CONFIG["budget"]` to change when a game's training run stops, including when you launch that game with a non-default compatible algo; the budget unit is total environment steps for value-based and actor-critic families, and self-play games for `search_play`. Runner-specific extras such as `rollout_steps` still only apply to runners that use them. The root docs and game READMEs should mirror that config truth.
+Per-game `config.py` files own the exact observation/action names, order, dimensions, model defaults, algorithm overrides, and training budgets. The standard active-game template is `DEFAULT_ALGO`, `DEFAULT_MODEL_CONFIG`, `ALGO_CONFIG_OVERRIDES`, and `DEFAULT_TRAIN_CONFIG`. `DEFAULT_MODEL_CONFIG["hidden_sizes"]` sets the game-wide network size across supported models, and `DEFAULT_MODEL_CONFIG["critic_hidden_sizes"]` sets the separate critic shape when a game uses one. `ALGO_CONFIG_OVERRIDES[algo_id]` is for true algorithm-specific values such as PPO entropy, DQN replay settings, or search-play simulations. `DEFAULT_TRAIN_CONFIG["budget"]` controls when a game's training run stops. The budget unit is total environment steps for value-based and actor-critic families, and self-play games for `search_play`.
 
-## Default Plans
+## Default Profiles
 
 - `snake` -> `qlearn`, `obs=12`, `act=3`, Q-network `12 -> 32 -> 3`
 - `bang` -> `dqn`, default `team_arena`, selectable `duel` / `arena` / `team_arena`, `obs=36`, `act=8`, Q-network `36 -> 64 -> 64 -> 8` with double-Q, a dueling head, and prioritized replay
@@ -112,5 +126,3 @@ Per-game `config.py` owns the exact observation/action names, order, dimensions,
 - `vroom` -> `sac`, `obs=32`, `act=3`, actor `32 -> 64 -> 64 -> 3`, twin critics `(32 + 3) -> 64 -> 64 -> 1`
 - `flip` -> `search_play`, fixed `6x6`, `obs=36`, `act=36`, policy/value net `36 -> 48 -> 48 -> (36 + 1)`
 - `kick` -> `ppo`, run tag `a64_64_c128_128`, `obs=36/player`, `act=10`, shared actor `36 -> 64 -> 64 -> 10`, coach critic `128 -> 128 -> 128 -> 1`; scalable `3v3` / `5v5` / `7v7` football with one semantic `kick` action
-
-There is no post-config pair-override layer for the active games. Shared algorithm defaults provide the family baseline, and each active game's `config.py` is the final default source before explicit user overrides.

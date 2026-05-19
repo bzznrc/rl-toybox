@@ -1,8 +1,8 @@
 # Assets
 
-Shared runtime assets for the repo.
+Shared runtime assets for the repo live here.
 
-Suggested layout:
+Layout:
 
 - `assets/fonts/` for `.ttf` and `.otf`
 - `assets/audio/` for `.wav`, `.ogg`, `.mp3`

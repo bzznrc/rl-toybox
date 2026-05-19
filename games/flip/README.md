@@ -6,6 +6,12 @@
 
 ![Flip Demo](../../media/flip-demo.gif)
 
+## Board
+
+- Board size: `6x6`
+- Artifact level slot: fixed `L1`
+- Actions: one row-major placement action per cell
+
 ## Algorithm / Network
 
 - Default algorithm: `search_play`
@@ -53,7 +59,7 @@
 
 ## Rewards (Training)
 
-Rewards are sparse and terminal only:
+Rewards are terminal only:
 
 - `REWARD_WIN = 10.0`
 - `PENALTY_LOSS = -5.0`

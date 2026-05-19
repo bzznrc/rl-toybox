@@ -29,6 +29,7 @@ from core.curriculum import (
     build_curriculum_config,
     validate_curriculum_level_settings,
 )
+from core.envs.arcade import ArcadeEnvMixin
 from core.envs.base import Env
 from core.ghost_overlay import update_ghost_overlay_toggle
 from core.io_schema import (
@@ -119,8 +120,6 @@ from games.bang.config import (
 )
 from core.runtime import (
     ArcadeSquareObstacleField,
-    ArcadeFrameClock,
-    ArcadeWindowController,
     Vec2,
     heading_to_vector,
     length_squared,
@@ -370,7 +369,7 @@ class Actor:
             self.cooldown_frames -= 1
 
 
-class Renderer:
+class Renderer(ArcadeEnvMixin):
     """Arcade renderer for the Bang arena."""
 
     def __init__(self, game, width: int, height: int, title: str, enabled: bool) -> None:
@@ -379,19 +378,19 @@ class Renderer:
         self.width = int(width)
         self.height = int(height)
 
-        self.window_controller = ArcadeWindowController(
-            self.width,
-            self.height,
-            title,
-            enabled=self.enabled,
+        self._init_arcade_runtime(
+            width=self.width,
+            height=self.height,
+            title=title,
+            render=self.enabled,
             queue_input_events=False,
             vsync=False,
+            render_fps=FPS,
+            training_fps=TRAINING_FPS,
         )
-        self.window = self.window_controller.window
 
     def close(self) -> None:
-        self.window_controller.close()
-        self.window = None
+        super().close()
 
     def poll_events(self) -> None:
         self.window_controller.poll_events_or_raise()
@@ -562,7 +561,7 @@ class Renderer:
         )
 
 
-class BaseGame:
+class BaseGame(ArcadeEnvMixin):
     """Top-down arena shooter with selectable solo and team modes."""
 
     def __init__(self, level: int = 1, show_game: bool = True, bang_mode: str | None = None):
@@ -575,7 +574,7 @@ class BaseGame:
         self.show_ghost_overlay = bool(SHOW_GHOST_OVERLAY)
         self.ghost_overlay_allowed = True
         self._prev_ghost_overlay_toggle_down = False
-        self.frame_clock = ArcadeFrameClock()
+        self._init_arcade_timing(render=bool(show_game), render_fps=FPS, training_fps=TRAINING_FPS)
 
         self.bang_mode = _resolve_bang_mode(bang_mode)
         self.mode_spec = BANG_MODE_SPECS[self.bang_mode]
@@ -1888,7 +1887,7 @@ class HumanGame(BaseGame):
             self.reset()
 
         self.draw_frame()
-        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+        self._tick_arcade_frame()
 
 
 class TrainingGame(BaseGame):
@@ -2034,7 +2033,7 @@ class TrainingGame(BaseGame):
                 self._record_round_draw()
 
         self.draw_frame()
-        self.frame_clock.tick(FPS if self.show_game else TRAINING_FPS)
+        self._tick_arcade_frame()
 
         return reward, done, reward_breakdown
 

@@ -23,5 +23,3 @@ Suggested learning path:
 6. Finish with `kick` for shared-policy multi-agent CTDE.
 
 V 1.0 also includes a GitHub Actions smoke test that installs the package and boots/resets/steps every environment under a virtual display.
-
-This is intentionally a compact toybox, not a full RL zoo.

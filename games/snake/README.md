@@ -4,15 +4,17 @@ Classic grid Snake with a small obstacle curriculum, compact observations, and l
 
 ## Inspiration
 
-This example was originally inspired by Nancy Zhou's Medium walkthrough, "Teaching an AI to Play the Snake Game Using Reinforcement Learning," which itself builds on Patrick Loeber's Snake AI tutorial.
+This example was originally inspired by Nancy Zhou’s Medium walkthrough,
+“Teaching an AI to Play the Snake Game Using Reinforcement Learning,”
+which itself builds on Patrick Loeber’s Snake AI tutorial.
 
-The implementation here is adapted to rl-toybox's own environment, observation, curriculum, rendering, and training structure.
+The implementation here is adapted to rl-toybox’s own environment,
+observation, curriculum, rendering, and training structure.
 
 References:
-
-- Nancy Zhou, "Teaching an AI to Play the Snake Game Using Reinforcement Learning"  
+- Nancy Zhou, “Teaching an AI to Play the Snake Game Using Reinforcement Learning”
   https://medium.com/@nancy.q.zhou/teaching-an-ai-to-play-the-snake-game-using-reinforcement-learning-6d2a6e8f3b1c
-- Patrick Loeber, snake-ai-pytorch  
+- Patrick Loeber, snake-ai-pytorch
   https://github.com/patrickloeber/snake-ai-pytorch
 
 ## Clip

@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      PYGLET_HEADLESS: "true"
       RL_TOYBOX_RENDER_VISIBLE: "0"
+      LIBGL_ALWAYS_SOFTWARE: "1"
 
     steps:
       - name: Check out repo
@@ -25,13 +25,16 @@ jobs:
       - name: Install headless graphics libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1-mesa-dri libgles2
+          sudo apt-get install -y xvfb xauth libgl1 libgl1-mesa-dri libegl1 libgles2 libxi6 libxrandr2 libxinerama1 libxcursor1 libxkbcommon-x11-0
 
       - name: Install package
         run: |
           python -m pip install --upgrade pip
           pip install -e .
 
+      - name: Check Arcade import under Xvfb
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" python -c "import pyglet; import arcade; print('Arcade import OK')"
+
       - name: Run env sanity smoke test
         timeout-minutes: 5
-        run: rl-toybox-env-sanity
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" rl-toybox-env-sanity

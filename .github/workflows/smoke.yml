@@ -9,32 +9,51 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     env:
-      RL_TOYBOX_RENDER_VISIBLE: "0"
       LIBGL_ALWAYS_SOFTWARE: "1"
+      RL_TOYBOX_RENDER_VISIBLE: "0"
 
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
+
+      - name: Install system graphics libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb \
+            xauth \
+            libgl1 \
+            libgl1-mesa-dri \
+            libegl1 \
+            libgles2 \
+            libxi6 \
+            libxrandr2 \
+            libxinerama1 \
+            libxcursor1 \
+            libxkbcommon-x11-0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install headless graphics libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth libgl1 libgl1-mesa-dri libegl1 libgles2 libxi6 libxrandr2 libxinerama1 libxcursor1 libxkbcommon-x11-0
-
       - name: Install package
         run: |
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Check Arcade import under Xvfb
-        run: xvfb-run -a -s "-screen 0 1280x1024x24" python -c "import pyglet; import arcade; print('Arcade import OK')"
+      - name: Check Arcade/Pyglet import under virtual display
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24" python - <<'PY'
+          import arcade
+          import pyglet
+          print("arcade:", getattr(arcade, "__version__", "unknown"))
+          print("pyglet:", getattr(pyglet, "version", "unknown"))
+          PY
 
       - name: Run env sanity smoke test
         timeout-minutes: 5
-        run: xvfb-run -a -s "-screen 0 1280x1024x24" rl-toybox-env-sanity
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24" rl-toybox-env-sanity

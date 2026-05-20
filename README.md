@@ -1,5 +1,7 @@
 # rl-toybox
 
+[![Smoke test](https://github.com/bzznrc/rl-toybox/actions/workflows/smoke.yml/badge.svg)](https://github.com/bzznrc/rl-toybox/actions/workflows/smoke.yml)
+
 `rl-toybox` is a compact reinforcement-learning playground built around short arcade-style games. Each game is small enough to inspect end to end, while shared code handles configuration, training, evaluation, rendering, logging, and model artifacts.
 
 ## Repo Layout
@@ -88,8 +90,6 @@ Training prints compact single-line progress records. `Ep:` lines show environme
 | `kick` | Scalable multi-agent football | actor-critic / CTDE | Shared-policy football environment for `3v3`, `5v5`, and `7v7` modes with one semantic `kick` action and a 128-input coach critic | [games/kick/README.md](games/kick/README.md) |
 
 ## Suggested Learning Path
-
-This repo is intentionally a compact toybox, not a complete RL zoo.
 
 | Step | Game | Focus | What to Look For |
 | --- | --- | --- | --- |

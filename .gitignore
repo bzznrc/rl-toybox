@@ -6,5 +6,5 @@ tmp_pycache*/
 .mypy_cache/
 .venv/
 runs/**/*.pth
+!runs/**/*_best.pth
 runs/**/*_metrics.json
-!runs/**/.gitkeep

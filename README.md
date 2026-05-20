@@ -1,6 +1,6 @@
 # rl-toybox
 
-[![Smoke test](https://github.com/bzznrc/rl-toybox/actions/workflows/smoke.yml/badge.svg)](https://github.com/bzznrc/rl-toybox/actions/workflows/smoke.yml)
+[![CI](https://github.com/bzznrc/rl-toybox/actions/workflows/smoke.yml/badge.svg)](https://github.com/bzznrc/rl-toybox/actions/workflows/smoke.yml) ![Python](https://img.shields.io/badge/python-3.11%2B-blue) ![License: MIT](https://img.shields.io/badge/license-MIT-green) ![PyTorch](https://img.shields.io/badge/PyTorch-used-ee4c2c) ![Arcade](https://img.shields.io/badge/Arcade-used-2b7cff)
 
 `rl-toybox` is a compact reinforcement-learning playground built around short arcade-style games. Each game is small enough to inspect end to end, while shared code handles configuration, training, evaluation, rendering, logging, and model artifacts.
 

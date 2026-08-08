@@ -5,7 +5,7 @@ The launch configs mirror the canonical CLI flow:
 - `scripts.train`
 - `scripts.play_user`
 - `scripts.play_ai`
-- `scripts.capture_demo_ai`
+- `scripts.capture_demo`
 
 ## How It Is Organized
 

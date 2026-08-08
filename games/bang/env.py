@@ -9,18 +9,10 @@ from dataclasses import dataclass, field
 import arcade
 import numpy as np
 from core.arcade_style import (
-    COLOR_AQUA,
-    COLOR_BLUE,
-    COLOR_BRICK_RED,
-    COLOR_CORAL,
+    ACCENT_PAIRS,
     COLOR_DARK_NEUTRAL,
-    COLOR_DEEP_PURPLE,
-    COLOR_DEEP_TEAL,
     COLOR_FOG_GRAY,
     COLOR_LIGHT_NEUTRAL,
-    COLOR_NAVY,
-    COLOR_PURPLE,
-    COLOR_SAND,
     COLOR_SLATE_GRAY,
 )
 from core.curriculum import (
@@ -231,11 +223,10 @@ def _resolve_bang_mode(value: str | None) -> str:
 
 
 TEAM_RENDER_STYLES = {
-    0: (COLOR_DEEP_TEAL, COLOR_AQUA),
-    1: (COLOR_BRICK_RED, COLOR_CORAL),
-    2: (COLOR_NAVY, COLOR_BLUE),
-    3: (COLOR_DEEP_PURPLE, COLOR_PURPLE),
+    player_id: (dark, light)
+    for player_id, (light, dark) in enumerate(ACCENT_PAIRS)
 }
+DEFAULT_PLAYER_RENDER_STYLE = TEAM_RENDER_STYLES[0]
 SPAWN_AREA_LEFT = "left_column"
 SPAWN_AREA_RIGHT = "right_column"
 SPAWN_AREA_BOTTOM = "bottom_strip"
@@ -420,7 +411,7 @@ class Renderer(ArcadeEnvMixin):
                 continue
             fill_color, outline_color = self.game.player_render_colors.get(
                 player_id,
-                (COLOR_DEEP_TEAL, COLOR_AQUA),
+                DEFAULT_PLAYER_RENDER_STYLE,
             )
             self._draw_actor(
                 actor,
@@ -431,7 +422,7 @@ class Renderer(ArcadeEnvMixin):
 
         for projectile in self.game.projectiles:
             owner_id = str(projectile.get("owner", ""))
-            projectile_color = self.game.player_projectile_colors.get(owner_id, COLOR_SAND)
+            projectile_color = self.game.player_projectile_colors.get(owner_id, COLOR_FOG_GRAY)
             arcade.draw_circle_filled(
                 projectile["pos"].x,
                 self.window_controller.to_arcade_y(projectile["pos"].y),
@@ -512,7 +503,7 @@ class Renderer(ArcadeEnvMixin):
     def _draw_player_icon(self, player_id: str, center_x: float, center_y: float, size: float) -> None:
         fill_color, outline_color = self.game.player_render_colors.get(
             player_id,
-            (COLOR_DEEP_TEAL, COLOR_AQUA),
+            DEFAULT_PLAYER_RENDER_STYLE,
         )
         inset = status_icon_inset(float(CELL_INSET))
         marker_size = max(2.0, round(NN_CONTROL_MARKER_SIZE_PX * (size / max(1.0, float(TILE_SIZE)))))

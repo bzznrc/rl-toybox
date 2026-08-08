@@ -21,6 +21,7 @@ rl-toybox-train = "scripts.train:main"
 rl-toybox-play-ai = "scripts.play_ai:main"
 rl-toybox-play-user = "scripts.play_user:main"
 rl-toybox-env-sanity = "scripts.env_sanity:main"
+rl-toybox-capture-demo = "scripts.capture_demo:main"
 
 [tool.setuptools]
 include-package-data = true

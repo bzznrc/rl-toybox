@@ -296,7 +296,7 @@ def main() -> None:
 
         _save_gif(frames, output_path, capture_fps)
         log_key_values(
-            "rl_toybox.capture_demo_ai",
+            "rl_toybox.capture_demo",
             {
                 "Frames": len(frames),
                 "Render FPS": float(env.capture_render_fps()),

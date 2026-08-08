@@ -11,17 +11,14 @@ import arcade
 import numpy as np
 
 from core.arcade_style import (
+    ACCENT_PAIRS,
     COLOR_AQUA,
-    COLOR_BLUE,
     COLOR_BRICK_RED,
     COLOR_CORAL,
     COLOR_DARK_NEUTRAL,
-    COLOR_DEEP_PURPLE,
     COLOR_DEEP_TEAL,
     COLOR_FOG_GRAY,
     COLOR_LIGHT_NEUTRAL,
-    COLOR_NAVY,
-    COLOR_PURPLE,
     COLOR_SLATE_GRAY,
 )
 from core.curriculum import (
@@ -339,12 +336,7 @@ class VroomEnv(ArcadeEnvMixin, Env):
         self.start_tangent = (1.0, 0.0)
         self.start_normal = (0.0, 1.0)
         self.cars: list[RaceCar] = []
-        self.player_color_pairs: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = [
-            (COLOR_AQUA, COLOR_DEEP_TEAL),
-            (COLOR_CORAL, COLOR_BRICK_RED),
-            (COLOR_BLUE, COLOR_NAVY),
-            (COLOR_PURPLE, COLOR_DEEP_PURPLE),
-        ]
+        self.player_color_pairs = list(ACCENT_PAIRS)
         self.player_index = 0
         self.winner_index: int | None = None
         self.last_race_winner: int | None = None

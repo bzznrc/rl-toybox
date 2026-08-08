@@ -69,7 +69,7 @@ Per-game details live in `games/<game>/README.md`.
 - Allowed scale variants should stay simple and explicit:
   - `2x` for larger composite cells or overlays, such as Jump's grid-style patch visuals.
   - `0.5x` for small gameplay markers and compact UI accents.
-- Visuals should use these square components plus the shared palette in `core/arcade_style.py`.
+- Visuals should use these square components plus the twelve colors in `core/arcade_style.py`: four neutrals and four two-tone accents.
 - Observation ghosts should use light-neutral 50% alpha overlays and the shared `X` toggle, so rays, SENS probes, and role/area guides behave consistently across games.
 
 ## 4) Logging Framework

@@ -58,7 +58,7 @@
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.capture_demo_ai",
+      "module": "scripts.capture_demo",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "args": [
@@ -133,7 +133,7 @@
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.capture_demo_ai",
+      "module": "scripts.capture_demo",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "args": [
@@ -210,7 +210,7 @@
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/../GameEnv/Scripts/python.exe",
-      "module": "scripts.capture_demo_ai",
+      "module": "scripts.capture_demo",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "args": [

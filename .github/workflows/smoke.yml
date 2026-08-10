@@ -6,12 +6,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  smoke:
+  checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       LIBGL_ALWAYS_SOFTWARE: "1"
       RL_TOYBOX_RENDER_VISIBLE: "0"
 
@@ -19,42 +18,27 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Install system graphics libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            xvfb \
-            xauth \
-            libgl1 \
-            libgl1-mesa-dri \
-            libegl1 \
-            libgles2 \
-            libxi6 \
-            libxrandr2 \
-            libxinerama1 \
-            libxcursor1 \
-            libxkbcommon-x11-0
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      - name: Install graphics libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth libgl1 libgl1-mesa-dri libegl1 libgles2 libxi6 libxrandr2 libxinerama1 libxcursor1 libxkbcommon-x11-0
+
       - name: Install package
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
+        run: python -m pip install -e ".[dev]"
 
-      - name: Check Arcade/Pyglet import under virtual display
-        run: |
-          xvfb-run -a -s "-screen 0 1280x1024x24" python - <<'PY'
-          import arcade
-          import pyglet
-          print("arcade:", getattr(arcade, "__version__", "unknown"))
-          print("pyglet:", getattr(pyglet, "version", "unknown"))
-          PY
+      - name: Lint
+        run: python -m ruff check .
 
-      - name: Run env sanity smoke test
-        timeout-minutes: 5
-        run: |
-          xvfb-run -a -s "-screen 0 1280x1024x24" rl-toybox-env-sanity
+      - name: Compile
+        run: python -m compileall core games scripts tests
+
+      - name: Test
+        run: python -m unittest discover -s tests -p "test_smoke.py" -q
+
+      - name: Validate
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" rl-toybox-env-sanity

@@ -13,10 +13,8 @@ import numpy as np
 from core.arcade_style import (
     ACCENT_PAIRS,
     COLOR_AQUA,
-    COLOR_BRICK_RED,
     COLOR_CORAL,
     COLOR_DARK_NEUTRAL,
-    COLOR_DEEP_TEAL,
     COLOR_FOG_GRAY,
     COLOR_LIGHT_NEUTRAL,
     COLOR_SLATE_GRAY,

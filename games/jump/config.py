@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from core.shared_config import (
-    BB_HEIGHT,
-    CELL_INSET,
-    FPS,
-    PHYSICS_DT,
+    BB_HEIGHT as BB_HEIGHT,
+    CELL_INSET as CELL_INSET,
+    FPS as FPS,
+    PHYSICS_DT as PHYSICS_DT,
     PLAYFIELD_HEIGHT,
-    SCREEN_HEIGHT,
+    SCREEN_HEIGHT as SCREEN_HEIGHT,
     SCREEN_WIDTH,
     TILE_SIZE,
-    TRAINING_FPS,
+    TRAINING_FPS as TRAINING_FPS,
 )
 from core.utils import env_flag
 
@@ -23,8 +23,6 @@ PPO_METRICS_LOG_ENABLED = False
 SHOW_SENS_PATCH_GRID = False
 SHOW_GHOST_OVERLAY = env_flag("JUMP_SHOW_GHOST_OVERLAY", SHOW_SENS_PATCH_GRID)
 GHOST_OVERLAY_ALPHA = 128
-# Backward-compatible names for older local launch scripts.
-SENS_PATCH_GRID_ALPHA = GHOST_OVERLAY_ALPHA
 
 
 # ENV

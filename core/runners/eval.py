@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import mean
 
-import numpy as np
 
 from core.algorithms.base import Algorithm
 from core.envs.base import Env

@@ -1,10 +1,29 @@
+# Python and tools
 __pycache__/
-*.pyc
-tmp_pycache/
-tmp_pycache*/
+*.py[cod]
+.pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Environments and builds
 .venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local files
+.env
+.env.local
+.codex/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+tmp_pycache*/
+
+# Runs: keep the best checkpoints
 runs/**/*.pth
 !runs/**/*_best.pth
 runs/**/*_metrics.json
+runs/**/*.tmp*

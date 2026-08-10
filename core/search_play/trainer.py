@@ -27,7 +27,6 @@ from games.flip.rules import (
     legal_actions,
     observation_from_state,
     outcome_for_player,
-    winner,
 )
 
 

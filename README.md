@@ -2,23 +2,22 @@
 
 [![CI](https://github.com/bzznrc/rl-toybox/actions/workflows/smoke.yml/badge.svg)](https://github.com/bzznrc/rl-toybox/actions/workflows/smoke.yml) ![Python](https://img.shields.io/badge/python-3.11%2B-blue) ![License: MIT](https://img.shields.io/badge/license-MIT-green) ![PyTorch](https://img.shields.io/badge/PyTorch-used-ee4c2c) ![Arcade](https://img.shields.io/badge/Arcade-used-2b7cff)
 
-`rl-toybox` is a compact reinforcement-learning playground built around short arcade-style games. Each game is small enough to inspect end to end, while shared code handles configuration, training, evaluation, rendering, logging, and model artifacts.
+`rl-toybox` is a small reinforcement-learning playground built around short arcade games. Each game is meant to be readable from end to end. Shared code handles training, evaluation, rendering, configuration, logs, and checkpoints.
 
 ## Repo Layout
 
-- `core/value_discrete/` contains the shared value-based stack used by `snake` and `bang`.
-- `core/actor_critic/` contains the shared PPO/SAC stack plus centralized-critic support used by `jump`, `vroom`, and `kick`.
-- `core/search_play/` contains the compact MCTS, policy/value, and self-play stack used by `flip`.
-- `core/algorithms/` contains the shared algorithm interface and cross-family helpers.
-- `core/envs/` contains the base environment contract and the Arcade runtime mixin.
-- `core/shared_config.py` contains the shared runtime/window defaults used across the active games.
-- `core/game.py` owns the active game registry, compatibility checks, config composition, and shared run preparation.
-- `games/<name>/` contains each game's environment, configuration, and game-specific README.
+- `core/` contains the shared environments, algorithms, runners, rendering helpers, and run IO.
+- `core/value_discrete/`, `core/actor_critic/`, and `core/search_play/` contain the three learning families.
+- `games/<name>/` contains each game's config, environment, and README.
+- `scripts/` contains the `train`, `play_ai`, `play_user`, `env_sanity`, and `capture_demo` entrypoints.
+- `assets/` contains shared fonts, audio, and icons.
+- `runs/` contains checkpoints and metrics. Best checkpoints are kept in git.
+- `tests/` contains one small shared-contract smoke test.
 
 ## Docs
 
-- Repo guide: [docs/repo-guide.md](docs/repo-guide.md)
-- RL and environment design guide: [docs/rl-design-guide.md](docs/rl-design-guide.md)
+- [Repository guide](docs/repo-guide.md)
+- [RL and environment design guide](docs/rl-design-guide.md)
 
 ## Clips
 
@@ -35,26 +34,53 @@
 
 ## Quick Start
 
-With package install:
+Install the package in editable mode:
 
 ```bash
 pip install -e .
+```
+
+Train, watch the model, or play yourself:
+
+```bash
 rl-toybox-train --game bang --mode team_arena
-rl-toybox-play-ai --game bang --mode team_arena --model best --render
+rl-toybox-play-ai --game bang --mode team_arena --render
 rl-toybox-play-user --game bang --mode team_arena
 ```
 
-Without installation, from the repo root:
+The same commands work without installation:
 
 ```bash
 python -m scripts.train --game bang --mode team_arena
-python -m scripts.play_ai --game bang --mode team_arena --model best --render
+python -m scripts.play_ai --game bang --mode team_arena --render
 python -m scripts.play_user --game bang --mode team_arena
 ```
 
-`play_ai` loads `best` by default, so `--model best` is shown only to make the artifact choice explicit. Curriculum-based games use a shared `L1` to `L5` ladder, with training defaulting to `L1` and play/eval/capture defaulting to `L5`. `flip` resolves to fixed `L1` for training, play, evaluation, and capture because its board is not staged.
+Training starts at level 1 by default. Play, evaluation, and capture default to level 5. `flip` has one fixed board, so it always uses level 1. AI play loads the best checkpoint unless another model source is requested.
 
-Bang has one game id and selectable combat modes:
+## Games
+
+| Game | Family | What it covers |
+| --- | --- | --- |
+| [`snake`](games/snake/README.md) | value-based | Small grid control, compact observations, and reward shaping |
+| [`bang`](games/bang/README.md) | value-based | DQN combat in Duel, Arena, and shared-policy Team Arena modes |
+| [`jump`](games/jump/README.md) | actor-critic | PPO timing and traversal in a short platformer |
+| [`vroom`](games/vroom/README.md) | actor-critic | SAC and continuous control on procedural tracks |
+| [`flip`](games/flip/README.md) | search + self-play | MCTS, legal-action masking, and policy/value learning |
+| [`kick`](games/kick/README.md) | actor-critic / CTDE | Shared-policy football in 3v3, 5v5, and 7v7 modes |
+
+## Suggested Learning Path
+
+1. `snake` for Q-learning and the smallest environment.
+2. `bang` for DQN, replay, and richer observations.
+3. `jump` for PPO and on-policy learning.
+4. `vroom` for SAC and continuous actions.
+5. `flip` for planning and self-play.
+6. `kick` for shared policies and a centralized critic.
+
+## Training
+
+Bang keeps one game ID and changes its combat format with `--mode`:
 
 ```bash
 rl-toybox-train --game bang --mode duel
@@ -62,67 +88,28 @@ rl-toybox-train --game bang --mode arena
 rl-toybox-train --game bang --mode team_arena
 ```
 
-For Bang, mode defines the maximum format and curriculum activates more enemies as levels rise. `team_arena` trains two friendly RL agents with one shared DQN policy and is the recommended max-complexity training mode for a general Bang policy; `duel` and `arena` are simpler subset cases of the same 36-input / 8-action net.
+Kick uses `--team-size 3`, `5`, or `7`. The VS Code launch file exposes the same choices through simple prompts.
 
-Kick has one game id and selectable team-size modes:
+Training prints compact `Ep:` progress lines. PPO-style runs also print `Up:` lines with policy loss, value loss, explained variance, entropy, and approximate KL. Game configs own their observation names, action names, network sizes, algorithm overrides, and training budgets.
+
+## Runs and Checkpoints
+
+Ordinary checkpoints and metrics are generated under `runs/` and ignored by git. Files ending in `_best.pth` are deliberately kept so each game can ship with its best known model.
+
+## Validation
 
 ```bash
-rl-toybox-train --game kick --team-size 3
-rl-toybox-train --game kick --team-size 5
-rl-toybox-train --game kick --team-size 7
+pip install -e ".[dev]"
+python -m ruff check .
+python -m compileall core games scripts tests
+python -m unittest discover -s tests -p "test_smoke.py" -q
+rl-toybox-env-sanity
 ```
 
-## Training Logs
+The sanity command resets every active game and takes a few legal steps. CI runs the same checks under a virtual display.
 
-Training prints compact single-line progress records. `Ep:` lines show environment performance: episode length, reward, rolling reward, best reward for the level, success, average success, and optional reward components. PPO / coach-critic runs also print `Up:` optimizer-health lines. PPO-style updates use `Pi` for policy loss, `V` for value loss, `EV` for critic explained variance, `Ent` for entropy, and `KL` for approximate KL. SAC update lines are opt-in and are quiet for Vroom by default.
+## Shared Conventions
 
-`EV` is `1 - Var(returns - values) / Var(returns)`: near `1.0` is strong critic fit, around `0.0` means little baseline improvement, and negative means worse than predicting the mean.
+All games use the same 12-color Arcade palette: four neutrals and four two-tone accents. Shared runtime code lives in `core/runtime.py`, reusable drawing code in `core/primitives.py`, and run/checkpoint helpers in `core/io/`.
 
-## Games
-
-| Game ID | Role | Family | Summary | Docs |
-| --- | --- | --- | --- | --- |
-| `snake` | Intro grid-control game | value-based | Classic Snake with obstacle curriculum, compact egocentric observations, and lightweight shaping rewards | [games/snake/README.md](games/snake/README.md) |
-| `bang` | Flagship discrete-control arena game | value-based | Top-down arena shooter with `Duel`, `Arena`, and shared-policy `Team Arena` modes under one DQN IO shape; curriculum ramps active enemies | [games/bang/README.md](games/bang/README.md) |
-| `jump` | Traversal platformer | actor-critic | Compact side-view micro-platformer built around short procedural runs, timing windows, and simple left/right/jump control | [games/jump/README.md](games/jump/README.md) |
-| `vroom` | Continuous-control racing game | actor-critic | One-lap top-down racer with procedural tracks, compact vector observations, and SAC-oriented defaults | [games/vroom/README.md](games/vroom/README.md) |
-| `flip` | Planning + self-play capstone | search + self-play | Fixed 6x6 disc-flipping game using MCTS, self-play, legal placement masking, and a small policy/value network | [games/flip/README.md](games/flip/README.md) |
-| `kick` | Scalable multi-agent football | actor-critic / CTDE | Shared-policy football environment for `3v3`, `5v5`, and `7v7` modes with one semantic `kick` action and a 128-input coach critic | [games/kick/README.md](games/kick/README.md) |
-
-## Suggested Learning Path
-
-| Step | Game | Focus | What to Look For |
-| --- | --- | --- | --- |
-| 1 | `snake` | Q-learning / value methods | Smallest environment, discrete actions, reward shaping |
-| 2 | `bang` | DQN-style value control | Replay, richer observations, arcade combat dynamics |
-| 3 | `jump` | PPO / on-policy actor-critic | Policy gradients, advantage estimation, traversal/platforming |
-| 4 | `vroom` | SAC / continuous control | Continuous actions, entropy, smooth control |
-| 5 | `flip` | MCTS + self-play | Planning, legal actions, policy/value search |
-| 6 | `kick` | Multi-agent CTDE | Shared policy, centralized critic, cooperative agents |
-
-## Observation Taxonomy
-
-- Arcade / egocentric control: `SELF -> SENS -> TGT/LAND/OPP -> HAZ -> FLAG`
-- Team / CTDE control: `SELF -> TGT -> LAND -> ALLY -> OPP`, with optional `MAP` or `FLAG` blocks when a game needs them
-- Board self-play / search: `BOARD` only; legal moves stay outside the observation via action masking
-- Blocks can be omitted when they do not apply. Compact canonical prefixes are `self_`, `sens_`, `tgt_`, `land_`, `ally_`, `opp_`, `map_`, `haz_`, `flag_`, and `board_`.
-
-Active examples:
-
-- `snake`: `self_*`, `sens_*`, `tgt_*`
-- `bang`: `self_*`, `sens_*`, `ally_*`, `opp*_*`, `haz_*`
-- `jump`: `self_*`, `sens_*`, `land_*`, `opp*_*`, `haz_*`, `flag_*`
-- `vroom`: `self_*`, `sens_*`, `flag_*`
-- `kick`: `self_*`, `tgt_*`, `land_*`, `ally*_*`, `opp*_*`
-- `flip`: `board_r*_c*`
-
-Per-game `config.py` files own the exact observation/action names, order, dimensions, model defaults, algorithm overrides, and training budgets. The standard active-game template is `DEFAULT_ALGO`, `DEFAULT_MODEL_CONFIG`, `ALGO_CONFIG_OVERRIDES`, and `DEFAULT_TRAIN_CONFIG`. `DEFAULT_MODEL_CONFIG["hidden_sizes"]` sets the game-wide network size across supported models, and `DEFAULT_MODEL_CONFIG["critic_hidden_sizes"]` sets the separate critic shape when a game uses one. `ALGO_CONFIG_OVERRIDES[algo_id]` is for true algorithm-specific values such as PPO entropy, DQN replay settings, or search-play simulations. `DEFAULT_TRAIN_CONFIG["budget"]` controls when a game's training run stops. The budget unit is total environment steps for value-based and actor-critic families, and self-play games for `search_play`.
-
-## Default Profiles
-
-- `snake` -> `qlearn`, `obs=12`, `act=3`, Q-network `12 -> 32 -> 3`
-- `bang` -> `dqn`, default `team_arena`, selectable `duel` / `arena` / `team_arena`, `obs=36`, `act=8`, Q-network `36 -> 64 -> 64 -> 8` with double-Q, a dueling head, and prioritized replay
-- `jump` -> `ppo`, `obs=36`, `act=4`, actor `36 -> 32 -> 32 -> 4`, critic `36 -> 32 -> 32 -> 1`
-- `vroom` -> `sac`, `obs=32`, `act=3`, actor `32 -> 64 -> 64 -> 3`, twin critics `(32 + 3) -> 64 -> 64 -> 1`
-- `flip` -> `search_play`, fixed `6x6`, `obs=36`, `act=36`, policy/value net `36 -> 48 -> 48 -> (36 + 1)`
-- `kick` -> `ppo`, run tag `a64_64_c128_128`, `obs=36/player`, `act=10`, shared actor `36 -> 64 -> 64 -> 10`, coach critic `128 -> 128 -> 128 -> 1`; scalable `3v3` / `5v5` / `7v7` football with one semantic `kick` action
+Observation blocks follow a stable order where they apply: self, sensors or targets, terrain, allies, opponents, map or hazards, then flags. Exact fields remain in each game's `config.py` so the contract stays visible next to the environment.
